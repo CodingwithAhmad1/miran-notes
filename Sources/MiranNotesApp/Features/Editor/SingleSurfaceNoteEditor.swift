@@ -155,20 +155,9 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
             if storageString == parent.document.text { return }
 
             if let diff = TextEditDiff.singleUTF16Replacement(from: parent.document.text, to: storageString) {
-                if let slashMatch = SlashCommandDetector.match(
-                    modelText: parent.document.text,
-                    storageText: storageString,
-                    insertion: (diff.range, diff.replacement)
-                ),
-                    let blockIndex = DocumentLayoutController.blockIndex(
-                        at: diff.range.location,
-                        blocks: parent.document.metadata.blocks
-                    ) {
-                    let blockID = parent.document.metadata.blocks[blockIndex].id
-                    if let slashCommands = SlashCommandRegistry.editCommands(for: slashMatch, blockID: blockID) {
-                        _ = runCommandSession(textView: textView, commands: slashCommands)
-                        return
-                    }
+                if let triggerCommands = inlineTriggerCommands(storageText: storageString, insertion: diff) {
+                    _ = runCommandSession(textView: textView, commands: triggerCommands)
+                    return
                 }
 
                 _ = runCommandSession(
@@ -192,6 +181,45 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
                     ]
                 )
             }
+        }
+
+        private func inlineTriggerCommands(
+            storageText: String,
+            insertion: (range: NSRange, replacement: String)
+        ) -> [EditCommand]? {
+            guard
+                let blockIndex = DocumentLayoutController.blockIndex(
+                    at: insertion.range.location,
+                    blocks: parent.document.metadata.blocks
+                )
+            else { return nil }
+
+            let block = parent.document.metadata.blocks[blockIndex]
+            if let slashMatch = SlashCommandDetector.match(
+                modelText: parent.document.text,
+                storageText: storageText,
+                insertion: insertion
+            ),
+               let commands = SlashCommandRegistry.editCommands(for: slashMatch, blockID: block.id, blockType: block.type) {
+                return commands
+            }
+
+            if let bulletMatch = MarkdownCommandDetector.bulletMatch(
+                modelText: parent.document.text,
+                storageText: storageText,
+                insertion: insertion
+            ) {
+                let markerRange = TextRange(
+                    start: bulletMatch.lineStartUTF16,
+                    length: bulletMatch.commitUTF16Index - bulletMatch.lineStartUTF16
+                )
+                return [
+                    .replaceText(range: markerRange, replacement: ""),
+                    .changeBlockType(blockID: block.id, type: .listItem, headingLevel: nil)
+                ]
+            }
+
+            return nil
         }
 
         func applyDocumentText() {

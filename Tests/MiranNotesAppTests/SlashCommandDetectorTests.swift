@@ -11,6 +11,7 @@ final class SlashCommandDetectorTests: XCTestCase {
         XCTAssertNotNil(m)
         XCTAssertEqual(m?.lineStartUTF16, 0)
         XCTAssertEqual(m?.commitUTF16Index, 3)
+        XCTAssertEqual(m?.commitCharacter, .space)
         XCTAssertEqual(m?.tokenWithoutSlash, "h1")
     }
 
@@ -20,6 +21,7 @@ final class SlashCommandDetectorTests: XCTestCase {
         let diff = (NSRange(location: 3, length: 0), "\n")
         let m = SlashCommandDetector.match(modelText: model, storageText: storage, insertion: diff)
         XCTAssertNotNil(m)
+        XCTAssertEqual(m?.commitCharacter, .newline)
         XCTAssertEqual(m?.tokenWithoutSlash, "h2")
     }
 
@@ -58,7 +60,12 @@ final class SlashCommandDetectorTests: XCTestCase {
     }
 
     func testRegistryProducesHeadingCommands() {
-        let match = SlashCommitMatch(lineStartUTF16: 0, commitUTF16Index: 3, tokenWithoutSlash: "h1")
+        let match = SlashCommitMatch(
+            lineStartUTF16: 0,
+            commitUTF16Index: 3,
+            commitCharacter: .space,
+            tokenWithoutSlash: "h1"
+        )
         let cmds = SlashCommandRegistry.editCommands(for: match, blockID: "b0")
         XCTAssertEqual(cmds?.count, 2)
         guard case let .replaceText(r, rep) = cmds?[0] else {
@@ -99,6 +106,18 @@ final class SlashCommandDetectorTests: XCTestCase {
         XCTAssertEqual(type, .divider)
     }
 
+    func testBulletAliasSpaceAtLineStartProducesListItemBlockType() {
+        let model = "/bullet"
+        let storage = "/bullet "
+        let diff = (NSRange(location: 7, length: 0), " ")
+        let m = SlashCommandDetector.match(modelText: model, storageText: storage, insertion: diff)
+        XCTAssertNotNil(m)
+        let cmds = SlashCommandRegistry.editCommands(for: m!, blockID: "b4")
+        XCTAssertEqual(cmds?.count, 2)
+        guard case let .changeBlockType(_, type, _) = cmds?[1] else { XCTFail(); return }
+        XCTAssertEqual(type, .listItem)
+    }
+
     func testCalloutSpaceAtLineStartProducesCalloutBlockType() {
         let model = "/callout"
         let storage = "/callout "
@@ -125,5 +144,23 @@ final class SlashCommandDetectorTests: XCTestCase {
         let diff = (NSRange(location: 7, length: 0), "r")
         let m = SlashCommandDetector.match(modelText: model, storageText: storage, insertion: diff)
         XCTAssertNil(m, "/divider without trailing space/return should not produce a match")
+    }
+
+    func testMarkdownBulletMarkerAtLineStartConvertsToListItemCommands() {
+        let model = "-"
+        let storage = "- "
+        let diff = (NSRange(location: 1, length: 0), " ")
+        let m = MarkdownCommandDetector.bulletMatch(modelText: model, storageText: storage, insertion: diff)
+        XCTAssertNotNil(m)
+        let markerRange = TextRange(start: m!.lineStartUTF16, length: m!.commitUTF16Index - m!.lineStartUTF16)
+        XCTAssertEqual(markerRange, TextRange(start: 0, length: 1))
+    }
+
+    func testMarkdownBulletMarkerNotAtLineStartDoesNotMatch() {
+        let model = "x-"
+        let storage = "x- "
+        let diff = (NSRange(location: 2, length: 0), " ")
+        let m = MarkdownCommandDetector.bulletMatch(modelText: model, storageText: storage, insertion: diff)
+        XCTAssertNil(m)
     }
 }

@@ -12,6 +12,16 @@ enum DocumentLayoutController {
         let isBackspaceDelete = replacement.isEmpty && affectedRange.length == 1
 
         if isInsertion, replacement == "\n" {
+            if let selectedBlockIndex = blockIndex(at: selectedLocation, blocks: document.metadata.blocks) {
+                let selectedBlock = document.metadata.blocks[selectedBlockIndex]
+                if selectedBlock.type == .listItem,
+                   isBlockTextEmpty(selectedBlock, in: document.text) {
+                    return [
+                        .changeBlockType(blockID: selectedBlock.id, type: .paragraph, headingLevel: nil)
+                    ]
+                }
+            }
+
             // Match `EditCommandEngine.adjustBlocks`: insertion at offset O is attributed to the first block
             // where `contains(O) || end == O`. That is the *previous* block at an inter-block boundary, not the
             // following one — splitting the wrong block produced duplicate `range.start` values and tripped
@@ -76,5 +86,14 @@ enum DocumentLayoutController {
         let nsRange = NSRange(location: offset - 1, length: 1)
         guard let range = Range(nsRange, in: text) else { return nil }
         return text[range].first
+    }
+
+    private static func isBlockTextEmpty(_ block: Block, in text: String) -> Bool {
+        let ns = text as NSString
+        let len = ns.length
+        let start = min(max(0, block.range.start), len)
+        let end = min(max(start, block.range.end), len)
+        let content = ns.substring(with: NSRange(location: start, length: end - start))
+        return content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 }

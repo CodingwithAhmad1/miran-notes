@@ -66,6 +66,20 @@ final class EditEngineRegressionTests: XCTestCase {
         XCTAssertTrue(NoteIntegrity.check(document: doc).isValid)
     }
 
+    func testSplitListItemCarriesListTypeToNewBlock() {
+        var doc = baselineDocument(text: "item")
+        doc = EditCommandEngine.apply(
+            .changeBlockType(blockID: "b0", type: .listItem, headingLevel: nil),
+            to: doc
+        )
+        doc = EditCommandEngine.apply(.splitBlock(blockID: "b0", atOffset: 4), to: doc)
+
+        XCTAssertEqual(doc.metadata.blocks.count, 2)
+        XCTAssertEqual(doc.metadata.blocks[0].type, .listItem)
+        XCTAssertEqual(doc.metadata.blocks[1].type, .listItem)
+        XCTAssertTrue(NoteIntegrity.check(document: doc).isValid)
+    }
+
     func testChangeBlockTypeHeadingLevel() {
         var doc = baselineDocument(text: "Hi")
         doc = EditCommandEngine.apply(

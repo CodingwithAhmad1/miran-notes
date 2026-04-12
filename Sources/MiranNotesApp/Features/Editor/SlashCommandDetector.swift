@@ -3,9 +3,15 @@ import MiranNotesCore
 
 /// Line-start `/token` committed with Space or Return (storage includes the commit char; model does not yet).
 struct SlashCommitMatch: Equatable {
+    enum CommitCharacter: Equatable {
+        case space
+        case newline
+    }
+
     var lineStartUTF16: Int
     /// UTF-16 index of the commit character in `storageText`.
     var commitUTF16Index: Int
+    var commitCharacter: CommitCharacter
     var tokenWithoutSlash: String
 }
 
@@ -54,10 +60,12 @@ enum SlashCommandDetector {
 
         let tokenWithoutSlash = String(tokenWithSlash.dropFirst())
         guard !tokenWithoutSlash.isEmpty else { return nil }
+        let commitCharacter: SlashCommitMatch.CommitCharacter = rep == " " ? .space : .newline
 
         return SlashCommitMatch(
             lineStartUTF16: lineStart,
             commitUTF16Index: commitIndex,
+            commitCharacter: commitCharacter,
             tokenWithoutSlash: tokenWithoutSlash
         )
     }

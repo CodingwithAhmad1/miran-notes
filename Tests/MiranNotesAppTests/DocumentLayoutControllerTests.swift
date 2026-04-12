@@ -27,6 +27,28 @@ final class DocumentLayoutControllerTests: XCTestCase {
         )
     }
 
+    private func listItemDocument(text: String) -> NoteDocument {
+        let noteID = UUID()
+        return NoteDocument(
+            id: noteID,
+            text: text,
+            metadata: NoteMetadata(
+                schemaVersion: NoteMetadata.currentSchemaVersion,
+                noteID: noteID,
+                blocks: [
+                    Block(
+                        id: "list",
+                        type: .listItem,
+                        range: TextRange(start: 0, length: text.utf16.count),
+                        level: nil,
+                        icon: nil
+                    )
+                ],
+                spans: []
+            )
+        )
+    }
+
     func testNewlineInsertsSplitCommands() {
         let doc = singleBlockDocument(text: "ab")
         let cmds = DocumentLayoutController.commandsForEdit(
@@ -117,5 +139,51 @@ final class DocumentLayoutControllerTests: XCTestCase {
         }
         XCTAssertEqual(r, TextRange(start: 1, length: 1))
         XCTAssertEqual(rep, "")
+    }
+
+    func testNewlineInNonEmptyListItemContinuesListBySplit() {
+        let doc = listItemDocument(text: "item")
+        let cmds = DocumentLayoutController.commandsForEdit(
+            document: doc,
+            affectedRange: NSRange(location: 4, length: 0),
+            replacement: "\n",
+            selectedLocation: 4
+        )
+        XCTAssertEqual(cmds?.count, 2)
+        guard let cmds, cmds.count == 2 else { return }
+        guard case let .replaceText(r, rep) = cmds[0] else {
+            XCTFail("expected replaceText")
+            return
+        }
+        XCTAssertEqual(r, TextRange(start: 4, length: 0))
+        XCTAssertEqual(rep, "\n")
+        guard case let .splitBlock(id, at) = cmds[1] else {
+            XCTFail("expected splitBlock")
+            return
+        }
+        XCTAssertEqual(id, "list")
+        XCTAssertEqual(at, 5)
+    }
+
+    func testNewlineInEmptyListItemExitsToParagraph() {
+        let doc = listItemDocument(text: "")
+        let cmds = DocumentLayoutController.commandsForEdit(
+            document: doc,
+            affectedRange: NSRange(location: 0, length: 0),
+            replacement: "\n",
+            selectedLocation: 0
+        )
+        XCTAssertEqual(cmds?.count, 1)
+        guard let command = cmds?.first else {
+            XCTFail("expected one command")
+            return
+        }
+        guard case let .changeBlockType(blockID, type, level) = command else {
+            XCTFail("expected changeBlockType")
+            return
+        }
+        XCTAssertEqual(blockID, "list")
+        XCTAssertEqual(type, .paragraph)
+        XCTAssertNil(level)
     }
 }
