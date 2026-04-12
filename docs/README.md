@@ -30,6 +30,7 @@ Miran Notes is a **local-first** macOS notes app: canonical text in per-note `.t
 | [plans/hybrid-undo-appmodel-wiring.md](plans/hybrid-undo-appmodel-wiring.md) | Hybrid undo implementation (completed) |
 | **Testing** | |
 | [testing/ui-tests.md](testing/ui-tests.md) | UI test host / XCUITest notes for SPM |
+| [testing/performance-tests.md](testing/performance-tests.md) | Edit-engine statistical (median) performance tests for CI |
 
 ## How to use this folder
 

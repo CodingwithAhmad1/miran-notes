@@ -24,5 +24,5 @@ This document tracks major structural work aligned with the long-term plan:
 
 ## External edits
 
-- [`ActiveNoteFilePresenter`](../../Sources/MiranNotesApp/Data/ActiveNoteFilePresenter.swift) registers an `NSFilePresenter` for the active note’s `.txt` in addition to the subtree watcher.
+- [`ActiveNoteFilePresenter`](../../Sources/MiranNotesApp/Data/ActiveNoteFilePresenter.swift) registers an `NSFilePresenter` for the active note’s `.txt` in addition to the subtree watcher. When the presenter fires, `AppModel` compares the on-disk `.txt` SHA256 to the last known body fingerprint; if they match, reconciliation is skipped (same body bytes as after load/save). The vault-wide watcher path is unchanged.
 - Compare UI uses `ExternalTextComparePayload` and plain-text side-by-side view.

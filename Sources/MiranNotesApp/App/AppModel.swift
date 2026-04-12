@@ -1064,11 +1064,24 @@ final class AppModel: ObservableObject {
         let presenter = ActiveNoteFilePresenter(fileURL: url) { [weak self] in
             guard let self else { return }
             Task { @MainActor in
-                self.pendingExternalDiskCheck = true
-                await self.runPendingExternalDiskReconciliationIfNeeded()
+                await self.handleActiveNotePresenterDidChange(noteRelativePath: path)
             }
         }
         presenter.start()
         activeNoteFilePresenter = presenter
+    }
+
+    /// `NSFilePresenter` only observes the active note `.txt`. If its body bytes still match ``lastKnownNoteTextSHA256``, skip queuing a full reconciliation (avoids churn from our own save or no-op events).
+    private func handleActiveNotePresenterDidChange(noteRelativePath path: String) async {
+        do {
+            let h = try await repository.noteTextFileSHA256(relativePath: path)
+            if let known = lastKnownNoteTextSHA256, h == known {
+                return
+            }
+        } catch {
+            // Fall through: if the hash cannot be read, still reconcile so external edits are not missed.
+        }
+        pendingExternalDiskCheck = true
+        await runPendingExternalDiskReconciliationIfNeeded()
     }
 }
