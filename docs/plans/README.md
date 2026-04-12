@@ -18,6 +18,7 @@ Tools such as Cursor may create plans under **`.cursor/plans/`** on a developer 
 |------|-------|--------|
 | [reliability-and-autosave-fixes.md](reliability-and-autosave-fixes.md) | Navigation race conditions, debounced-save flush before note switch/rename/create, `navigationGeneration` guard, backlink error surfacing | Implemented — all tests pass |
 | [robustness-phased-plan.md](robustness-phased-plan.md) | Four phases: `NoteLoadResult` + repair advisory banner; exhaustive `adjustBlocks`; slash command registry completion (`/list`, `/divider`, `/callout`); sync `onCommands` return + cursor binding + table save cleanup | Implemented — all 55 tests pass |
+| [foundation-hardening-plan.md](foundation-hardening-plan.md) | Four phases: trivial fixes (identity, slugify, cursor reset, dead code removal); correctness fixes (splitBlock constraints, count-bounded undo, full-buffer notice + reconcile, interceptor tokens, 1 MB cap); performance (backlink cache + debounce, dirty-flag index saves); architecture (two-phase atomic commits, open slash registry, incremental visual styling) | Implemented — all 113 tests pass |
 
 ## See also
 

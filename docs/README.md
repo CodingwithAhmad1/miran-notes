@@ -24,19 +24,27 @@ Miran Notes is a **local-first** macOS notes app: canonical text in `note.txt`, 
 
 ## Code pointers (quick orientation)
 
-- Core model and edits: `Sources/MiranNotesCore/` (`NoteDocument`, `EditCommandEngine`, `NoteIntegrity`, `RangeNormalizer`).
-- App and editor: `Sources/MiranNotesApp/` (`SingleSurfaceNoteEditor`, `EditorVisualStyle`, `SlashCommandRegistry`, `SlashQueryDetector`, `SlashCommandMatcher`, persistence).
-- Data layer: `NoteRepository` (returns `NoteLoadResult`); `AppModel` (`repairNotice`, `editorCursorOffset`, `apply(_:) -> NoteDocument`).
-- Tests: `Tests/MiranNotesTests/` (core + `adjustBlocks`), `Tests/MiranNotesAppTests/` (app, navigation, repair notices, table/cursor).
+- **Core model and edits:** `Sources/MiranNotesCore/` — `NoteDocument` (identity via `metadata.noteID`), `EditCommandEngine` (includes `splitBlock` with `constrainToBlocks`, `reconcileBlocksFromText`), `NoteIntegrity`, `RangeNormalizer`, `SpanAdjuster`, `ExtensionPoints`.
+- **App and editor:** `Sources/MiranNotesApp/` — `SingleSurfaceNoteEditor` (1 MB cap, full-buffer warning, incremental styling), `EditorVisualStyle`, `SlashCommandRegistry` (open via `register(_:)`, built-ins via `registerBuiltins()`), `SlashQueryDetector`, `SlashCommandMatcher`.
+- **Data layer:** `NoteRepository` (returns `NoteLoadResult`, two-phase `VaultCommitCoordinator`, dirty-flag participants); `LinkGraph`, `RelationshipIndex`, `FolderCatalog`, `PathIndex` (each with `isDirty` flag).
+- **App state:** `AppModel` — `repairNotice`, `editorCursorOffset`, `undoHistory` (count-bounded, 200 steps), `cachedLinkGraph` (debounced refresh), `apply(_:) -> NoteDocument`, `removeCommandInterceptor(_:)`.
+- **Tests:** `Tests/MiranNotesTests/` (core + `adjustBlocks` + `splitBlock` cross-boundary), `Tests/MiranNotesAppTests/` (app, navigation, undo, dirty-flag, watcher-race, visual style).
 
 ## Key `AppModel` published properties
 
 | Property | Purpose |
 |----------|---------|
 | `activeDocument` | Current `NoteDocument` in the editor |
-| `repairNotice: String?` | Non-nil when load-time structural repair ran or `[[link]]` syntax has no metadata |
-| `editorCursorOffset: Int` | Live UTF-16 caret position fed by `SingleSurfaceNoteEditor` |
+| `repairNotice: String?` | Non-nil when load-time repair ran, link metadata is missing, full-buffer replace fired, or size limit was hit |
+| `editorCursorOffset: Int` | Live UTF-16 caret position fed by `SingleSurfaceNoteEditor`; reset to 0 on note switch |
 | `lastError: String?` | Most recent async operation failure message |
 | `externalEditConflictAlert` | Non-nil when an external file change conflicts with a dirty buffer |
+
+## Key `AppModel` internal properties (visible to `@testable` imports)
+
+| Property | Purpose |
+|----------|---------|
+| `undoHistory: [UndoStep]` | Deque of `(before, after, actionName)` snapshots; pruned to 200 entries |
+| `cachedLinkGraph: LinkGraph?` | In-memory cache; nil after save or vault reload |
 
 For deeper editor behavior and limits, read [Constraints.md](../Constraints.md) before changing the text pipeline or metadata rules.

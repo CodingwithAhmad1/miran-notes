@@ -87,6 +87,7 @@ Rules:
 - Registry order must be stable and explicit.
 - No command may mutate editor state directly; only emit `EditCommand`s.
 - Unsupported tokens return `nil` instead of partial behavior.
+- **Open registration:** `SlashCommandRegistry.register(_ descriptor: SlashCommandDescriptor)` accepts external descriptors idempotently (duplicate `id`s are silently ignored). All built-in descriptors are registered via `SlashCommandRegistry.registerBuiltins()`, called once at app startup in `MiranNotesApp.init`. Feature modules or plugins may call `register(_:)` at any point thereafter without touching built-in arrays.
 
 ### 3) Execution Layer
 
@@ -127,13 +128,14 @@ This separation keeps command registration focused on mode activation while keep
 
 For each new command:
 
-1. Add descriptor in registry with `id`, `aliases`, and producer.
+1. Create a `SlashCommandDescriptor` with `id`, `aliases`, and `produce` closure.
 2. Fill descriptor metadata for discovery (`title`, `category`, `keywords`, `preview`).
-3. Ensure producer emits only `EditCommand`s.
-4. Add detector/query tests for positive and negative paths.
-5. Add matcher tests (ranking + alias coverage).
-6. Add structural tests if command changes Enter/Backspace behavior.
-7. Add regression tests for metadata integrity.
+3. Ensure producer emits only `EditCommand`s — no direct editor state mutation.
+4. Register via `SlashCommandRegistry.register(descriptor)`. For built-ins, add the call inside `registerBuiltins()`. For plugin commands, call `register` at module init.
+5. Add detector/query tests for positive and negative paths.
+6. Add matcher tests (ranking + alias coverage).
+7. Add structural tests if command changes Enter/Backspace behavior.
+8. Add regression tests for metadata integrity.
 
 ## Reliability Checklist (Required for PRs)
 

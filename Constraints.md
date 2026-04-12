@@ -44,6 +44,7 @@ The canonical note model and `NSTextView` are two representations of text. Engin
   - Enter without a selectable command follows normal editor behavior (no hidden slash fallback rewrite).
   - Registered commands currently include `/h1`–`/h3`, `/p`, `/code`, `/list` (alias `/bullet`), `/divider`, `/callout`.
   - **Registry order** defines precedence if two patterns could match.
+  - **Open registry:** `SlashCommandRegistry.register(_:)` accepts external descriptors idempotently. Built-in commands are registered via `SlashCommandRegistry.registerBuiltins()`, called once at app startup (`MiranNotesApp.init`). Plugins or feature modules can call `register` at any time without modifying core registry code.
   - **Auto-commit path (active):** Typing `/token⎵` or `/token↵` without navigating the menu auto-commits via `SlashCommandDetector` in `inlineTriggerCommands` (parallel to `MarkdownCommandDetector`). Both the menu path and the auto-commit path produce identical `EditCommand` arrays through `SlashCommandRegistry`. Unknown tokens fall through to the normal `replaceText` path — no silent rewrite.
 - **External editors:** A literal `/h1` in `note.txt` stays plain text until the user edits in-app in a way that triggers detection (or a future explicit conversion). This aligns with **Semantic reconciliation**: no silent semantic rewrite of metadata without an explicit editing action the user can reason about.
 - **Notion parity limits:** Slash commands plus heading fonts improve the experience but do **not** deliver full per-block chrome (gutters, drag handles, block menus) in a single `NSTextView`; see **Block chrome and layout** above.
@@ -52,8 +53,9 @@ The canonical note model and `NSTextView` are two representations of text. Engin
 
 - **Incremental model → view updates:** When the canonical string and `NSTextView` differ by a **single UTF-16 edit**, the editor applies `NSTextStorage.replaceCharacters` for that edit instead of assigning `string` wholesale, reducing churn and selection jumps ([`TextEditDiff`](Sources/MiranNotesApp/Features/Editor/TextEditDiff.swift)).
 - **IME / marked text:** While `NSTextView` has **marked text** (for example input methods), `updateNSView` does **not** overwrite the buffer from the model, so composition is not torn down mid-sequence.
-- **External full replace:** When the model must replace the whole string (multi-edit or no single replacement), the previous **selection is clamped** to the new length after the assignment.
-- **Single pipeline:** Plain typing flows through `NSTextStorageDelegate.textStorage(_:didProcessEditing:…)` → `EditCommand` → `AppModel` ([`SingleSurfaceNoteEditor`](Sources/MiranNotesApp/Features/Editor/SingleSurfaceNoteEditor.swift)). The per-block [`TextKit2BlockEditor`](Sources/MiranNotesApp/Features/Editor/TextKit2BlockEditor.swift) uses the same delegate path instead of `textDidChange`.
+- **Full-buffer fallback:** When the incremental diff cannot be reduced to a single region, `SingleSurfaceNoteEditor` applies a full `replaceText` covering the whole buffer. When this fires, `onFullReplaceWarning` is called, which sets `AppModel.repairNotice` so the user sees a dismissible advisory. `EditCommandEngine.reconcileBlocksFromText(document:oldBlocks:)` then attempts a best-effort heading-type recovery by matching line positions to the old block array.
+- **Note size cap:** `textView(_:shouldChangeTextIn:replacementString:)` rejects any insertion that would push the note past **1 MB** (1,048,576 UTF-16 units). `onSizeLimitExceeded` wires the rejection to `AppModel.repairNotice`.
+- **Single pipeline:** Plain typing flows through `NSTextStorageDelegate.textStorage(_:didProcessEditing:…)` → `EditCommand` → `AppModel` ([`SingleSurfaceNoteEditor`](Sources/MiranNotesApp/Features/Editor/SingleSurfaceNoteEditor.swift)).
 
 ## Undo and history (Phase 3)
 
@@ -61,9 +63,11 @@ The app uses **document-level undo** via the window `UndoManager`: each user edi
 
 **Undo menu labels:** A newline split (`replaceText` inserting `"\n"` + `splitBlock`) and a merge-at-start-of-block batch (`mergeWithPrevious` + `replaceText`) register under **Split Block** and **Merge Blocks** respectively when those patterns match. A slash batch (`replaceText` deleting the token + `changeBlockType`) registers as **Slash Command**.
 
+**Count-based cap with graceful pruning:** `UndoPolicy.maxUndoSteps` (default 200) caps the number of undo entries. `AppModel` maintains a parallel `undoHistory: [UndoStep]` deque. When the count exceeds the cap, the **oldest** entries are trimmed, `NSUndoManager.removeAllActions(withTarget:)` is called, and surviving steps are re-registered in order — preserving recent undo history rather than wiping the entire stack. `clearUndoStack` resets both the manager and the deque.
+
 **Highlighted limitations (must stay explicit in product and code):**
 
-1. **Memory** — Snapshot undo stores full document state per undo step. Large notes and deep undo stacks increase memory use. **Unbounded** undo with **bounded** memory is impossible; the platform undo stack already implies practical limits.
+1. **Memory** — Snapshot undo stores full document state per undo step. Large notes and deep undo stacks increase memory use. The 200-step count cap bounds growth; snapshot size is still proportional to document length.
 
 2. **Undo vs disk** — Autosave writes the current document to files on a timer. Undo/redo updates `activeDocument` and **schedules autosave** like ordinary edits, so the vault converges to the undone state after the debounce window. The on-disk copy may still briefly lag the buffer. After an **external** file change is loaded, the undo stack is **cleared** so redo/undo does not refer to a replaced document.
 
@@ -76,7 +80,8 @@ The app uses **document-level undo** via the window `UndoManager`: each user edi
 - **`NoteIntegrity`** ([`Sources/MiranNotesCore/NoteIntegrity.swift`](Sources/MiranNotesCore/NoteIntegrity.swift)) is the single validation entry point: it reports whether block ranges form an **exact UTF-16 partition** of the text and whether spans sit in bounds.
 - **Load and save** paths call **`NoteIntegrity.logIfInvalid`** so invalid states are visible in the unified logging system without crashing in release ([`NoteRepository`](Sources/MiranNotesApp/Data/NoteRepository.swift)).
 - **`adjustBlocks` is now exhaustive** for the common cases: single-block edits (delta-adjust + zero-length merge), multi-block replacements (deterministic collapse into first block preserving its id and type), and out-of-bounds edits (logged `assertionFailure`). `RangeNormalizer.normalize` fires only as a safety-net fallback and logs to the `EditEngine` category when it does.
-- **Regression tests** live under [`Tests/MiranNotesTests/`](Tests/MiranNotesTests/) (`swift test`). They include deterministic **random `replaceText` sequences**, [`SpanAndBlockAdjustmentTests`](Tests/MiranNotesTests/SpanAndBlockAdjustmentTests.swift) for `SpanAdjuster` and `EditCommandEngine.adjustBlocks`, and span/block scenarios.
+- **`splitBlock` constraint propagation:** `EditCommandEngine.splitBlock` now calls `SpanAdjuster.constrainToBlocks` and `LinkAdjuster.constrainToBlocks` after splitting, ensuring spans and wiki-link ranges that cross the new block boundary are correctly clipped to their respective blocks.
+- **Regression tests** live under [`Tests/MiranNotesTests/`](Tests/MiranNotesTests/) (`swift test`). They include deterministic **random `replaceText` sequences**, [`SpanAndBlockAdjustmentTests`](Tests/MiranNotesTests/SpanAndBlockAdjustmentTests.swift) for `SpanAdjuster` and `EditCommandEngine.adjustBlocks`, and span/block scenarios; new cases cover `splitBlock` cross-boundary span and link clipping.
 - **Safety net:** if incremental block adjustment after a replace ever leaves metadata invalid (logged under `app.miran.notes/EditEngine`), `EditCommandEngine` applies `RangeNormalizer.normalize` for that step so the in-memory document does not stay broken. Silent destructive repair of **on-disk** files is still governed by the semantic reconciliation rules above.
 - **Watcher race coverage:** [`AppModelWatcherRaceTests`](Tests/MiranNotesAppTests/AppModelWatcherRaceTests.swift) covers deferred reconciliation while autosave is in flight, silent clean-buffer reload, and coalescing of rapid watcher events into a single reconciliation pass.
 - **Performance baselines:** [`EditEnginePerformanceTests`](Tests/MiranNotesTests/EditEnginePerformanceTests.swift) establishes `measure {}` baselines for 500 sequential inserts on a 10,000-character document and 200 replacements on a span-heavy document. Xcode records the baseline on first run and flags subsequent regressions automatically.
@@ -89,6 +94,25 @@ The app uses **document-level undo** via the window `UndoManager`: each user edi
 - If the buffer is **clean** and on-disk content differs → the app **reloads silently** (undo cleared for that note, same as after external change in earlier builds).
 - If the buffer is **dirty** and the loaded on-disk document differs from the buffer → the app shows a **conflict** alert: **Reload from disk** (discard local edits) or **Keep local edits** (dismiss; the next save may overwrite external changes; the acknowledged file timestamp avoids repeating the same alert until the file changes again).
 - **Limitation (TOCTOU):** A notification is not a guarantee that the file we read is bitwise-identical to the version that triggered the event; another writer could change the file again before we read. The app compares **loaded** `NoteDocument` values to the buffer, not a perfect distributed lock.
+
+## Atomic vault commits and dirty-flag saves (Foundation Hardening)
+
+`VaultCommitCoordinator` executes commits in a **two-phase** protocol:
+
+1. **Prepare phase** — every `VaultCommitParticipant` writes its payload to a temporary file inside a per-commit temp directory and returns `(tempURL, finalURL)`. If any participant throws during preparation, **all** created temp files are cleaned up and no vault file is touched.
+2. **Commit phase** — each `(tempURL, finalURL)` pair is atomically renamed using `FileManager.replaceItemAt` (or `moveItem` where the destination does not yet exist). If a rename fails mid-phase, already-renamed files remain at their final paths; outstanding temp files are cleaned up. The result is bounded inconsistency (never a partial write to a single file) rather than the old sequential-overwrite risk.
+
+**Dirty flags on indexes:** `LinkGraph`, `RelationshipIndex`, `FolderCatalog`, and `PathIndex` each carry an `isDirty: Bool` flag (excluded from `Codable`). Their mutating methods (`setOutgoing`, `replaceLinks`, `ensureRoot`, `upsert`) set `isDirty = true` only when content actually changes. Each `VaultCommitParticipant` checks the flag and produces no `VaultCommitOperation` — skipping both serialization and the temp-file write — when unchanged. This eliminates spurious `mtime` updates on index files during saves that did not touch them.
+
+**`NoteDocument` identity:** `NoteDocument.id` is a **computed** property delegating to `metadata.noteID`. There is no stored `id` field. `metadata.noteID` is the single source of truth for note identity across the entire codebase.
+
+**Filename slug cap:** `NoteRepository.slugify` caps output at **200 UTF-8 bytes**, truncating at a scalar boundary to prevent multi-byte character corruption.
+
+**Command interceptor lifecycle:** `AppModel.registerCommandInterceptor` returns a `UUID` token. Callers deregister via `removeCommandInterceptor(_:)` to prevent unbounded interceptor accumulation across note navigation.
+
+**Batch size guard:** `AppModel.apply(_:recordUndo:)` asserts at `assertionFailure` level and logs an error (category `EditEngine`) when a command batch exceeds `maxBatch` before truncation, making runaway batch growth visible during development.
+
+**Backlink refresh debounce:** `AppModel` debounces backlink refreshes by **1 500 ms** via a cancellable `Task`. An in-memory `cachedLinkGraph: LinkGraph?` is returned on cache-hit; it is invalidated on successful vault save or vault reload. This eliminates O(n) full-vault re-scans on every keystroke.
 
 ## Future model and sync hooks (Phase 6)
 
@@ -108,12 +132,26 @@ This file names constraints; roadmaps and feature plans live under `docs/plans/`
 
 ## Implementation gap resolution
 
-The three open implementation gaps identified in the constraint audit have been resolved in a single pass:
+The three open implementation gaps identified in the first constraint audit have been resolved:
 
 1. **Slash auto-commit path** — `SlashCommandDetector` is now wired into `SingleSurfaceNoteEditor.Coordinator.inlineTriggerCommands`, alongside the existing `MarkdownCommandDetector` bullet path. No architectural change was needed; the detector and registry were already complete.
 
 2. **Watcher race coverage** — `AppModel` gained a configurable `autosaveDebounceMilliseconds` init parameter and a `simulateWatcherEvent()` test helper. `runPendingExternalDiskReconciliationIfNeeded` is now `internal`. `AppModelWatcherRaceTests` covers the deferred-reconciliation invariant directly.
 
 3. **Performance baselines** — `EditEnginePerformanceTests` establishes `measure {}` baselines for large-document edit throughput.
+
+The fifteen additional gaps identified in the **Foundation Hardening** audit (second audit) have also been resolved across four phases. Key outcomes:
+
+- `NoteDocument.id` is now a single-source-of-truth computed property.
+- `splitBlock` correctly constrains spans and links to new block boundaries.
+- Undo stack is count-bounded (200 steps) with graceful pruning that preserves recent history.
+- `SingleSurfaceNoteEditor` enforces a 1 MB note size cap and emits user-visible notices on size or full-replace events.
+- Command interceptors carry `UUID` tokens and can be deregistered.
+- `VaultCommitCoordinator` uses a two-phase prepare/commit protocol eliminating partial-write risk.
+- All four index types (`LinkGraph`, `RelationshipIndex`, `FolderCatalog`, `PathIndex`) carry `isDirty` flags; participants skip disk writes when content is unchanged.
+- Backlink refreshes are debounced with an in-memory cache, eliminating per-keystroke vault scans.
+- `SlashCommandRegistry` is open for external registration; builtins are registered at startup via `registerBuiltins()`.
+- `EditorVisualStyle.apply` is guarded by a document-ID and text-hash cache so styling passes only re-run when content changes.
+- `TextKit2BlockEditor` and `BlockListView` (unused code paths) have been removed.
 
 **No open implementation gaps remain against the constraints listed in this document.** Future feature work should add a constraint entry here before implementation begins.

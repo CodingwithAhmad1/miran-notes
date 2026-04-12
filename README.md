@@ -9,11 +9,19 @@ Local-first, Swift-native notes editor with plain-text storage and sidecar metad
 - `note.txt` holds canonical text content.
 - `note.meta.json` stores `schemaVersion`, block ranges, span styles, links, and artifact refs.
 - SwiftUI renders block rows while TextKit2 powers inline text editing via `NSTextView`.
+- **Single source of truth for note identity:** `NoteDocument.id` is a computed property delegating to `metadata.noteID`; there is no separate stored `id` field.
 - All editor mutations run through `EditCommandEngine`; `apply(_:)` returns the resulting `NoteDocument` synchronously so callers (editor coordinator, tests) can refresh immediately.
+- **`splitBlock` safety:** after every block split, `SpanAdjuster.constrainToBlocks` and `LinkAdjuster.constrainToBlocks` clip any spans or wiki-links that crossed the new boundary.
 - Metadata invariants: `adjustBlocks` handles single-block, zero-length-merge, and multi-block-collapse cases deterministically; `RangeNormalizer` fallback fires only for edge cases and logs when it does; `NoteIntegrity` validates structure.
-- Debounced autosave writes text and metadata using **per-file** atomic replaces (`tmp` + `replaceItemAt`). A crash between the two writes can leave the pair briefly inconsistent; **load** (`NoteLoadResult`) re-runs `RangeNormalizer` and falls back to a single-block repair; any repair warnings are surfaced to the user via a dismissible banner (`repairNotice`).
-- **Cursor tracking:** `SingleSurfaceNoteEditor` publishes `cursorOffset` via `@Binding`; `AppModel.editorCursorOffset` reflects the live caret position so operations like wiki-link insertion land at the cursor rather than end-of-document.
-- **Slash commands:** `/h1`–`/h3`, `/p`, `/code`, `/list` (alias: `/bullet`), `/divider`, `/callout`.
+- **Atomic vault commits (two-phase):** `VaultCommitCoordinator` runs a prepare phase (all participants write to temp files) followed by a commit phase (atomic rename into final paths). A failure during preparation leaves all vault files untouched.
+- **Dirty-flag saves:** `LinkGraph`, `RelationshipIndex`, `FolderCatalog`, and `PathIndex` each expose `isDirty`. Their `VaultCommitParticipant` implementations skip serialization and temp-file writes when unchanged, eliminating spurious `mtime` bumps.
+- Debounced autosave writes text and metadata; **load** (`NoteLoadResult`) re-runs `RangeNormalizer` and falls back to a single-block repair; any repair warnings are surfaced to the user via a dismissible banner (`repairNotice`).
+- **Note size cap:** edits that would push a note past 1 MB (UTF-16) are rejected with a user-visible notice.
+- **Cursor tracking:** `SingleSurfaceNoteEditor` publishes `cursorOffset` via `@Binding`; `AppModel.editorCursorOffset` reflects the live caret position so operations like wiki-link insertion land at the cursor rather than end-of-document. The offset is reset to 0 when switching notes.
+- **Undo (count-bounded):** `AppModel` maintains a `undoHistory` deque capped at 200 steps (`UndoPolicy.maxUndoSteps`). Oldest entries are pruned with graceful re-registration of surviving steps. Command interceptors carry `UUID` tokens and can be individually deregistered via `removeCommandInterceptor(_:)`.
+- **Backlink cache:** `AppModel` keeps `cachedLinkGraph` in memory and debounces refreshes by 1 500 ms, avoiding per-keystroke full-vault scans. The cache is invalidated on vault save or reload.
+- **Incremental visual styling:** `EditorVisualStyle.apply` is guarded by a document-ID and text cache; styling passes are skipped when content has not changed.
+- **Slash commands:** `/h1`–`/h3`, `/p`, `/code`, `/list` (alias: `/bullet`), `/divider`, `/callout`. The registry is open: call `SlashCommandRegistry.register(_:)` to add commands without modifying core code. Built-ins are registered once at app startup via `SlashCommandRegistry.registerBuiltins()`.
 - **Slash discovery menu (Notion-like):**
   - Typing `/` opens a searchable command menu near the caret.
   - Typing more characters filters commands dynamically.
@@ -22,9 +30,9 @@ Local-first, Swift-native notes editor with plain-text storage and sidecar metad
 
 ## Module Layout
 
-- `Sources/MiranNotesCore` domain models, `EditCommandEngine`, `RangeNormalizer`, `SpanAdjuster`, `NoteIntegrity`.
-- `Sources/MiranNotesApp` app shell, features, data layer, single-surface editor.
-- `Tests/MiranNotesTests` core unit tests; `Tests/MiranNotesAppTests` repository / app-layer tests (`swift test`).
+- `Sources/MiranNotesCore` — domain models (`NoteDocument`, `Block`, `Span`, `NoteLink`), `EditCommandEngine`, `RangeNormalizer`, `SpanAdjuster`, `NoteIntegrity`, `ExtensionPoints`.
+- `Sources/MiranNotesApp` — app shell (`AppModel`, `MiranNotesApp`), features (`SingleSurfaceNoteEditor`, `EditorVisualStyle`, `SlashCommandRegistry`), data layer (`NoteRepository`, `VaultCommitCoordinator`, `LinkGraph`, `RelationshipIndex`, `FolderCatalog`, `PathIndex`).
+- `Tests/MiranNotesTests` — core unit + regression tests; `Tests/MiranNotesAppTests` — app-layer, repository, undo, performance, and watcher-race tests (`swift test`).
 
 ## MVP Milestones
 
@@ -39,13 +47,21 @@ Local-first, Swift-native notes editor with plain-text storage and sidecar metad
 - [x] Local vault storage using `.txt` + `.meta.json`.
 - [x] Block types modeled for paragraph, heading, list item, callout, code, divider.
 - [x] Command-based edit pipeline; `apply(_:)` returns `NoteDocument` synchronously.
-- [x] TextKit2-backed editable block integration on macOS; cursor position tracked via `@Binding`.
+- [x] `NoteDocument.id` is a computed property; `metadata.noteID` is the single source of truth.
+- [x] `splitBlock` constrains spans and links to new block boundaries via `constrainToBlocks`.
+- [x] TextKit2-backed editable block integration on macOS; cursor position tracked via `@Binding`; offset reset on note switch.
+- [x] Two-phase atomic vault commit (prepare → rename); dirty-flag guards skip unchanged index writes.
 - [x] Debounced persistence with atomic writes; `NoteLoadResult` surfaces repair warnings.
-- [x] Dismissible repair-notice banner when load-time structural repair ran or link metadata is missing.
-- [x] Slash commands `/list`, `/divider`, `/callout` registered alongside `/h1`–`/h3`, `/p`, `/code`.
+- [x] Dismissible repair-notice banner when load-time structural repair ran, link metadata is missing, full-buffer fallback fired, or note size limit was hit.
+- [x] Note size cap at 1 MB (UTF-16); rejection triggers user notice.
+- [x] Count-bounded undo (200 steps) with graceful oldest-first pruning; interceptors deregisterable via `UUID` token.
+- [x] In-memory backlink cache with 1 500 ms debounce; invalidated on save/reload.
+- [x] Incremental `EditorVisualStyle.apply`; skipped when document ID and text unchanged.
+- [x] Slash commands `/list`, `/divider`, `/callout` registered alongside `/h1`–`/h3`, `/p`, `/code`; registry open for external extension via `register(_:)`.
 - [x] Slash discovery menu supports dynamic filtering, keyboard selection, and explicit no-match state.
 - [x] Deterministic `adjustBlocks` without normalize in common paths; fallback logged when triggered.
-- [x] Project builds and all 55 tests pass (`swift test`).
+- [x] Filename slugs capped at 200 UTF-8 bytes with scalar-boundary truncation.
+- [x] Project builds and all tests pass (`swift test`).
 
 ## Run
 
