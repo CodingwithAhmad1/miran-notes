@@ -1,9 +1,9 @@
 import Foundation
 
 /// UTF-16–aligned diff helpers for reconciling `NSTextStorage` with the canonical document string.
-enum TextEditDiff {
+public enum TextEditDiff {
     /// Returns a single contiguous UTF-16 edit that transforms `old` into `new`, or `nil` if more than one disjoint edit is required.
-    static func singleUTF16Replacement(from old: String, to new: String) -> (range: NSRange, replacement: String)? {
+    public static func singleUTF16Replacement(from old: String, to new: String) -> (range: NSRange, replacement: String)? {
         if old == new { return nil }
 
         let o = old as NSString

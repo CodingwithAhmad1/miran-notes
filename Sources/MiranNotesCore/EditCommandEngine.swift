@@ -13,6 +13,8 @@ public enum EditCommand {
     /// Registers a table artifact path under `_aux/{noteID}/` (file created by repository / UI).
     case registerTableArtifact(artifactID: UUID, relativePath: String)
     case repairMetadata
+    /// Replaces `metadata.blocks` after a full-buffer text sync, reconstraining spans and links. Text must already match `document.text`.
+    case replaceMetadataBlocks(blocks: [Block])
 }
 
 public struct EditCommandEngine {
@@ -36,8 +38,22 @@ public struct EditCommandEngine {
             next = registerTableArtifact(document: next, artifactID: artifactID, relativePath: relativePath)
         case .repairMetadata:
             next = repair(document: next)
+        case let .replaceMetadataBlocks(blocks):
+            next = replaceMetadataBlocks(document: next, blocks: blocks)
         }
 
+        return next
+    }
+
+    private static func replaceMetadataBlocks(document: NoteDocument, blocks: [Block]) -> NoteDocument {
+        var next = document
+        next.metadata.blocks = blocks
+        next.metadata.spans = SpanAdjuster.constrainToBlocks(spans: next.metadata.spans, blocks: blocks)
+        next.metadata.links = LinkAdjuster.constrainToBlocks(links: next.metadata.links, blocks: blocks)
+        if !RangeNormalizer.isValid(metadata: next.metadata, for: next.text) {
+            let repaired = RangeNormalizer.normalize(metadata: next.metadata, for: next.text)
+            next.metadata = repaired.normalizedMetadata
+        }
         return next
     }
 
