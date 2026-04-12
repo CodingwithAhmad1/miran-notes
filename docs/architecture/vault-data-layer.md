@@ -2,9 +2,9 @@
 
 This note summarizes how on-disk vault state, the repository, and `AppModel` fit together. It complements [architectural-refinements.md](architectural-refinements.md) and [Constraints.md](../../Constraints.md).
 
-## `NoteRepository` (actor)
+## `NoteRepository` (coordinator actor)
 
-- **Single actor** today: listing, load/save, indexes, manifest, and commit coordination run through one `NoteRepository` instance per vault. A future split into dedicated actors (`VaultIndexActor`, `NoteFileActor`, etc.) is described in the refinements doc; behavior contracts below stay the same.
+- **`NoteRepository`** composes **`NoteFileActor`** (note body + sidecar files, hashes, disk enumeration) and **`VaultIndexActor`** (manifest, `.miran/` indexes, `executeNoteCommit` / `commitIndexOnly`). Call sites still use a single `NoteRepository` instance per vault; cross-cutting operations (save, folder moves, manifest reconcile) run in the coordinator so atomic commit plans stay consistent.
 - **Per-note files:** `{relativePath}.txt` (canonical body bytes) and `{relativePath}.meta.json` (structured metadata). Paths are validated with `VaultPath` helpers.
 - **Body fingerprint:** `noteTextFileSHA256(relativePath:)` returns a hex SHA256 of the raw `.txt` file bytes. It does not parse or repair; it is suitable for detecting body-only drift and for TOCTOU checks before loading external edits.
 - **Revision token:** `noteRevisionToken` combines text and metadata for a coarser “whole note file set” identity (see repository implementation). Use tokens for fast “anything changed?” checks; use the text SHA256 when the concern is specifically the body file.

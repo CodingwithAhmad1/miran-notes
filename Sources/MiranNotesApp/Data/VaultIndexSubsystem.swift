@@ -2,7 +2,7 @@ import Foundation
 import MiranNotesCore
 
 /// Index file I/O for `.miran/` JSON (link graph, path index, folder catalog, relationship index).
-/// Owned by ``NoteRepository``; separated for clearer failure boundaries and testing.
+/// Used by ``VaultIndexActor`` and tests; separated for clearer failure boundaries.
 enum VaultIndexSubsystem {
     static func loadLinkGraph(vaultURL: URL, decoder: JSONDecoder) throws -> LinkGraph {
         let url = VaultPaths.linkGraphURL(vaultURL: vaultURL)

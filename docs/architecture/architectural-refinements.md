@@ -16,7 +16,7 @@ This document tracks major structural work aligned with the long-term plan:
 
 ## Vault indexes
 
-- [`VaultIndexSubsystem`](../../Sources/MiranNotesApp/Data/VaultIndexSubsystem.swift) centralizes loading of link graph, path index, folder catalog, and relationship index JSON. `NoteRepository` delegates to it (a lighter-weight split than separate index/file **actors**, which can be introduced later if isolation testing demands it).
+- [`VaultIndexSubsystem`](../../Sources/MiranNotesApp/Data/VaultIndexSubsystem.swift) centralizes **static** load helpers for `.miran/` JSON. [`VaultIndexActor`](../../Sources/MiranNotesApp/Data/VaultIndexActor.swift) owns manifest encoding and atomic index commits; [`NoteFileActor`](../../Sources/MiranNotesApp/Data/NoteFileActor.swift) owns per-note `.txt` / `.meta.json` I/O. [`NoteRepository`](../../Sources/MiranNotesApp/Data/NoteRepository.swift) coordinates both actors and keeps the public vault API unchanged for `AppModel`.
 
 ## Undo (hybrid roadmap)
 
