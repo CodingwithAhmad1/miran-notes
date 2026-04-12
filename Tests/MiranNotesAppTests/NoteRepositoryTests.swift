@@ -184,6 +184,45 @@ final class NoteRepositoryTests: XCTestCase {
         XCTAssertEqual(before, after, "manifest.json must not be rewritten when VaultManifest has no changes")
     }
 
+    func testSynchronizeLinkGraphFromRelationshipsRepairsMissingGraphEdges() async throws {
+        let vault = try tempVaultURL()
+        let repo = NoteRepository(vaultURL: vault)
+        try await repo.ensureVault()
+
+        let targetID = UUID()
+        let sourceID = UUID()
+        let target = NoteDocument(
+            text: "target",
+            metadata: NoteMetadata(
+                schemaVersion: NoteMetadata.currentSchemaVersion,
+                noteID: targetID,
+                blocks: [Block(id: "b1", type: .paragraph, range: TextRange(start: 0, length: 6), level: nil, icon: nil)],
+                spans: []
+            )
+        )
+        try await repo.save(target, asRelativePath: "target")
+
+        let source = NoteDocument(
+            text: "link",
+            metadata: NoteMetadata(
+                schemaVersion: NoteMetadata.currentSchemaVersion,
+                noteID: sourceID,
+                blocks: [Block(id: "b1", type: .paragraph, range: TextRange(start: 0, length: 4), level: nil, icon: nil)],
+                spans: [],
+                links: [NoteLink(range: TextRange(start: 0, length: 4), targetNoteID: targetID, label: nil)]
+            )
+        )
+        try await repo.save(source, asRelativePath: "source")
+
+        try await repo.saveLinkGraph(LinkGraph())
+        var emptyGraph = try await repo.loadLinkGraph()
+        XCTAssertTrue(emptyGraph.outgoing.isEmpty)
+
+        _ = try await repo.synchronizeLinkGraphFromRelationships()
+        emptyGraph = try await repo.loadLinkGraph()
+        XCTAssertEqual(emptyGraph.outgoing[sourceID], [targetID])
+    }
+
     func testSaveUpdatesRelationshipAndPathIndexes() async throws {
         let vault = try tempVaultURL()
         let repo = NoteRepository(vaultURL: vault)

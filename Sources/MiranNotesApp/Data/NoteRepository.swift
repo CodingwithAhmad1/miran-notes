@@ -246,6 +246,50 @@ actor NoteRepository {
         return integrity
     }
 
+    /// Synchronizes `LinkGraph` from persisted note-link relationships without scanning note files.
+    ///
+    /// This is the canonical startup/external-change path: relationship metadata is already persisted in
+    /// `RelationshipIndex`, so we derive an exact note-link adjacency map and commit only if the graph differs.
+    func synchronizeLinkGraphFromRelationships() async throws -> VaultIntegrityResult {
+        let manifest = try await loadOrRebuildManifest()
+        let noteIDs = Set(manifest.entries.map(\.noteID))
+        let relationshipIndex = try await index.loadRelationshipIndex()
+        var derivedTargetsBySource: [UUID: [UUID]] = [:]
+
+        for relationship in relationshipIndex.relationships {
+            guard relationship.relationshipKind == "noteLink" else { continue }
+            guard noteIDs.contains(relationship.sourceNoteID) else { continue }
+            guard case let .note(targetID) = relationship.target, noteIDs.contains(targetID) else { continue }
+            derivedTargetsBySource[relationship.sourceNoteID, default: []].append(targetID)
+        }
+
+        var derived = LinkGraph()
+        for (sourceID, targets) in derivedTargetsBySource {
+            derived.setOutgoing(from: sourceID, to: targets)
+        }
+        // `isDirty` is an in-memory optimization only; equality must compare persisted shape.
+        derived.isDirty = false
+
+        let current = try await index.loadLinkGraph()
+        if current.outgoing == derived.outgoing {
+            return .clean
+        }
+
+        var graphToCommit = derived
+        graphToCommit.isDirty = true
+        let folderCatalog = try await index.loadFolderCatalog()
+        let pathIndex = try await index.loadPathIndex()
+        let integrity = try await index.commitIndexOnly(
+            manifest: manifest,
+            linkGraph: graphToCommit,
+            relationshipIndex: relationshipIndex,
+            folderCatalog: folderCatalog,
+            pathIndex: pathIndex
+        )
+        await index.logIfIntegrityIssues(integrity)
+        return integrity
+    }
+
     func createNote(named name: String) async throws -> (NoteDocument, String) {
         try await createNote(named: name, folderID: FolderCatalog.rootFolderID)
     }
@@ -445,6 +489,16 @@ actor NoteRepository {
 
     func loadRelationshipIndex() async throws -> RelationshipIndex {
         try await index.loadRelationshipIndex()
+    }
+
+    /// Returns persisted note-link relationship count (source of truth for graph derivation work size).
+    func noteLinkRelationshipCount() async throws -> Int {
+        let relationshipIndex = try await index.loadRelationshipIndex()
+        return relationshipIndex.relationships.reduce(into: 0) { count, relationship in
+            guard relationship.relationshipKind == "noteLink" else { return }
+            guard case .note = relationship.target else { return }
+            count += 1
+        }
     }
 
     func loadFolderCatalog() async throws -> FolderCatalog {

@@ -50,4 +50,48 @@ enum VaultPaths {
             .appendingPathComponent(auxDirName, isDirectory: true)
             .appendingPathComponent(noteID.uuidString.lowercased(), isDirectory: true)
     }
+
+    // MARK: - Vault-level databases
+
+    static let databasesDirName = "_databases"
+    static let databaseRegistryFileName = "database-registry.json"
+
+    static func databaseRegistryURL(vaultURL: URL) -> URL {
+        miranDirectory(vaultURL: vaultURL).appendingPathComponent(databaseRegistryFileName, isDirectory: false)
+    }
+
+    /// `{vault}/_databases/`
+    static func databasesRoot(vaultURL: URL) -> URL {
+        vaultURL.appendingPathComponent(databasesDirName, isDirectory: true)
+    }
+
+    /// `{vault}/_databases/{databaseID-lower}/`
+    static func databaseDirectory(vaultURL: URL, databaseID: UUID) -> URL {
+        databasesRoot(vaultURL: vaultURL)
+            .appendingPathComponent(databaseID.uuidString.lowercased(), isDirectory: true)
+    }
+
+    /// `{vault}/_databases/{databaseID-lower}/schema.json`
+    static func databaseSchemaURL(vaultURL: URL, databaseID: UUID) -> URL {
+        databaseDirectory(vaultURL: vaultURL, databaseID: databaseID)
+            .appendingPathComponent("schema.json", isDirectory: false)
+    }
+
+    /// `{vault}/_databases/{databaseID-lower}/rows.jsonl`
+    static func databaseRowsURL(vaultURL: URL, databaseID: UUID) -> URL {
+        databaseDirectory(vaultURL: vaultURL, databaseID: databaseID)
+            .appendingPathComponent("rows.jsonl", isDirectory: false)
+    }
+
+    /// `{vault}/_databases/{databaseID-lower}/views/`
+    static func databaseViewsDirectory(vaultURL: URL, databaseID: UUID) -> URL {
+        databaseDirectory(vaultURL: vaultURL, databaseID: databaseID)
+            .appendingPathComponent("views", isDirectory: true)
+    }
+
+    /// `{vault}/_databases/{databaseID-lower}/views/{viewID-lower}.json`
+    static func databaseViewURL(vaultURL: URL, databaseID: UUID, viewID: UUID) -> URL {
+        databaseViewsDirectory(vaultURL: vaultURL, databaseID: databaseID)
+            .appendingPathComponent("\(viewID.uuidString.lowercased()).json", isDirectory: false)
+    }
 }

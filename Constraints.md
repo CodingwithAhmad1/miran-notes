@@ -57,7 +57,7 @@ The canonical note model and `NSTextView` are two representations of text. Engin
   - Keyboard contract is fixed for consistency: Up/Down moves highlight, Enter/Tab executes highlighted command, Esc closes menu without mutation.
   - Unknown tokens (for example `/doesntwork`) are **not errors** and are **not auto-transformed**: text remains plain, menu shows `No commands found`.
   - Enter without a selectable command follows normal editor behavior (no hidden slash fallback rewrite).
-  - Registered commands currently include `/h1`–`/h3`, `/p`, `/code`, `/list` (alias `/bullet`), `/divider`, `/callout`.
+  - Registered commands currently include `/h1`–`/h3`, `/p`, `/code`, `/list` (alias `/bullet`), `/divider`, `/callout`, `/task` (alias `/todo`), `/session`.
   - **Registry order** defines precedence if two patterns could match.
   - **Open registry:** `SlashCommandRegistry.register(_:)` accepts external descriptors idempotently. Built-in commands are registered via `SlashCommandRegistry.registerBuiltins()`, called once at app startup (`MiranNotesApp.init`). Plugins or feature modules can call `register` at any time without modifying core registry code.
   - **Auto-commit path (active):** Typing `/token⎵` or `/token↵` without navigating the menu auto-commits via `SlashCommandDetector` in `inlineTriggerCommands` (parallel to `MarkdownCommandDetector`). Both the menu path and the auto-commit path produce identical `EditCommand` arrays through `SlashCommandRegistry`. Unknown tokens fall through to the normal `replaceText` path — no silent rewrite.
@@ -177,5 +177,15 @@ The fifteen additional gaps identified in the **Foundation Hardening** audit (se
 - `SlashCommandRegistry` is open for external registration; builtins are registered at startup via `registerBuiltins()`.
 - `EditorVisualStyle.apply` is guarded by a document-ID and text-hash cache so styling passes only re-run when content changes.
 - `TextKit2BlockEditor` and `BlockListView` (unused code paths) have been removed.
+
+## Vault-level databases and planning (M6)
+
+- **Database storage:** Vault-level databases live under `_databases/{databaseID}/` with `schema.json`, `rows.jsonl`, and `views/`. The `database-registry.json` index lives in `.miran/`. This layout is forward-compatible: older Miran Notes versions ignore `_databases/` and the registry file.
+- **Schema typing:** `DatabaseColumnType` enforces value validation at the cell level via `accepts(_:)`. Invalid values are silently rejected (not written) rather than stored with error markers.
+- **Planning bootstrap:** `PlanningModel.bootstrap()` is idempotent — it creates Tasks and Sessions databases only if they don't exist, so repeated calls (e.g. across app launches) are safe.
+- **Cross-feature linking:** `LinkTarget.database(databaseID:)` and `LinkTarget.databaseRow(databaseID:, rowID:)` participate in the existing `RelationshipIndex` and `VaultIntegrityChecker` contracts. The `linkedNote` column in planning databases uses `DatabaseColumnType.noteLink` (validated as a UUID string).
+- **Slash commands:** `/task` and `/session` are registered at app startup alongside built-in commands. They follow the same registry, commit policy, and discovery contracts as all other slash commands.
+- **Database persistence isolation:** Database writes (`DatabaseDocument.flushToDisk`) use direct atomic file I/O rather than `VaultCommitCoordinator` participation, because database edits are self-contained and not entangled with note-file saves. This is a deliberate simplification; coordinated multi-entity transactions can be added later if needed.
+- **Migration:** `ZoraMigrationEngine` is additive (imports into existing databases) and does not delete source Zora files.
 
 **No open implementation gaps remain against the constraints listed in this document.** Future feature work should add a constraint entry here before implementation begins.

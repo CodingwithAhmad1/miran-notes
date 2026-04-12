@@ -9,15 +9,22 @@ private final class MiranNotesAppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
+enum AppContentMode: String, CaseIterable {
+    case notes = "Notes"
+    case planning = "Planning"
+}
+
 @main
 struct MiranNotesApp: App {
     @NSApplicationDelegateAdaptor(MiranNotesAppDelegate.self) private var appDelegate
     @StateObject private var model: AppModel
     @State private var conflictDetailsPresented = false
     @State private var conflictDetailsDiskDate: Date?
+    @State private var contentMode: AppContentMode = .notes
 
     init() {
         SlashCommandRegistry.registerBuiltins()
+        SlashCommandRegistry.registerPlanningCommands()
         let vault = URL(fileURLWithPath: NSHomeDirectory())
             .appendingPathComponent("MiranNotesVault", isDirectory: true)
         let repository = NoteRepository(vaultURL: vault)
@@ -26,18 +33,16 @@ struct MiranNotesApp: App {
 
     var body: some Scene {
         WindowGroup {
-            NavigationSplitView {
-                NotesListView(model: model)
-                    .navigationTitle("Notes")
-            } detail: {
-                if model.activeDocument != nil {
-                    EditorRootView(model: model)
-                } else {
-                    ContentUnavailableView(
-                        "Select a note",
-                        systemImage: "note.text",
-                        description: Text("Create or open a note to start editing.")
-                    )
+            VStack(spacing: 0) {
+                modeSwitcher
+                Divider()
+                Group {
+                    switch contentMode {
+                    case .notes:
+                        notesContentView
+                    case .planning:
+                        planningContentView
+                    }
                 }
             }
             .task {
@@ -132,6 +137,65 @@ struct MiranNotesApp: App {
                 }
                 .keyboardShortcut("c", modifiers: [.command, .shift])
             }
+            CommandMenu("Navigate") {
+                Button("Notes") { contentMode = .notes }
+                    .keyboardShortcut("1", modifiers: .command)
+                Button("Planning") { contentMode = .planning }
+                    .keyboardShortcut("2", modifiers: .command)
+            }
+        }
+    }
+
+    private var modeSwitcher: some View {
+        HStack(spacing: 0) {
+            ForEach(AppContentMode.allCases, id: \.self) { mode in
+                Button {
+                    contentMode = mode
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: mode == .notes ? "note.text" : "calendar.badge.clock")
+                            .font(.caption)
+                        Text(mode.rawValue)
+                            .font(.caption.weight(.medium))
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(contentMode == mode ? Color.accentColor.opacity(0.12) : Color.clear)
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                }
+                .buttonStyle(.plain)
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 4)
+        .background(.bar)
+    }
+
+    private var notesContentView: some View {
+        NavigationSplitView {
+            NotesListView(model: model)
+                .navigationTitle("Notes")
+        } detail: {
+            if model.activeDocument != nil {
+                EditorRootView(model: model)
+            } else {
+                ContentUnavailableView(
+                    "Select a note",
+                    systemImage: "note.text",
+                    description: Text("Create or open a note to start editing.")
+                )
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var planningContentView: some View {
+        if let planning = model.planningModel {
+            PlanningRootView(model: planning)
+        } else {
+            ProgressView("Initializing Planning...")
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 }

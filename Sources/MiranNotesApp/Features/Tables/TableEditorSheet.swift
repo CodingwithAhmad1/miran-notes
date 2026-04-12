@@ -27,18 +27,26 @@ struct TableEditorSheet: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done") {
                         Task {
-                            await document?.flushNow()
-                            dismiss()
+                            do {
+                                try await document?.flushNow()
+                                dismiss()
+                            } catch {
+                                loadError = "Could not save table: \(error.localizedDescription)"
+                            }
                         }
                     }
                 }
                 ToolbarItem(placement: .primaryAction) {
                     Button {
                         Task {
-                            let newRow = TableRowRecord()
-                            await document?.appendRow(newRow)
-                            if let doc = document {
-                                rows = (await doc.snapshot()).rows
+                            do {
+                                let newRow = TableRowRecord()
+                                try await document?.appendRow(newRow)
+                                if let doc = document {
+                                    rows = (await doc.snapshot()).rows
+                                }
+                            } catch {
+                                loadError = "Could not append row: \(error.localizedDescription)"
                             }
                         }
                     } label: {
@@ -84,9 +92,13 @@ struct TableEditorSheet: View {
                                     },
                                     set: { newValue in
                                         Task {
-                                            await document?.updateCell(rowId: row.id, columnId: col.id, value: newValue)
-                                            if let doc = document {
-                                                rows = (await doc.snapshot()).rows
+                                            do {
+                                                try await document?.updateCell(rowId: row.id, columnId: col.id, value: newValue)
+                                                if let doc = document {
+                                                    rows = (await doc.snapshot()).rows
+                                                }
+                                            } catch {
+                                                loadError = "Could not update table cell: \(error.localizedDescription)"
                                             }
                                         }
                                     }

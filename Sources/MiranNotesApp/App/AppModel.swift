@@ -52,6 +52,44 @@ enum SidebarOutlineEntry: Identifiable {
 
 @MainActor
 final class AppModel: ObservableObject {
+    enum StartupLinkGraphSyncMode: Equatable {
+        case immediate
+        case deferred
+    }
+
+    struct StartupLinkGraphSyncDecision: Equatable {
+        var mode: StartupLinkGraphSyncMode
+        var reason: String
+    }
+
+    nonisolated static func startupLinkGraphSyncDecision(
+        noteCount: Int,
+        noteLinkRelationshipCount: Int,
+        hardThreshold: Int,
+        historicalAverageMs: Double?,
+        budgetMs: Double
+    ) -> StartupLinkGraphSyncDecision {
+        if noteCount > hardThreshold {
+            return StartupLinkGraphSyncDecision(
+                mode: .deferred,
+                reason: "noteCount>\(hardThreshold)"
+            )
+        }
+        if noteLinkRelationshipCount > hardThreshold * 5 {
+            return StartupLinkGraphSyncDecision(
+                mode: .deferred,
+                reason: "relationshipCountHigh"
+            )
+        }
+        if let historicalAverageMs, historicalAverageMs > budgetMs {
+            return StartupLinkGraphSyncDecision(
+                mode: .deferred,
+                reason: "historicalAverageOverBudget"
+            )
+        }
+        return StartupLinkGraphSyncDecision(mode: .immediate, reason: "withinBudget")
+    }
+
     @Published var noteSummaries: [NoteSummary] = []
     /// Manifest `relativePath` for the open note (stable selection for tests and shell).
     @Published var selectedBaseName: String?
@@ -77,7 +115,8 @@ final class AppModel: ObservableObject {
     /// Cached folder tree for outline UI (kept in sync with `refreshNotes()`).
     @Published var folderCatalog: FolderCatalog = FolderCatalog()
 
-    private let repository: NoteRepository
+    let repository: NoteRepository
+    @Published var planningModel: PlanningModel?
     private var saveTask: Task<Void, Never>?
     private var vaultWatcher: VaultDirectoryWatcher?
     /// Set when the vault watcher fires; processed after autosave finishes so events are not dropped.
@@ -127,6 +166,10 @@ final class AppModel: ObservableObject {
     private var localCommandInterceptorOrder: [UUID] = []
 
     private let autosaveDebounceMilliseconds: UInt64
+    private let largeVaultLinkGraphSyncThreshold: Int
+    private let startupLinkGraphSyncBudgetMs: Double
+    private let startupLinkGraphSyncHistoryWeight: Double
+    private var startupLinkGraphSyncTask: Task<Void, Never>?
     private var backlinkRefreshTask: Task<Void, Never>?
     private var bodySearchIndexTask: Task<Void, Never>?
     private var bodySearchIndexGeneration = 0
@@ -135,11 +178,17 @@ final class AppModel: ObservableObject {
     init(
         repository: NoteRepository,
         autosaveDebounceMilliseconds: UInt64 = 400,
-        undoPolicy: UndoPolicy = .defaultPolicy
+        undoPolicy: UndoPolicy = .defaultPolicy,
+        largeVaultLinkGraphSyncThreshold: Int = 2_000,
+        startupLinkGraphSyncBudgetMs: Double = 120,
+        startupLinkGraphSyncHistoryWeight: Double = 0.3
     ) {
         self.repository = repository
         self.autosaveDebounceMilliseconds = autosaveDebounceMilliseconds
         self.undoPolicy = undoPolicy
+        self.largeVaultLinkGraphSyncThreshold = largeVaultLinkGraphSyncThreshold
+        self.startupLinkGraphSyncBudgetMs = startupLinkGraphSyncBudgetMs
+        self.startupLinkGraphSyncHistoryWeight = startupLinkGraphSyncHistoryWeight
     }
 
     func setUndoManager(_ manager: UndoManager?) {
@@ -156,24 +205,141 @@ final class AppModel: ObservableObject {
             } catch {
                 lastError = "Vault recovery failed: \(error.localizedDescription)"
             }
-            do {
-                try await repository.reconcileManifest()
-            } catch {
-                lastError = "Manifest reconciliation failed: \(error.localizedDescription)"
-            }
+            await reconcileVaultState(invalidateCaches: false)
             await refreshNotes()
-            do {
-                let integrity = try await repository.rebuildLinkGraphFull()
-                applyVaultIntegrityAfterLoadIfNeeded(integrity)
-            } catch {
-                lastError = "Link index rebuild failed: \(error.localizedDescription)"
-            }
+            await runStartupLinkGraphSync()
             if selectedBaseName == nil {
                 selectedBaseName = noteSummaries.first?.relativePath
             }
             await loadSelectedNote()
             await refreshBacklinks()
             startVaultWatcher()
+            await bootstrapPlanning()
+        }
+    }
+
+    private func bootstrapPlanning() async {
+        let vaultURL = await repository.vaultURL
+        let dbRepo = DatabaseRepository(vaultURL: vaultURL)
+        let configManager = PlanningConfigManager(vaultURL: vaultURL)
+        let planning = PlanningModel(databaseRepo: dbRepo, configManager: configManager)
+        planningModel = planning
+        await planning.bootstrap()
+    }
+
+    // MARK: - Cross-feature navigation (Notes ↔ Planning)
+
+    /// Opens a note that is linked from a database row's `linkedNote` cell.
+    func openLinkedNote(from row: TableRowRecord) {
+        guard let noteIDStr = row.cells["linkedNote"],
+              let noteID = UUID(uuidString: noteIDStr) else { return }
+        openNote(noteID: noteID)
+    }
+
+    /// Links the currently active note to a database row by setting its `linkedNote` cell.
+    func linkActiveNoteToTask(rowID: UUID) async {
+        guard let noteID = activeDocument?.metadata.noteID,
+              let planning = planningModel else { return }
+        var row = planning.allTasks.first(where: { $0.id == rowID })
+        guard var cells = row?.cells else { return }
+        cells["linkedNote"] = noteID.uuidString
+        await planning.updateTask(rowID: rowID, cells: cells)
+    }
+
+    /// Links the currently active note to a session row.
+    func linkActiveNoteToSession(rowID: UUID) async {
+        guard let noteID = activeDocument?.metadata.noteID,
+              let planning = planningModel else { return }
+        let row = planning.allSessions.first(where: { $0.id == rowID })
+        guard var cells = row?.cells else { return }
+        cells["linkedNote"] = noteID.uuidString
+        await planning.updateTask(rowID: rowID, cells: cells)
+    }
+
+    /// Large-vault startup policy: sync link graph inline for small/medium vaults,
+    /// defer to a background task for larger vaults so note loading stays responsive.
+    private func runStartupLinkGraphSync() async {
+        startupLinkGraphSyncTask?.cancel()
+        let relationshipCount: Int
+        do {
+            relationshipCount = try await repository.noteLinkRelationshipCount()
+        } catch {
+            lastError = "Could not read relationship index for startup sync decision: \(error.localizedDescription)"
+            return
+        }
+        let decision = Self.startupLinkGraphSyncDecision(
+            noteCount: noteSummaries.count,
+            noteLinkRelationshipCount: relationshipCount,
+            hardThreshold: largeVaultLinkGraphSyncThreshold,
+            historicalAverageMs: loadStartupLinkGraphSyncAverageMs(),
+            budgetMs: startupLinkGraphSyncBudgetMs
+        )
+        Logger.vault.info(
+            "Startup link graph sync mode=\(String(describing: decision.mode), privacy: .public) reason=\(decision.reason, privacy: .public) notes=\(self.noteSummaries.count, privacy: .public) links=\(relationshipCount, privacy: .public)"
+        )
+
+        switch decision.mode {
+        case .immediate:
+            let start = Date()
+            do {
+                let integrity = try await repository.synchronizeLinkGraphFromRelationships()
+                applyVaultIntegrityAfterLoadIfNeeded(integrity)
+                recordStartupLinkGraphSyncDurationMs(Date().timeIntervalSince(start) * 1000.0)
+            } catch {
+                lastError = "Link index sync failed: \(error.localizedDescription)"
+            }
+        case .deferred:
+            startupLinkGraphSyncTask = Task { @MainActor [weak self] in
+                guard let self else { return }
+                let start = Date()
+                do {
+                    let integrity = try await self.repository.synchronizeLinkGraphFromRelationships()
+                    guard !Task.isCancelled else { return }
+                    self.applyVaultIntegrityAfterLoadIfNeeded(integrity)
+                    self.recordStartupLinkGraphSyncDurationMs(Date().timeIntervalSince(start) * 1000.0)
+                    await self.refreshBacklinks()
+                } catch {
+                    guard !Task.isCancelled else { return }
+                    self.lastError = "Deferred link index sync failed: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    private func startupLinkGraphSyncAverageKey() -> String {
+        "startupLinkGraphSync.avgMs.\(repository.vaultURL.path)"
+    }
+
+    private func loadStartupLinkGraphSyncAverageMs() -> Double? {
+        let key = startupLinkGraphSyncAverageKey()
+        let value = UserDefaults.standard.double(forKey: key)
+        guard value > 0 else { return nil }
+        return value
+    }
+
+    private func recordStartupLinkGraphSyncDurationMs(_ durationMs: Double) {
+        guard durationMs.isFinite, durationMs > 0 else { return }
+        let key = startupLinkGraphSyncAverageKey()
+        let current = loadStartupLinkGraphSyncAverageMs()
+        let next: Double
+        if let current {
+            let alpha = min(max(startupLinkGraphSyncHistoryWeight, 0.01), 0.99)
+            next = (alpha * durationMs) + ((1.0 - alpha) * current)
+        } else {
+            next = durationMs
+        }
+        UserDefaults.standard.set(next, forKey: key)
+    }
+
+    /// Canonical vault-refresh sequence for disk-driven changes: optional cache invalidation + manifest reconciliation.
+    private func reconcileVaultState(invalidateCaches: Bool) async {
+        if invalidateCaches {
+            await repository.invalidateIndexCaches()
+        }
+        do {
+            try await repository.reconcileManifest()
+        } catch {
+            lastError = "Manifest reconciliation failed: \(error.localizedDescription)"
         }
     }
 
@@ -467,6 +633,12 @@ final class AppModel: ObservableObject {
         let jsonl = aux.appendingPathComponent(art.relativePath, isDirectory: false)
         let schemaName = (art.relativePath as NSString).lastPathComponent.replacingOccurrences(of: ".jsonl", with: ".schema.json")
         let schema = jsonl.deletingLastPathComponent().appendingPathComponent(schemaName)
+        guard FileManager.default.fileExists(atPath: jsonl.path),
+              FileManager.default.fileExists(atPath: schema.path) else {
+            lastError = "Table files are missing on disk. Recreate the table artifact."
+            tableEditorPayload = nil
+            return
+        }
         tableEditorPayload = TableEditorPayload(id: art.id, jsonlURL: jsonl, schemaURL: schema)
     }
 
@@ -482,6 +654,7 @@ final class AppModel: ObservableObject {
                 lastPersistedDocument = document
                 await refreshOnDiskFingerprints(for: relPath)
                 clearUndoStack()
+                syncTableEditorPayloadWithActiveDocument()
             } catch {
                 lastError = "Failed to create note: \(error.localizedDescription)"
             }
@@ -494,6 +667,7 @@ final class AppModel: ObservableObject {
         guard let path = selectedBaseName else {
             pendingEditorScroll = nil
             activeDocument = nil
+            tableEditorPayload = nil
             lastPersistedDocument = nil
             lastKnownDiskDate = nil
             lastKnownDiskRevision = nil
@@ -511,6 +685,7 @@ final class AppModel: ObservableObject {
             repairAdvisory = RepairDiagnosticsBuilder.buildLoadAdvisory(result: result)
             await refreshOnDiskFingerprints(for: path)
             clearUndoStack()
+            syncTableEditorPayloadWithActiveDocument()
             await refreshBacklinks()
         } catch {
             lastError = "Failed to load note: \(error.localizedDescription)"
@@ -922,6 +1097,7 @@ final class AppModel: ObservableObject {
 
     /// Test helper: mirrors what the vault watcher closure does without relying on filesystem events.
     func simulateWatcherEvent() async {
+        await reconcileVaultState(invalidateCaches: true)
         pendingExternalDiskCheck = true
         await runPendingExternalDiskReconciliationIfNeeded()
     }
@@ -937,12 +1113,7 @@ final class AppModel: ObservableObject {
                 guard let self else { return }
                 Task { @MainActor [weak self] in
                     guard let self else { return }
-                    await self.repository.invalidateIndexCaches()
-                    do {
-                        try await self.repository.reconcileManifest()
-                    } catch {
-                        self.lastError = "Manifest reconciliation failed: \(error.localizedDescription)"
-                    }
+                    await self.reconcileVaultState(invalidateCaches: true)
                     self.pendingExternalDiskCheck = true
                     await self.runPendingExternalDiskReconciliationIfNeeded()
                 }
@@ -1020,6 +1191,7 @@ final class AppModel: ObservableObject {
             lastKnownDiskDate = diskDate
             lastKnownDiskRevision = diskRevision
             lastKnownNoteTextSHA256 = observedTextHash
+            syncTableEditorPayloadWithActiveDocument()
             Task { await refreshBacklinks() }
             return
         }
@@ -1054,6 +1226,24 @@ final class AppModel: ObservableObject {
 
     func dismissDiskActivityBanner() {
         diskActivityBanner = nil
+    }
+
+    /// Ensures an open table editor always points to an artifact in the active note and existing files.
+    private func syncTableEditorPayloadWithActiveDocument() {
+        guard let payload = tableEditorPayload else { return }
+        guard let document = activeDocument else {
+            tableEditorPayload = nil
+            return
+        }
+        let hasArtifact = document.metadata.artifacts.contains { artifact in
+            artifact.id == payload.id && artifact.kind == .table
+        }
+        let filesExist =
+            FileManager.default.fileExists(atPath: payload.jsonlURL.path)
+            && FileManager.default.fileExists(atPath: payload.schemaURL.path)
+        if !hasArtifact || !filesExist {
+            tableEditorPayload = nil
+        }
     }
 
     private func updateActiveNoteFilePresenter() {

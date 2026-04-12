@@ -14,9 +14,6 @@ actor TableDocument {
 
     private(set) var schema: TableSchemaRecord
     private(set) var rows: [TableRowRecord]
-    private var saveTask: Task<Void, Never>?
-    private let saveDebounceNanoseconds: UInt64 = 350_000_000
-
     /// Bounded undo: snapshots of row arrays.
     private var undoStack: [[TableRowRecord]] = []
     private let maxUndo = 50
@@ -59,60 +56,55 @@ actor TableDocument {
         rows = parsed
     }
 
-    func replaceRows(_ newRows: [TableRowRecord], recordUndo: Bool = true) {
+    func replaceRows(_ newRows: [TableRowRecord], recordUndo: Bool = true) throws {
+        let previous = rows
         if recordUndo {
             pushUndo()
         }
-        rows = newRows
-        scheduleSave()
-    }
-
-    func appendRow(_ row: TableRowRecord, recordUndo: Bool = true) {
-        if recordUndo {
-            pushUndo()
+        do {
+            try writeAtomic(rows: newRows, schema: schema)
+            rows = newRows
+        } catch {
+            rows = previous
+            if recordUndo, !undoStack.isEmpty {
+                _ = undoStack.popLast()
+            }
+            throw error
         }
-        rows.append(row)
-        scheduleSave()
     }
 
-    func updateCell(rowId: UUID, columnId: String, value: String, recordUndo: Bool = true) {
+    func appendRow(_ row: TableRowRecord, recordUndo: Bool = true) throws {
+        var next = rows
+        next.append(row)
+        try replaceRows(next, recordUndo: recordUndo)
+    }
+
+    func updateCell(rowId: UUID, columnId: String, value: String, recordUndo: Bool = true) throws {
         guard let index = rows.firstIndex(where: { $0.id == rowId }) else { return }
         let columnType = schema.columnType(for: columnId)
         guard columnType.accepts(value) else { return }
-        if recordUndo {
-            pushUndo()
-        }
-        rows[index].cells[columnId] = value
-        scheduleSave()
+        var next = rows
+        next[index].cells[columnId] = value
+        try replaceRows(next, recordUndo: recordUndo)
     }
 
-    func undo() {
+    func undo() throws {
         guard let prev = undoStack.popLast() else { return }
+        let current = rows
         rows = prev
-        scheduleSave()
+        do {
+            try writeAtomic(rows: rows, schema: schema)
+        } catch {
+            rows = current
+            undoStack.append(prev)
+            throw error
+        }
     }
 
     private func pushUndo() {
         undoStack.append(rows)
         if undoStack.count > maxUndo {
             undoStack.removeFirst(undoStack.count - maxUndo)
-        }
-    }
-
-    private func scheduleSave() {
-        saveTask?.cancel()
-        saveTask = Task {
-            try? await Task.sleep(nanoseconds: saveDebounceNanoseconds)
-            guard !Task.isCancelled else { return }
-            await flushSave()
-        }
-    }
-
-    private func flushSave() async {
-        do {
-            try writeAtomic()
-        } catch {
-            // Caller may observe via logging in future
         }
     }
 
@@ -133,7 +125,7 @@ actor TableDocument {
         committed = true
     }
 
-    private func writeAtomic() throws {
+    private func writeAtomic(rows: [TableRowRecord], schema: TableSchemaRecord) throws {
         try FileManager.default.createDirectory(at: jsonlURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         var lines = ""
         for row in rows {
@@ -148,11 +140,9 @@ actor TableDocument {
         try atomicWrite(data: schemaData, to: schemaURL)
     }
 
-    /// Await pending debounced save (e.g. before closing sheet).
-    func flushNow() async {
-        saveTask?.cancel()
-        saveTask = nil
-        try? writeAtomic()
+    /// Persists current table state immediately (e.g. before closing sheet).
+    func flushNow() throws {
+        try writeAtomic(rows: rows, schema: schema)
     }
 
     func snapshot() -> (schema: TableSchemaRecord, rows: [TableRowRecord]) {

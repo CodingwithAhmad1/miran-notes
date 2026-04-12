@@ -53,9 +53,28 @@ enum VaultIntegrityChecker {
                 if !noteIDs.contains(nid) {
                     issues.append("Relationship index references unknown note for artifact \(nid.uuidString).")
                 }
-            case .folder, .externalFile, .externalFolder:
+            case .folder, .externalFile, .externalFolder, .database, .databaseRow:
                 break
             }
+        }
+
+        var graphPairs: Set<String> = []
+        for (source, targets) in linkGraph.outgoing {
+            for target in targets {
+                graphPairs.insert("\(source.uuidString)->\(target.uuidString)")
+            }
+        }
+        var relationshipPairs: Set<String> = []
+        for rel in relationshipIndex.relationships {
+            guard rel.relationshipKind == "noteLink" else { continue }
+            guard case let .note(targetID) = rel.target else { continue }
+            relationshipPairs.insert("\(rel.sourceNoteID.uuidString)->\(targetID.uuidString)")
+        }
+        for pair in relationshipPairs.subtracting(graphPairs) {
+            issues.append("Relationship index note-link missing from link graph (\(pair)).")
+        }
+        for pair in graphPairs.subtracting(relationshipPairs) {
+            issues.append("Link graph edge missing from relationship index (\(pair)).")
         }
 
         if let relPath = savedNoteRelativePath {

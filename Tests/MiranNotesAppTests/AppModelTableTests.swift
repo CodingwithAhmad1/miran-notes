@@ -56,6 +56,29 @@ final class AppModelTableTests: XCTestCase {
         XCTAssertFalse(reloaded.document.metadata.artifacts.isEmpty, "Table artifact should have been persisted by autosave")
     }
 
+    func testSwitchingToNoteWithoutArtifactClearsTableEditorPayload() async throws {
+        let vault = try tempVaultURL()
+        let repo = NoteRepository(vaultURL: vault)
+        try await repo.ensureVault()
+        let (_, sourcePath) = try await repo.createNote(named: "with-table")
+        let (_, plainPath) = try await repo.createNote(named: "no-table")
+
+        let model = AppModel(repository: repo)
+        await model.refreshNotes()
+        model.selectedBaseName = sourcePath
+        await model.loadSelectedNote()
+        model.addTableToActiveNote()
+        for _ in 0..<40 {
+            if model.tableEditorPayload != nil { break }
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        XCTAssertNotNil(model.tableEditorPayload)
+
+        model.selectedBaseName = plainPath
+        await model.loadSelectedNote()
+        XCTAssertNil(model.tableEditorPayload, "Table editor payload must reset when active note has no matching table artifact")
+    }
+
     // MARK: - insertWikiLink cursor awareness
 
     func testInsertWikiLinkAtCursorOffsetInsertsAtCorrectPosition() async throws {

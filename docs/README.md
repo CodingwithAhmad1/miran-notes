@@ -4,7 +4,7 @@
 
 ## What this project is
 
-Miran Notes is a **local-first** macOS notes app: canonical text in per-note `.txt` files, structured metadata in a sidecar, edits through `EditCommandEngine`, and a SwiftUI + AppKit editor. The [root README](../README.md) summarizes build commands, module layout, and features.
+Miran Notes is a **local-first** macOS notes app: canonical text in per-note `.txt` files, structured metadata in a sidecar, edits through `EditCommandEngine`, and a SwiftUI + AppKit editor. It also includes **Miran Planning**, an integrated planning feature with vault-level databases for tasks and sessions, a dashboard, calendar views, and cross-feature linking. The [root README](../README.md) summarizes build commands, module layout, and features.
 
 ## Document map
 
@@ -22,6 +22,7 @@ Miran Notes is a **local-first** macOS notes app: canonical text in per-note `.t
 | [architecture/architecture-flexibility-assessment.md](architecture/architecture-flexibility-assessment.md) | Flexibility and product-fit assessment |
 | [architecture/links-folders-tables-database-analysis.md](architecture/links-folders-tables-database-analysis.md) | Links, folders, tables analysis |
 | [architecture/vault-data-layer.md](architecture/vault-data-layer.md) | Repository, on-disk layout, text hash vs revision token, TOCTOU |
+| [architecture/planning-integration.md](architecture/planning-integration.md) | Miran Planning architecture: databases, PlanningModel, UI, migration |
 | **ADRs** | |
 | [adr/README.md](adr/README.md) | Architecture Decision Records index |
 | **Plans and QA** | |
@@ -40,9 +41,12 @@ Miran Notes is a **local-first** macOS notes app: canonical text in per-note `.t
 
 ## Code pointers (quick orientation)
 
-- **Core:** `Sources/MiranNotesCore/` — `NoteDocument`, `EditCommandEngine`, `UndoInverseSupport`, `TextEditDiff`, `NoteIntegrity`, `ExtensionRegistry`, `CommandPipelineContract`.
-- **App:** `Sources/MiranNotesApp/` — `AppModel`, `SingleSurfaceNoteEditor`, `EditorVisualStyle`, `SlashCommandRegistry`, `NoteRepository`, `VaultCommitCoordinator`, indexes (`LinkGraph`, `RelationshipIndex`, `FolderCatalog`, `PathIndex`).
-- **Tests:** `Tests/MiranNotesTests/`, `Tests/MiranNotesAppTests/` (`swift test`).
+- **Core:** `Sources/MiranNotesCore/` — `NoteDocument`, `EditCommandEngine`, `UndoInverseSupport`, `TextEditDiff`, `NoteIntegrity`, `ExtensionRegistry`, `CommandPipelineContract`, `DatabaseModels`, `LinkTarget`.
+- **App / Data:** `Sources/MiranNotesApp/Data/` — `NoteRepository`, `VaultCommitCoordinator`, indexes (`LinkGraph`, `RelationshipIndex`, `FolderCatalog`, `PathIndex`), `DatabaseDocument`, `DatabaseRepository`, `PlanningConfigManager`, `PlanningSchemas`.
+- **App / Editor:** `Sources/MiranNotesApp/Features/Editor/` — `SingleSurfaceNoteEditor`, `EditorVisualStyle`, `SlashCommandRegistry`.
+- **App / Planning:** `Sources/MiranNotesApp/Features/Planning/` — `PlanningModel`, dashboard, calendar, database views, edit sheets, inline embeds, settings, migration engine, slash commands, daily template.
+- **App shell:** `Sources/MiranNotesApp/App/` — `AppModel`, `MiranNotesApp` (with `AppContentMode` switcher between Notes and Planning).
+- **Tests:** `Tests/MiranNotesTests/`, `Tests/MiranNotesAppTests/` (`swift test`, 204 tests).
 
 ## Key `AppModel` published properties (selected)
 
@@ -54,6 +58,7 @@ Miran Notes is a **local-first** macOS notes app: canonical text in per-note `.t
 | `editorTextSelection` | UTF-16 selection range for command context |
 | `externalEditConflictAlert` | External change vs dirty buffer |
 | `extensionRegistry` | Typed extension registry (runs before closure interceptors) |
+| `planningModel` | `PlanningModel` for tasks, sessions, dashboard, calendar (bootstrapped at vault load) |
 
 ## Key `AppModel` internals (tests)
 

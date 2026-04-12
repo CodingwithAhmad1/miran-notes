@@ -6,6 +6,8 @@ public enum LinkTarget: Codable, Equatable, Hashable, Sendable {
     case externalFile(bookmarkID: UUID)
     case externalFolder(bookmarkID: UUID)
     case artifact(noteID: UUID, artifactID: UUID, kind: EmbeddedArtifactKind)
+    case database(databaseID: UUID)
+    case databaseRow(databaseID: UUID, rowID: UUID)
 }
 
 public struct LinkRelationship: Codable, Equatable, Hashable, Sendable {

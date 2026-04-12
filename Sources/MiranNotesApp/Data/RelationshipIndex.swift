@@ -35,7 +35,25 @@ struct RelationshipIndex: Codable, Equatable {
                 return id == noteID
             case .artifact(let nid, _, _):
                 return nid == noteID
-            case .folder, .externalFile, .externalFolder:
+            case .folder, .externalFile, .externalFolder, .database, .databaseRow:
+                return false
+            }
+        }
+        if relationships.count != before {
+            isDirty = true
+        }
+    }
+
+    /// Drops every relationship targeting a specific database or its rows.
+    mutating func removeAllInvolvingDatabase(_ databaseID: UUID) {
+        let before = relationships.count
+        relationships.removeAll { rel in
+            switch rel.target {
+            case .database(let id):
+                return id == databaseID
+            case .databaseRow(let dbID, _):
+                return dbID == databaseID
+            default:
                 return false
             }
         }

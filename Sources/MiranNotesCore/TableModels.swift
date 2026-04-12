@@ -50,7 +50,7 @@ public struct TableSchemaRecord: Codable, Equatable, Sendable {
 }
 
 /// One JSONL line = one row.
-public struct TableRowRecord: Codable, Equatable, Sendable {
+public struct TableRowRecord: Codable, Equatable, Sendable, Identifiable {
     public var id: UUID
     public var cells: [String: String]
 
