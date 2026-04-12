@@ -13,7 +13,12 @@ Local-first, Swift-native notes editor with plain-text storage and sidecar metad
 - Metadata invariants: `adjustBlocks` handles single-block, zero-length-merge, and multi-block-collapse cases deterministically; `RangeNormalizer` fallback fires only for edge cases and logs when it does; `NoteIntegrity` validates structure.
 - Debounced autosave writes text and metadata using **per-file** atomic replaces (`tmp` + `replaceItemAt`). A crash between the two writes can leave the pair briefly inconsistent; **load** (`NoteLoadResult`) re-runs `RangeNormalizer` and falls back to a single-block repair; any repair warnings are surfaced to the user via a dismissible banner (`repairNotice`).
 - **Cursor tracking:** `SingleSurfaceNoteEditor` publishes `cursorOffset` via `@Binding`; `AppModel.editorCursorOffset` reflects the live caret position so operations like wiki-link insertion land at the cursor rather than end-of-document.
-- **Slash commands:** `/h1`–`/h3`, `/p`, `/code`, `/list`, `/divider`, `/callout` — all line-start only, commit on Space or Return.
+- **Slash commands:** `/h1`–`/h3`, `/p`, `/code`, `/list` (alias: `/bullet`), `/divider`, `/callout`.
+- **Slash discovery menu (Notion-like):**
+  - Typing `/` opens a searchable command menu near the caret.
+  - Typing more characters filters commands dynamically.
+  - Arrow Up/Down navigates, Enter/Tab applies highlighted command, Esc closes.
+  - Unknown commands (for example `/doesntwork`) remain plain text and show `No commands found`.
 
 ## Module Layout
 
@@ -38,6 +43,7 @@ Local-first, Swift-native notes editor with plain-text storage and sidecar metad
 - [x] Debounced persistence with atomic writes; `NoteLoadResult` surfaces repair warnings.
 - [x] Dismissible repair-notice banner when load-time structural repair ran or link metadata is missing.
 - [x] Slash commands `/list`, `/divider`, `/callout` registered alongside `/h1`–`/h3`, `/p`, `/code`.
+- [x] Slash discovery menu supports dynamic filtering, keyboard selection, and explicit no-match state.
 - [x] Deterministic `adjustBlocks` without normalize in common paths; fallback logged when triggered.
 - [x] Project builds and all 55 tests pass (`swift test`).
 

@@ -9,6 +9,28 @@ This document defines the long-term pattern for adding slash-driven components i
 - Preserve metadata integrity (`blocks`, `spans`, `links`) after every command batch.
 - Support both slash tokens and lightweight markdown-style triggers through one framework.
 
+## Current UX Contract (Discovery + Execution)
+
+Slash commands are now discoverable and keyboard-first in the shipping editor.
+
+- Typing `/` opens a command menu anchored near the caret.
+- Querying is live: `/`, `/h`, `/bul`, etc. filter results dynamically.
+- Selection controls:
+  - Up/Down: move highlight
+  - Enter/Tab: execute highlighted command
+  - Esc: close menu and keep text unchanged
+- No-match behavior:
+  - Unknown tokens (for example `/doesntwork`) remain plain text.
+  - Menu remains visible with `No commands found` while query context is active.
+  - Enter without a selectable command falls back to normal editor behavior.
+
+### Discovery Components
+
+- `SlashQueryDetector`: extracts in-progress slash query ranges from editor text/caret state.
+- `SlashCommandMatcher`: ranks matches (prefix > alias > keyword/title contains).
+- `SlashCommandRegistry` catalog metadata: `id`, `aliases`, `title`, `keywords`, `category`, `preview`.
+- `SingleSurfaceNoteEditor` coordinator: owns slash menu state, keyboard routing, and command application.
+
 ## Pipeline Contract
 
 Slash-driven transformations flow through four explicit layers:
@@ -44,7 +66,8 @@ Rules:
 - Detection is only allowed to read current document text, insertion diff, and block location.
 
 Current trigger families:
-- Slash commit (`/token` committed with space/newline).
+- Slash query (`/token` while typing, for discovery).
+- Slash commit (`/token` committed with space/newline, backward-compatible path).
 - Markdown bullet trigger (`- ` at line start).
 
 ### 2) Registration Layer
@@ -88,6 +111,7 @@ Safety checks:
 
 Fallback:
 - When detector or producer cannot confidently transform, fall back to plain text replacement path.
+- Discovery no-match is not an error state; it is an explicit UI state that does not mutate content.
 
 ## Structural Rule Interactions
 
@@ -104,15 +128,18 @@ This separation keeps command registration focused on mode activation while keep
 For each new command:
 
 1. Add descriptor in registry with `id`, `aliases`, and producer.
-2. Ensure producer emits only `EditCommand`s.
-3. Add detector tests for positive and negative paths.
-4. Add structural tests if command changes Enter/Backspace behavior.
-5. Add regression tests for metadata integrity.
+2. Fill descriptor metadata for discovery (`title`, `category`, `keywords`, `preview`).
+3. Ensure producer emits only `EditCommand`s.
+4. Add detector/query tests for positive and negative paths.
+5. Add matcher tests (ranking + alias coverage).
+6. Add structural tests if command changes Enter/Backspace behavior.
+7. Add regression tests for metadata integrity.
 
 ## Reliability Checklist (Required for PRs)
 
 - Command has at least one positive detector test.
 - Command has at least one negative detector test.
+- Command has discovery coverage (query extraction + matcher behavior).
 - Command behavior is deterministic for ambiguous input.
 - Command batch preserves undo semantics and does not bypass `AppModel.apply`.
 - No integrity regressions in note metadata tests.

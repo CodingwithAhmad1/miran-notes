@@ -1,9 +1,22 @@
 import Foundation
 import MiranNotesCore
 
+struct SlashCommandCatalogItem: Equatable, Identifiable {
+    let id: String
+    let title: String
+    let category: String
+    let aliases: [String]
+    let keywords: [String]
+    let preview: String
+}
+
 private struct SlashCommandDescriptor {
     let id: String
+    let title: String
+    let category: String
     let aliases: Set<String>
+    let keywords: [String]
+    let preview: String
     let commitPolicy: Set<SlashCommitMatch.CommitCharacter>
     let applicability: Set<BlockType>?
     let produce: (_ tokenWithoutSlash: String, _ tokenRange: MiranNotesCore.TextRange, _ blockID: String) -> [EditCommand]?
@@ -17,6 +30,17 @@ private struct SlashCommandDescriptor {
         guard let applicability else { return true }
         guard let blockType else { return false }
         return applicability.contains(blockType)
+    }
+
+    var catalogItem: SlashCommandCatalogItem {
+        SlashCommandCatalogItem(
+            id: id,
+            title: title,
+            category: category,
+            aliases: aliases.sorted(),
+            keywords: keywords,
+            preview: preview
+        )
     }
 }
 
@@ -36,13 +60,39 @@ enum SlashCommandRegistry {
         return descriptor.produce(token, tokenRange, blockID)
     }
 
+    static func catalogItems() -> [SlashCommandCatalogItem] {
+        descriptors.map(\.catalogItem)
+    }
+
+    static func resolveCatalogCommand(
+        catalogID: String,
+        queryTokenRange: MiranNotesCore.TextRange,
+        blockID: String,
+        blockType: BlockType? = nil
+    ) -> [EditCommand]? {
+        guard let descriptor = descriptors.first(where: { $0.id == catalogID }) else { return nil }
+        guard descriptor.accepts(match: SlashCommitMatch(
+            lineStartUTF16: queryTokenRange.start,
+            commitUTF16Index: queryTokenRange.end,
+            commitCharacter: .newline,
+            tokenWithoutSlash: catalogID
+        ), blockType: blockType) else {
+            return nil
+        }
+        return descriptor.produce(catalogID, queryTokenRange, blockID)
+    }
+
     private static let defaultCommitPolicy: Set<SlashCommitMatch.CommitCharacter> = [.space, .newline]
 
     // Ordered by precedence: first match wins.
     private static let descriptors: [SlashCommandDescriptor] = [
         SlashCommandDescriptor(
             id: "h1",
+            title: "Heading 1",
+            category: "Basic Blocks",
             aliases: [],
+            keywords: ["title", "header", "large"],
+            preview: "Turn text into a large heading.",
             commitPolicy: defaultCommitPolicy,
             applicability: nil,
             produce: { _, tokenRange, blockID in
@@ -54,7 +104,11 @@ enum SlashCommandRegistry {
         ),
         SlashCommandDescriptor(
             id: "h2",
+            title: "Heading 2",
+            category: "Basic Blocks",
             aliases: [],
+            keywords: ["subtitle", "header", "medium"],
+            preview: "Turn text into a medium heading.",
             commitPolicy: defaultCommitPolicy,
             applicability: nil,
             produce: { _, tokenRange, blockID in
@@ -66,7 +120,11 @@ enum SlashCommandRegistry {
         ),
         SlashCommandDescriptor(
             id: "h3",
+            title: "Heading 3",
+            category: "Basic Blocks",
             aliases: [],
+            keywords: ["subheading", "header", "small"],
+            preview: "Turn text into a small heading.",
             commitPolicy: defaultCommitPolicy,
             applicability: nil,
             produce: { _, tokenRange, blockID in
@@ -78,7 +136,11 @@ enum SlashCommandRegistry {
         ),
         SlashCommandDescriptor(
             id: "p",
+            title: "Text",
+            category: "Basic Blocks",
             aliases: [],
+            keywords: ["paragraph", "body", "normal"],
+            preview: "Turn text into a normal paragraph.",
             commitPolicy: defaultCommitPolicy,
             applicability: nil,
             produce: { _, tokenRange, blockID in
@@ -90,7 +152,11 @@ enum SlashCommandRegistry {
         ),
         SlashCommandDescriptor(
             id: "code",
+            title: "Code",
+            category: "Basic Blocks",
             aliases: [],
+            keywords: ["snippet", "monospace", "programming"],
+            preview: "Turn text into a code block.",
             commitPolicy: defaultCommitPolicy,
             applicability: nil,
             produce: { _, tokenRange, blockID in
@@ -102,7 +168,11 @@ enum SlashCommandRegistry {
         ),
         SlashCommandDescriptor(
             id: "list",
+            title: "Bulleted List",
+            category: "Lists",
             aliases: ["bullet"],
+            keywords: ["bullets", "unordered", "list item"],
+            preview: "Turn text into a bulleted list item.",
             commitPolicy: defaultCommitPolicy,
             applicability: nil,
             produce: { _, tokenRange, blockID in
@@ -114,7 +184,11 @@ enum SlashCommandRegistry {
         ),
         SlashCommandDescriptor(
             id: "divider",
+            title: "Divider",
+            category: "Layout",
             aliases: [],
+            keywords: ["horizontal rule", "separator", "line"],
+            preview: "Insert a visual divider block.",
             commitPolicy: defaultCommitPolicy,
             applicability: nil,
             produce: { _, tokenRange, blockID in
@@ -126,7 +200,11 @@ enum SlashCommandRegistry {
         ),
         SlashCommandDescriptor(
             id: "callout",
+            title: "Callout",
+            category: "Basic Blocks",
             aliases: [],
+            keywords: ["highlight", "note", "tip"],
+            preview: "Turn text into a callout block.",
             commitPolicy: defaultCommitPolicy,
             applicability: nil,
             produce: { _, tokenRange, blockID in

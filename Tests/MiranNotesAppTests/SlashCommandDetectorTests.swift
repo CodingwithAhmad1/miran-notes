@@ -163,4 +163,17 @@ final class SlashCommandDetectorTests: XCTestCase {
         let m = MarkdownCommandDetector.bulletMatch(modelText: model, storageText: storage, insertion: diff)
         XCTAssertNil(m)
     }
+
+    func testCatalogResolveListCommandProducesListItemChange() {
+        let tokenRange = TextRange(start: 0, length: 4)
+        let commands = SlashCommandRegistry.resolveCatalogCommand(
+            catalogID: "list",
+            queryTokenRange: tokenRange,
+            blockID: "b1",
+            blockType: .paragraph
+        )
+        XCTAssertEqual(commands?.count, 2)
+        guard case let .changeBlockType(_, type, _) = commands?[1] else { XCTFail(); return }
+        XCTAssertEqual(type, .listItem)
+    }
 }

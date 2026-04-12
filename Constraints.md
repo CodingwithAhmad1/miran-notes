@@ -36,7 +36,14 @@ The canonical note model and `NSTextView` are two representations of text. Engin
 - **Dual representation:** Canonical plain text plus sidecar metadata (blocks, spans, links) is the source of truth. `NSTextView` attributes are **derived**: an `EditorVisualStyle` pass applies block fonts, span styles (bold / italic / code), and link coloring whenever the model updates from **any** source (typing, undo, structural commands, external reload). `onCommands` returns `NoteDocument` synchronously so the coordinator calls `refreshVisualChrome` with the updated document immediately — no lag between command dispatch and visual update.
 - **Cursor position:** `SingleSurfaceNoteEditor` exposes `@Binding var cursorOffset: Int`; the coordinator writes it on every `textViewDidChangeSelection`. `AppModel.editorCursorOffset` tracks the live caret position so cursor-aware operations (e.g. wiki-link insertion via the toolbar) land at the cursor rather than end-of-document.
 - **IME / marked text:** While the text view has **marked text** (composition), the editor does not run slash detection and formatting shortcuts (`toggleBold:`, etc.) do not apply, so composition is not torn down mid-sequence.
-- **Slash commands:** Detection is **line-start only** (after a newline or at document start, with `/` as the first character on the line). A command **commits** when the user types **Space** or **Return** after a registered token (`/h1`–`/h3`, `/p`, `/code`, `/list`, `/divider`, `/callout`). Partial tokens such as `/h` do nothing until a commit character. **Registry order** defines which pattern wins if two entries could match (built-ins are disjoint). "Slash anywhere" would need a separate spec.
+- **Slash discovery + execution (non-regression contract):**
+  - Discovery is **line-start only** (after a newline or at document start, with `/` as the first character on the line).
+  - Typing `/` opens a command menu anchored near the caret; typing more characters filters results live.
+  - Keyboard contract is fixed for consistency: Up/Down moves highlight, Enter/Tab executes highlighted command, Esc closes menu without mutation.
+  - Unknown tokens (for example `/doesntwork`) are **not errors** and are **not auto-transformed**: text remains plain, menu shows `No commands found`.
+  - Enter without a selectable command follows normal editor behavior (no hidden slash fallback rewrite).
+  - Registered commands currently include `/h1`–`/h3`, `/p`, `/code`, `/list` (alias `/bullet`), `/divider`, `/callout`.
+  - **Registry order** defines precedence if two patterns could match.
 - **External editors:** A literal `/h1` in `note.txt` stays plain text until the user edits in-app in a way that triggers detection (or a future explicit conversion). This aligns with **Semantic reconciliation**: no silent semantic rewrite of metadata without an explicit editing action the user can reason about.
 - **Notion parity limits:** Slash commands plus heading fonts improve the experience but do **not** deliver full per-block chrome (gutters, drag handles, block menus) in a single `NSTextView`; see **Block chrome and layout** above.
 

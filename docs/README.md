@@ -12,6 +12,7 @@ Miran Notes is a **local-first** macOS notes app: canonical text in `note.txt`, 
 |----------|------|
 | [README.md](../README.md) | Product overview, architecture summary, how to run and test |
 | [Constraints.md](../Constraints.md) | Non‑negotiable engineering constraints, known limits, editor pipeline rules |
+| [docs/architecture/slash-command-framework.md](architecture/slash-command-framework.md) | Slash command contracts, discovery UX behavior, and extension pattern |
 | [docs/adr/](adr/README.md) | Architecture Decision Records (ADRs) — durable decisions with context |
 | [docs/plans/](plans/README.md) | Planning notes and roadmaps that should live **in the repo** |
 
@@ -24,7 +25,7 @@ Miran Notes is a **local-first** macOS notes app: canonical text in `note.txt`, 
 ## Code pointers (quick orientation)
 
 - Core model and edits: `Sources/MiranNotesCore/` (`NoteDocument`, `EditCommandEngine`, `NoteIntegrity`, `RangeNormalizer`).
-- App and editor: `Sources/MiranNotesApp/` (`SingleSurfaceNoteEditor`, `EditorVisualStyle`, `SlashCommandRegistry`, persistence).
+- App and editor: `Sources/MiranNotesApp/` (`SingleSurfaceNoteEditor`, `EditorVisualStyle`, `SlashCommandRegistry`, `SlashQueryDetector`, `SlashCommandMatcher`, persistence).
 - Data layer: `NoteRepository` (returns `NoteLoadResult`); `AppModel` (`repairNotice`, `editorCursorOffset`, `apply(_:) -> NoteDocument`).
 - Tests: `Tests/MiranNotesTests/` (core + `adjustBlocks`), `Tests/MiranNotesAppTests/` (app, navigation, repair notices, table/cursor).
 
