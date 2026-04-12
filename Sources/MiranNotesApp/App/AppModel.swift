@@ -2,6 +2,12 @@ import Foundation
 import MiranNotesCore
 import SwiftUI
 
+/// Drives the “file changed on disk” alert; non-nil means a conflict is being presented.
+struct ExternalEditConflict: Identifiable, Equatable {
+    let id = UUID()
+    var diskDate: Date
+}
+
 @MainActor
 final class AppModel: ObservableObject {
     @Published var noteSummaries: [NoteSummary] = []
@@ -9,8 +15,8 @@ final class AppModel: ObservableObject {
     @Published var activeDocument: NoteDocument?
     @Published var isLoading = false
     @Published var lastError: String?
-    /// Shown when the vault file on disk differs from the buffer while there are unsaved local edits.
-    @Published var externalEditConflict = false
+    /// When non-nil, shows the external-edit conflict alert (`diskDate` is the on-disk modification time that triggered it).
+    @Published var externalEditConflictAlert: ExternalEditConflict?
 
     private let repository: NoteRepository
     private var saveTask: Task<Void, Never>?
@@ -20,7 +26,6 @@ final class AppModel: ObservableObject {
     /// Last snapshot known to match on-disk files (after load or successful save). Used with `activeDocument` to detect dirty state.
     private var lastPersistedDocument: NoteDocument?
     private var lastKnownDiskDate: Date?
-    private var pendingConflictDiskDate: Date?
     private var undoManager: UndoManager?
 
     init(repository: NoteRepository) {
@@ -32,7 +37,7 @@ final class AppModel: ObservableObject {
     }
 
     func loadVault() {
-        Task {
+        Task { @MainActor in
             await refreshNotes()
             if selectedBaseName == nil {
                 selectedBaseName = noteSummaries.first?.baseName
@@ -53,7 +58,7 @@ final class AppModel: ObservableObject {
     }
 
     func createNote() {
-        Task {
+        Task { @MainActor in
             do {
                 let (document, baseName) = try await repository.createNote(named: "untitled-note")
                 await refreshNotes()
@@ -165,10 +170,9 @@ final class AppModel: ObservableObject {
     }
 
     func changeSelection(baseName: String?) {
-        externalEditConflict = false
-        pendingConflictDiskDate = nil
+        externalEditConflictAlert = nil
         selectedBaseName = baseName
-        Task {
+        Task { @MainActor in
             await loadSelectedNote()
         }
     }
@@ -202,18 +206,17 @@ final class AppModel: ObservableObject {
     }
 
     func reloadFromDisk() {
-        Task {
+        Task { @MainActor in
             await loadSelectedNote()
         }
     }
 
     /// Dismisses the conflict alert. If `reloadFromDisk` is true, loads the note from the vault (discarding local edits). Otherwise keeps the buffer and records the external file time so the same change does not re-alert until the file changes again.
     func resolveExternalEditConflict(reloadFromDisk: Bool) {
-        externalEditConflict = false
-        let diskDate = pendingConflictDiskDate
-        pendingConflictDiskDate = nil
+        let diskDate = externalEditConflictAlert?.diskDate
+        externalEditConflictAlert = nil
         if reloadFromDisk {
-            Task {
+            Task { @MainActor in
                 await loadSelectedNote()
             }
         } else if let diskDate {
@@ -245,8 +248,9 @@ final class AppModel: ObservableObject {
         await processExternalDiskActivity()
     }
 
-    private func processExternalDiskActivity() async {
-        guard !externalEditConflict else { return }
+    /// Package-internal for tests that simulate vault changes without relying on filesystem timing.
+    func processExternalDiskActivity() async {
+        guard externalEditConflictAlert == nil else { return }
         guard let selectedBaseName, activeDocument != nil else { return }
 
         let diskDate: Date?
@@ -290,7 +294,6 @@ final class AppModel: ObservableObject {
             return
         }
 
-        pendingConflictDiskDate = diskDate
-        externalEditConflict = true
+        externalEditConflictAlert = ExternalEditConflict(diskDate: diskDate)
     }
 }

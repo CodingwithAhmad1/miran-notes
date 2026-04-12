@@ -1,3 +1,4 @@
+// Experimental multi-block editor surface; the shipping window uses `SingleSurfaceNoteEditor` instead.
 import AppKit
 import MiranNotesCore
 import SwiftUI
@@ -57,11 +58,20 @@ struct TextKit2BlockEditor: NSViewRepresentable {
     }
 
     private func blockTextSlice() -> String {
-        let nsRange = NSRange(location: block.range.start, length: block.range.length)
-        guard let range = Range(nsRange, in: document.text) else {
-            return ""
+        let total = document.text.utf16.count
+        let clamped = block.range.clamped(to: total)
+        if clamped != block.range {
+            NoteIntegrity.logIfInvalid(document: document)
         }
-        return String(document.text[range])
+        let ns = document.text as NSString
+        let len = ns.length
+        let start = min(max(0, clamped.start), len)
+        let end = min(max(start, clamped.end), len)
+        let bound = NSRange(location: start, length: end - start)
+        if bound.length > 0, Range(bound, in: document.text) == nil {
+            NoteIntegrity.logIfInvalid(document: document)
+        }
+        return ns.substring(with: bound)
     }
 
     private func font(for block: Block) -> NSFont {

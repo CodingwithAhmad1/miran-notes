@@ -24,6 +24,9 @@ final class NoteRepositoryTests: XCTestCase {
             XCTAssertEqual(error as? NoteRepositoryError, .invalidBaseName("a/b"))
         }
         XCTAssertNoThrow(try NoteRepository.validateBaseName("hello-world"))
+        XCTAssertThrowsError(try NoteRepository.validateBaseName("bad\u{0}name")) { error in
+            XCTAssertEqual(error as? NoteRepositoryError, .invalidBaseName("bad\u{0}name"))
+        }
     }
 
     func testCreateNoteUsesNumericSuffixWhenSlugCollides() async throws {
@@ -66,5 +69,30 @@ final class NoteRepositoryTests: XCTestCase {
         let report = NoteIntegrity.check(document: loaded)
         XCTAssertTrue(report.isValid, "\(report.issues)")
         XCTAssertEqual(loaded.text, "hello world")
+    }
+
+    func testSaveAndLoadRoundTrip() async throws {
+        let vault = try tempVaultURL()
+        let repo = NoteRepository(vaultURL: vault)
+        try await repo.ensureVault()
+        let base = "round-trip"
+        let metadata = NoteMetadata(
+            schemaVersion: NoteMetadata.currentSchemaVersion,
+            blocks: [
+                Block(
+                    id: "b1",
+                    type: .paragraph,
+                    range: TextRange(start: 0, length: "hello".utf16.count),
+                    level: nil,
+                    icon: nil
+                )
+            ],
+            spans: []
+        )
+        let original = NoteDocument(text: "hello", metadata: metadata)
+        try await repo.save(original, asBaseName: base)
+        let loaded = try await repo.loadNote(baseName: base)
+        XCTAssertEqual(loaded.text, "hello")
+        XCTAssertTrue(NoteIntegrity.check(document: loaded).isValid)
     }
 }

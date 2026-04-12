@@ -47,25 +47,28 @@ struct MiranNotesApp: App {
             .alert(
                 "File changed on disk",
                 isPresented: Binding(
-                    get: { model.externalEditConflict },
+                    get: { model.externalEditConflictAlert != nil },
                     set: { newValue in
-                        if !newValue {
+                        if !newValue, model.externalEditConflictAlert != nil {
                             model.resolveExternalEditConflict(reloadFromDisk: false)
                         }
                     }
-                )
-            ) {
-                Button("Reload from disk", role: .destructive) {
-                    model.resolveExternalEditConflict(reloadFromDisk: true)
+                ),
+                presenting: model.externalEditConflictAlert,
+                actions: { _ in
+                    Button("Reload from disk", role: .destructive) {
+                        model.resolveExternalEditConflict(reloadFromDisk: true)
+                    }
+                    Button("Keep local edits", role: .cancel) {
+                        model.resolveExternalEditConflict(reloadFromDisk: false)
+                    }
+                },
+                message: { _ in
+                    Text(
+                        "This note was modified outside the app while you have unsaved edits. Reload replaces your buffer with the files on disk; keeping edits leaves your text in memory and the next save may overwrite external changes."
+                    )
                 }
-                Button("Keep local edits", role: .cancel) {
-                    model.resolveExternalEditConflict(reloadFromDisk: false)
-                }
-            } message: {
-                Text(
-                    "This note was modified outside the app while you have unsaved edits. Reload replaces your buffer with the files on disk; keeping edits leaves your text in memory and the next save may overwrite external changes."
-                )
-            }
+            )
         }
     }
 }

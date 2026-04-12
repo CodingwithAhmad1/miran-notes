@@ -1,3 +1,4 @@
+// Experimental block list UI; not used by the main `MiranNotesApp` window (see `SingleSurfaceNoteEditor`).
 import MiranNotesCore
 import SwiftUI
 

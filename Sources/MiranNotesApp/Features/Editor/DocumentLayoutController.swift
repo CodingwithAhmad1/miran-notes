@@ -42,9 +42,12 @@ enum DocumentLayoutController {
 
     static func blockIndex(at utf16Offset: Int, blocks: [Block]) -> Int? {
         for (index, block) in blocks.enumerated() {
-            if block.range.contains(utf16Offset) || block.range.end == utf16Offset {
+            if block.range.contains(utf16Offset) {
                 return index
             }
+        }
+        if let last = blocks.indices.last, utf16Offset == blocks[last].range.end {
+            return last
         }
         return nil
     }

@@ -45,6 +45,9 @@ actor NoteRepository {
         if baseName.contains("/") || baseName.contains("\\") || baseName.contains(":") {
             throw NoteRepositoryError.invalidBaseName(baseName)
         }
+        if baseName.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains) {
+            throw NoteRepositoryError.invalidBaseName(baseName)
+        }
     }
 
     func ensureVault() throws {
@@ -181,12 +184,19 @@ actor NoteRepository {
 
     private func atomicWrite(_ data: Data, to url: URL) throws {
         let tmpURL = url.appendingPathExtension("tmp")
+        var committed = false
+        defer {
+            if !committed {
+                try? FileManager.default.removeItem(at: tmpURL)
+            }
+        }
         try data.write(to: tmpURL, options: .atomic)
         if FileManager.default.fileExists(atPath: url.path) {
             _ = try FileManager.default.replaceItemAt(url, withItemAt: tmpURL)
         } else {
             try FileManager.default.moveItem(at: tmpURL, to: url)
         }
+        committed = true
     }
 
     private func slugify(_ value: String) -> String {
