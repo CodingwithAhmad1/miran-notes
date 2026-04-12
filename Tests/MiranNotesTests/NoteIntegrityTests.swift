@@ -6,7 +6,8 @@ final class NoteIntegrityTests: XCTestCase {
         let doc = NoteDocument(
             text: "",
             metadata: NoteMetadata(
-                schemaVersion: 1,
+                schemaVersion: 2,
+                noteID: UUID(),
                 blocks: [
                     Block(id: "a", type: .paragraph, range: TextRange(start: 0, length: 0), level: nil, icon: nil)
                 ],
@@ -21,7 +22,8 @@ final class NoteIntegrityTests: XCTestCase {
         let doc = NoteDocument(
             text: "ab",
             metadata: NoteMetadata(
-                schemaVersion: 1,
+                schemaVersion: 2,
+                noteID: UUID(),
                 blocks: [
                     Block(id: "second", type: .paragraph, range: TextRange(start: 1, length: 1), level: nil, icon: nil),
                     Block(id: "first", type: .paragraph, range: TextRange(start: 0, length: 1), level: nil, icon: nil)
@@ -38,7 +40,8 @@ final class NoteIntegrityTests: XCTestCase {
         let doc = NoteDocument(
             text: "ab",
             metadata: NoteMetadata(
-                schemaVersion: 1,
+                schemaVersion: 2,
+                noteID: UUID(),
                 blocks: [
                     Block(id: "a", type: .paragraph, range: TextRange(start: 0, length: 1), level: nil, icon: nil),
                     Block(id: "b", type: .paragraph, range: TextRange(start: 2, length: 0), level: nil, icon: nil)
@@ -58,7 +61,8 @@ final class NoteIntegrityTests: XCTestCase {
         let doc = NoteDocument(
             text: "hi",
             metadata: NoteMetadata(
-                schemaVersion: 1,
+                schemaVersion: 2,
+                noteID: UUID(),
                 blocks: [
                     Block(id: "a", type: .paragraph, range: TextRange(start: 0, length: 2), level: nil, icon: nil)
                 ],

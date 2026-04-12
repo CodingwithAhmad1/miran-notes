@@ -1,8 +1,17 @@
+import AppKit
 import MiranNotesCore
 import SwiftUI
 
+private final class MiranNotesAppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+}
+
 @main
 struct MiranNotesApp: App {
+    @NSApplicationDelegateAdaptor(MiranNotesAppDelegate.self) private var appDelegate
     @StateObject private var model: AppModel
 
     init() {
@@ -30,6 +39,9 @@ struct MiranNotesApp: App {
             }
             .task {
                 model.loadVault()
+            }
+            .sheet(item: $model.tableEditorPayload) { payload in
+                TableEditorSheet(jsonlURL: payload.jsonlURL, schemaURL: payload.schemaURL)
             }
             .alert(
                 "Error",
@@ -76,18 +88,61 @@ struct MiranNotesApp: App {
 private struct EditorRootView: View {
     @ObservedObject var model: AppModel
     @Environment(\.undoManager) private var undoManager
-
     var body: some View {
         Group {
             if let current = model.activeDocument {
-                SingleSurfaceNoteEditor(
-                    document: Binding(
-                        get: { model.activeDocument ?? current },
-                        set: { model.activeDocument = $0 }
-                    ),
-                    onCommands: { model.apply($0) }
-                )
-                .navigationTitle("Editor")
+                HSplitView {
+                    SingleSurfaceNoteEditor(
+                        document: Binding(
+                            get: { model.activeDocument ?? current },
+                            set: { model.activeDocument = $0 }
+                        ),
+                        onCommands: { model.apply($0) },
+                        onWikiLinkClick: { targetID in
+                            model.openNote(noteID: targetID)
+                        }
+                    )
+                    .frame(minWidth: 320)
+                    .navigationTitle("Editor")
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Backlinks")
+                            .font(.headline)
+                        if model.backlinks.isEmpty {
+                            Text("No incoming links")
+                                .foregroundStyle(.secondary)
+                                .font(.caption)
+                        } else {
+                            List(model.backlinks, id: \.baseName) { note in
+                                Button(note.title) {
+                                    model.openNote(noteID: note.noteID)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                            .listStyle(.sidebar)
+                        }
+                    }
+                    .frame(minWidth: 160, idealWidth: 200, maxWidth: 280)
+                    .padding(.horizontal, 8)
+                }
+                .toolbar {
+                    ToolbarItemGroup {
+                        Menu("Link") {
+                            ForEach(model.noteSummaries.filter { $0.noteID != current.metadata.noteID }, id: \.baseName) { note in
+                                Button(note.title) {
+                                    model.insertWikiLink(to: note.noteID, displayText: note.title)
+                                }
+                            }
+                        }
+                        Button("Table") {
+                            model.addTableToActiveNote()
+                        }
+                        Button("Open table") {
+                            model.openFirstTableArtifact()
+                        }
+                        .disabled(!current.metadata.artifacts.contains { $0.kind == .table })
+                    }
+                }
             }
         }
         .onAppear {

@@ -3,10 +3,13 @@ import XCTest
 
 final class EditEngineRegressionTests: XCTestCase {
     private func baselineDocument(text: String) -> NoteDocument {
-        NoteDocument(
+        let noteID = UUID()
+        return NoteDocument(
+            id: noteID,
             text: text,
             metadata: NoteMetadata(
                 schemaVersion: NoteMetadata.currentSchemaVersion,
+                noteID: noteID,
                 blocks: [
                     Block(
                         id: "b0",

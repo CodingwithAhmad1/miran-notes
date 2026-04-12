@@ -45,11 +45,13 @@ final class SpanAndBlockAdjustmentTests: XCTestCase {
         ]
         // Pre-edit layout was "aaaabbbb"; one UTF-16 code unit inserted at offset 2 → "aaXaaabbbb".
         let text = "aaXaaabbbb"
+        let ctx = NoteMetadata(schemaVersion: 2, noteID: UUID(), blocks: blocks, spans: [])
         let out = EditCommandEngine.adjustBlocks(
             blocks: blocks,
             replacedRange: TextRange(start: 2, length: 0),
             replacementUTF16Length: 1,
-            text: text
+            text: text,
+            contextMetadata: ctx
         )
         XCTAssertEqual(out.count, 2)
         XCTAssertEqual(out[0].range, TextRange(start: 0, length: 5))
@@ -61,12 +63,15 @@ final class SpanAndBlockAdjustmentTests: XCTestCase {
             Block(id: "a", type: .paragraph, range: TextRange(start: 0, length: 3), level: nil, icon: nil),
             Block(id: "b", type: .paragraph, range: TextRange(start: 3, length: 3), level: nil, icon: nil)
         ]
+        let ctx = NoteMetadata(schemaVersion: 2, noteID: UUID(), blocks: blocks, spans: [])
         let out = EditCommandEngine.adjustBlocks(
             blocks: blocks,
             replacedRange: TextRange(start: 2, length: 4),
             replacementUTF16Length: 0,
-            text: "ab"
+            text: "ab",
+            contextMetadata: ctx
         )
-        XCTAssertTrue(NoteIntegrity.check(document: NoteDocument(text: "ab", metadata: NoteMetadata(schemaVersion: 1, blocks: out, spans: []))).isValid)
+        let meta = NoteMetadata(schemaVersion: 2, noteID: ctx.noteID, blocks: out, spans: [])
+        XCTAssertTrue(NoteIntegrity.check(document: NoteDocument(text: "ab", metadata: meta)).isValid)
     }
 }

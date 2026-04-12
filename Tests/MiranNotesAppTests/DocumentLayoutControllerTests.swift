@@ -6,10 +6,13 @@ import XCTest
 
 final class DocumentLayoutControllerTests: XCTestCase {
     private func singleBlockDocument(text: String) -> NoteDocument {
-        NoteDocument(
+        let noteID = UUID()
+        return NoteDocument(
+            id: noteID,
             text: text,
             metadata: NoteMetadata(
                 schemaVersion: NoteMetadata.currentSchemaVersion,
+                noteID: noteID,
                 blocks: [
                     Block(
                         id: "b0",
@@ -48,12 +51,47 @@ final class DocumentLayoutControllerTests: XCTestCase {
         XCTAssertEqual(at, 2)
     }
 
-    func testBackspaceAtBlockStartMergesWithPrevious() {
-        let text = "a\nb"
+    func testNewlineAtExistingBlockBoundaryInsertsOnlyNoSplit() {
+        let text = "helloworld"
+        let noteID = UUID()
         let doc = NoteDocument(
+            id: noteID,
             text: text,
             metadata: NoteMetadata(
                 schemaVersion: NoteMetadata.currentSchemaVersion,
+                noteID: noteID,
+                blocks: [
+                    Block(id: "b0", type: .paragraph, range: TextRange(start: 0, length: 5), level: nil, icon: nil),
+                    Block(id: "b1", type: .paragraph, range: TextRange(start: 5, length: 5), level: nil, icon: nil)
+                ],
+                spans: []
+            )
+        )
+        let cmds = DocumentLayoutController.commandsForEdit(
+            document: doc,
+            affectedRange: NSRange(location: 5, length: 0),
+            replacement: "\n",
+            selectedLocation: 5
+        )
+        XCTAssertEqual(cmds?.count, 1)
+        guard let cmds, cmds.count == 1 else { return }
+        guard case let .replaceText(r, rep) = cmds[0] else {
+            XCTFail("expected replaceText only")
+            return
+        }
+        XCTAssertEqual(r, TextRange(start: 5, length: 0))
+        XCTAssertEqual(rep, "\n")
+    }
+
+    func testBackspaceAtBlockStartMergesWithPrevious() {
+        let text = "a\nb"
+        let noteID = UUID()
+        let doc = NoteDocument(
+            id: noteID,
+            text: text,
+            metadata: NoteMetadata(
+                schemaVersion: NoteMetadata.currentSchemaVersion,
+                noteID: noteID,
                 blocks: [
                     Block(id: "p", type: .paragraph, range: TextRange(start: 0, length: 2), level: nil, icon: nil),
                     Block(id: "c", type: .paragraph, range: TextRange(start: 2, length: 1), level: nil, icon: nil)

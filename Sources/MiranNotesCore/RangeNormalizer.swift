@@ -39,10 +39,23 @@ public enum RangeNormalizer {
         }
         spans.removeAll { $0.range.isEmpty }
 
+        var links = metadata.links.map { link -> NoteLink in
+            NoteLink(
+                range: link.range.clamped(to: totalLength),
+                targetNoteID: link.targetNoteID,
+                label: link.label
+            )
+        }
+        links.removeAll { $0.range.isEmpty }
+
         let normalized = NoteMetadata(
             schemaVersion: max(metadata.schemaVersion, NoteMetadata.currentSchemaVersion),
+            noteID: metadata.noteID,
             blocks: blocks,
-            spans: spans
+            spans: spans,
+            links: links,
+            artifacts: metadata.artifacts,
+            properties: metadata.properties
         )
         return MetadataValidationResult(normalizedMetadata: normalized, warnings: warnings)
     }
@@ -63,6 +76,12 @@ public enum RangeNormalizer {
 
         for span in metadata.spans {
             if span.range.start < 0 || span.range.end > totalLength {
+                return false
+            }
+        }
+
+        for link in metadata.links {
+            if link.range.start < 0 || link.range.end > totalLength {
                 return false
             }
         }

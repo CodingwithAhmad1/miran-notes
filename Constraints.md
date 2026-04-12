@@ -73,6 +73,10 @@ The app uses **document-level undo** via the window `UndoManager`: each user edi
 
 Types in [`Sources/MiranNotesCore/ExtensionPoints.swift`](Sources/MiranNotesCore/ExtensionPoints.swift) document **intentional extension points** only: rich inline canonical snapshots, tree-shaped blocks vs today’s flat `[Block]` list, structured artifacts (tables / DB-like blobs) likely needing auxiliary storage, and a placeholder for a future sync transport. They are **not** wired into editing or persistence; they exist so features can name shared concepts without ad-hoc one-off types.
 
+## Vault tooling and observability
+
+- **Link graph rebuild:** `NoteRepository.rebuildLinkGraphFull()` performs a full vault scan; success and note counts are logged via `Logger` (`Vault` category, subsystem `app.miran.notes`). Use sparingly on cold start or after bulk external edits; normal editing updates the graph incrementally on save.
+
 ## Related planning
 
 Implementation work is guided by the editor hardening roadmap in `.cursor/plans/` (see `editor_hardening_roadmap_*.plan.md`). This file names constraints; the roadmap names phases and tasks.

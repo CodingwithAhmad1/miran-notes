@@ -9,13 +9,14 @@ struct NotesListView: View {
             get: { model.selectedBaseName },
             set: { model.changeSelection(baseName: $0) }
         )) {
-            ForEach(model.noteSummaries, id: \.baseName) { note in
+            ForEach(model.filteredNoteSummaries, id: \.baseName) { note in
                 Text(note.title)
                     .tag(Optional(note.baseName))
             }
         }
+        .searchable(text: $model.noteQuery, prompt: Text("Search notes"))
         .overlay {
-            if model.noteSummaries.isEmpty && !model.isLoading {
+            if model.filteredNoteSummaries.isEmpty && !model.isLoading {
                 Text("No notes yet")
                     .foregroundStyle(.secondary)
             }

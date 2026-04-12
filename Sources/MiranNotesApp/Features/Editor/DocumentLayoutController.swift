@@ -8,22 +8,36 @@ enum DocumentLayoutController {
         replacement: String,
         selectedLocation: Int
     ) -> [EditCommand]? {
+        let isInsertion = affectedRange.length == 0 && !replacement.isEmpty
+        let isBackspaceDelete = replacement.isEmpty && affectedRange.length == 1
+
+        if isInsertion, replacement == "\n" {
+            // Match `EditCommandEngine.adjustBlocks`: insertion at offset O is attributed to the first block
+            // where `contains(O) || end == O`. That is the *previous* block at an inter-block boundary, not the
+            // following one — splitting the wrong block produced duplicate `range.start` values and tripped
+            // `NoteIntegrity` (blocksNotSorted).
+            guard let blockIndex = blockIndexMatchingTextEngineInsertion(at: affectedRange.location, blocks: document.metadata.blocks) else {
+                return nil
+            }
+            let block = document.metadata.blocks[blockIndex]
+            let insert = EditCommand.replaceText(
+                range: TextRange(start: affectedRange.location, length: 0),
+                replacement: "\n"
+            )
+            let p = affectedRange.location
+            let isBetweenExistingBlocks = (p == block.range.end && blockIndex < document.metadata.blocks.count - 1)
+            if isBetweenExistingBlocks {
+                return [insert]
+            }
+            let split = EditCommand.splitBlock(blockID: block.id, atOffset: p + 1)
+            return [insert, split]
+        }
+
         guard let blockIndex = blockIndex(at: selectedLocation, blocks: document.metadata.blocks) else {
             return nil
         }
 
         let block = document.metadata.blocks[blockIndex]
-        let isInsertion = affectedRange.length == 0 && !replacement.isEmpty
-        let isBackspaceDelete = replacement.isEmpty && affectedRange.length == 1
-
-        if isInsertion, replacement == "\n" {
-            let insert = EditCommand.replaceText(
-                range: TextRange(start: affectedRange.location, length: 0),
-                replacement: "\n"
-            )
-            let split = EditCommand.splitBlock(blockID: block.id, atOffset: affectedRange.location + 1)
-            return [insert, split]
-        }
 
         if isBackspaceDelete,
            selectedLocation == block.range.start,
@@ -38,6 +52,11 @@ enum DocumentLayoutController {
         }
 
         return nil
+    }
+
+    /// Same rule as `EditCommandEngine.adjustBlocks` for which block owns an insertion at `utf16Offset`.
+    private static func blockIndexMatchingTextEngineInsertion(at utf16Offset: Int, blocks: [Block]) -> Int? {
+        blocks.firstIndex { $0.range.contains(utf16Offset) || $0.range.end == utf16Offset }
     }
 
     static func blockIndex(at utf16Offset: Int, blocks: [Block]) -> Int? {

@@ -8,11 +8,20 @@ struct ExternalEditConflict: Identifiable, Equatable {
     var diskDate: Date
 }
 
+struct TableEditorPayload: Identifiable {
+    let id: UUID
+    let jsonlURL: URL
+    let schemaURL: URL
+}
+
 @MainActor
 final class AppModel: ObservableObject {
     @Published var noteSummaries: [NoteSummary] = []
     @Published var selectedBaseName: String?
     @Published var activeDocument: NoteDocument?
+    @Published var backlinks: [NoteSummary] = []
+    @Published var noteQuery: String = ""
+    @Published var tableEditorPayload: TableEditorPayload?
     @Published var isLoading = false
     @Published var lastError: String?
     /// When non-nil, shows the external-edit conflict alert (`diskDate` is the on-disk modification time that triggered it).
@@ -39,10 +48,16 @@ final class AppModel: ObservableObject {
     func loadVault() {
         Task { @MainActor in
             await refreshNotes()
+            do {
+                try await repository.rebuildLinkGraphFull()
+            } catch {
+                lastError = "Link index rebuild failed: \(error.localizedDescription)"
+            }
             if selectedBaseName == nil {
                 selectedBaseName = noteSummaries.first?.baseName
             }
             await loadSelectedNote()
+            await refreshBacklinks()
             startVaultWatcher()
         }
     }
@@ -55,6 +70,104 @@ final class AppModel: ObservableObject {
         } catch {
             lastError = "Failed to list notes: \(error.localizedDescription)"
         }
+    }
+
+    /// Filtered list for search / query UI (title and baseName). Richer queries over `NoteMetadata.properties` can use a dedicated index later.
+    var filteredNoteSummaries: [NoteSummary] {
+        let q = noteQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !q.isEmpty else { return noteSummaries }
+        return noteSummaries.filter { summary in
+            summary.baseName.lowercased().contains(q)
+                || summary.title.lowercased().contains(q)
+        }
+    }
+
+    func refreshBacklinks() async {
+        guard let doc = activeDocument else {
+            backlinks = []
+            return
+        }
+        let id = doc.metadata.noteID
+        do {
+            let graph = try await repository.loadLinkGraph()
+            let resolver = try await repository.linkResolver()
+            let sourceIDs = graph.backlinks(to: id)
+            var result: [NoteSummary] = []
+            for sid in sourceIDs {
+                if let base = resolver.baseName(forTargetNoteID: sid),
+                   let title = noteSummaries.first(where: { $0.noteID == sid })?.title {
+                    result.append(NoteSummary(noteID: sid, title: title, baseName: base))
+                } else if let base = resolver.baseName(forTargetNoteID: sid) {
+                    result.append(NoteSummary(noteID: sid, title: base, baseName: base))
+                }
+            }
+            backlinks = result
+        } catch {
+            backlinks = []
+        }
+    }
+
+    func openNote(noteID: UUID) {
+        guard let summary = noteSummaries.first(where: { $0.noteID == noteID }) else {
+            lastError = "Could not open note (not in vault list)."
+            return
+        }
+        changeSelection(baseName: summary.baseName)
+    }
+
+    func insertWikiLink(to targetNoteID: UUID, displayText: String? = nil) {
+        guard let doc = activeDocument else { return }
+        let text = displayText ?? (noteSummaries.first { $0.noteID == targetNoteID }?.title ?? "note")
+        let offset = RangeNormalizer.utf16Length(of: doc.text)
+        apply([.insertWikiLink(utf16Offset: offset, targetNoteID: targetNoteID, displayText: text)])
+    }
+
+    func renameActiveNote(newTitle: String) {
+        guard let oldBase = selectedBaseName else { return }
+        Task { @MainActor in
+            do {
+                let newBase = try await repository.renameNote(from: oldBase, to: newTitle)
+                await refreshNotes()
+                selectedBaseName = newBase
+                await refreshBacklinks()
+            } catch {
+                lastError = "Rename failed: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    func addTableToActiveNote() {
+        guard let doc = activeDocument, let baseName = selectedBaseName else { return }
+        let noteID = doc.metadata.noteID
+        let artifactID = UUID()
+        Task { @MainActor in
+            do {
+                let paths = try TableDocumentFactory.bootstrapEmptyTable(
+                    vaultURL: repository.vaultURL,
+                    noteID: noteID,
+                    artifactID: artifactID
+                )
+                apply([.registerTableArtifact(artifactID: artifactID, relativePath: paths.relativePath)])
+                guard let updated = activeDocument else { return }
+                try await repository.save(updated, asBaseName: baseName)
+                tableEditorPayload = TableEditorPayload(id: artifactID, jsonlURL: paths.jsonl, schemaURL: paths.schema)
+            } catch {
+                lastError = "Could not create table: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    func openFirstTableArtifact() {
+        guard let doc = activeDocument,
+              let art = doc.metadata.artifacts.first(where: { $0.kind == .table }) else {
+            lastError = "No table on this note."
+            return
+        }
+        let aux = VaultPaths.auxDirectory(vaultURL: repository.vaultURL, noteID: doc.metadata.noteID)
+        let jsonl = aux.appendingPathComponent(art.relativePath, isDirectory: false)
+        let schemaName = (art.relativePath as NSString).lastPathComponent.replacingOccurrences(of: ".jsonl", with: ".schema.json")
+        let schema = jsonl.deletingLastPathComponent().appendingPathComponent(schemaName)
+        tableEditorPayload = TableEditorPayload(id: art.id, jsonlURL: jsonl, schemaURL: schema)
     }
 
     func createNote() {
@@ -82,6 +195,7 @@ final class AppModel: ObservableObject {
             activeDocument = nil
             lastPersistedDocument = nil
             lastKnownDiskDate = nil
+            backlinks = []
             clearUndoStack()
             return
         }
@@ -95,6 +209,7 @@ final class AppModel: ObservableObject {
                 lastError = "Failed to read note timestamps: \(error.localizedDescription)"
             }
             clearUndoStack()
+            await refreshBacklinks()
         } catch {
             lastError = "Failed to load note: \(error.localizedDescription)"
         }
@@ -122,6 +237,7 @@ final class AppModel: ObservableObject {
 
         activeDocument = doc
         scheduleAutosave()
+        Task { await refreshBacklinks() }
     }
 
     private func applyUndoSnapshot(from after: NoteDocument, to before: NoteDocument) {
@@ -160,6 +276,8 @@ final class AppModel: ObservableObject {
             case .mergeWithPrevious: return "Merge Blocks"
             case .changeBlockType: return "Change Block"
             case .toggleSpanStyle: return "Toggle Style"
+            case .insertWikiLink: return "Insert Link"
+            case .registerTableArtifact: return "Add Table"
             case .repairMetadata: return "Repair Note"
             }
         })
@@ -196,6 +314,7 @@ final class AppModel: ObservableObject {
                     self.lastKnownDiskDate = modified
                     // Persist authority matches the bytes written (`note`), not a possibly newer `activeDocument`.
                     self.lastPersistedDocument = note
+                    Task { await self.refreshBacklinks() }
                 }
             } catch {
                 await MainActor.run {
@@ -285,6 +404,7 @@ final class AppModel: ObservableObject {
             activeDocument = loadedFromDisk
             lastPersistedDocument = loadedFromDisk
             lastKnownDiskDate = diskDate
+            Task { await refreshBacklinks() }
             return
         }
 

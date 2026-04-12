@@ -14,23 +14,77 @@ public struct NoteDocument: Identifiable, Equatable {
 
 public struct NoteMetadata: Codable, Equatable {
     public var schemaVersion: Int
+    /// Stable vault-wide identity; persisted in sidecar (v2+). Assigned on migrate for legacy notes.
+    public var noteID: UUID
     public var blocks: [Block]
     public var spans: [Span]
+    public var links: [NoteLink]
+    public var artifacts: [EmbeddedArtifact]
+    /// Small key-value properties for queries / front-matter style use (v2+).
+    public var properties: [String: String]
 
-    public static let currentSchemaVersion = 1
+    public static let currentSchemaVersion = 2
 
     public static var empty: NoteMetadata {
         NoteMetadata(
             schemaVersion: currentSchemaVersion,
+            noteID: UUID(),
             blocks: [],
-            spans: []
+            spans: [],
+            links: [],
+            artifacts: [],
+            properties: [:]
         )
     }
 
-    public init(schemaVersion: Int, blocks: [Block], spans: [Span]) {
+    public init(
+        schemaVersion: Int,
+        noteID: UUID,
+        blocks: [Block],
+        spans: [Span],
+        links: [NoteLink] = [],
+        artifacts: [EmbeddedArtifact] = [],
+        properties: [String: String] = [:]
+    ) {
         self.schemaVersion = schemaVersion
+        self.noteID = noteID
         self.blocks = blocks
         self.spans = spans
+        self.links = links
+        self.artifacts = artifacts
+        self.properties = properties
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case schemaVersion
+        case noteID
+        case blocks
+        case spans
+        case links
+        case artifacts
+        case properties
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        schemaVersion = try c.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? 1
+        noteID = try c.decodeIfPresent(UUID.self, forKey: .noteID) ?? UUID()
+        blocks = try c.decodeIfPresent([Block].self, forKey: .blocks) ?? []
+        spans = try c.decodeIfPresent([Span].self, forKey: .spans) ?? []
+        links = try c.decodeIfPresent([NoteLink].self, forKey: .links) ?? []
+        artifacts = try c.decodeIfPresent([EmbeddedArtifact].self, forKey: .artifacts) ?? []
+        properties = try c.decodeIfPresent([String: String].self, forKey: .properties) ?? [:]
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(schemaVersion, forKey: .schemaVersion)
+        try c.encode(noteID, forKey: .noteID)
+        try c.encode(blocks, forKey: .blocks)
+        try c.encode(spans, forKey: .spans)
+        try c.encode(links, forKey: .links)
+        try c.encode(artifacts, forKey: .artifacts)
+        try c.encode(properties, forKey: .properties)
     }
 }
 

@@ -20,6 +20,7 @@ public enum NoteIntegrity {
         case blocksDoNotCoverText(expectedEnd: Int, actualEnd: Int)
         case blockOutOfBounds(blockIndex: Int, range: TextRange, textLength: Int)
         case spanOutOfBounds(spanIndex: Int, range: TextRange, textLength: Int)
+        case linkOutOfBounds(linkIndex: Int, range: TextRange, textLength: Int)
     }
 
     /// Validates partition and span bounds. Does not mutate the document.
@@ -62,6 +63,12 @@ public enum NoteIntegrity {
         for (index, span) in metadata.spans.enumerated() {
             if span.range.start < 0 || span.range.end > total {
                 issues.append(.spanOutOfBounds(spanIndex: index, range: span.range, textLength: total))
+            }
+        }
+
+        for (index, link) in metadata.links.enumerated() {
+            if link.range.start < 0 || link.range.end > total {
+                issues.append(.linkOutOfBounds(linkIndex: index, range: link.range, textLength: total))
             }
         }
 

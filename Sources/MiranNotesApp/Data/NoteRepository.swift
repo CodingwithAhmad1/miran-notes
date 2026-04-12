@@ -1,9 +1,11 @@
 import Foundation
 import MiranNotesCore
+import os.log
 
 enum NoteRepositoryError: LocalizedError, Equatable {
     case invalidBaseName(String)
     case tooManyFilenameCollisions
+    case noteNotFound(String)
 
     var errorDescription: String? {
         switch self {
@@ -11,12 +13,15 @@ enum NoteRepositoryError: LocalizedError, Equatable {
             return "Invalid note name: \(name)"
         case .tooManyFilenameCollisions:
             return "Could not allocate a unique note file name."
+        case let .noteNotFound(base):
+            return "Note not found: \(base)"
         }
     }
 }
 
 struct NoteSummary: Identifiable, Hashable {
-    var id: String { baseName }
+    var id: UUID { noteID }
+    var noteID: UUID
     var title: String
     var baseName: String
 }
@@ -52,23 +57,65 @@ actor NoteRepository {
 
     func ensureVault() throws {
         try FileManager.default.createDirectory(at: vaultURL, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: VaultPaths.miranDirectory(vaultURL: vaultURL), withIntermediateDirectories: true)
     }
 
     func listNotes() throws -> [NoteSummary] {
         try ensureVault()
-        let urls = try FileManager.default.contentsOfDirectory(
-            at: vaultURL,
-            includingPropertiesForKeys: nil
-        )
+        let manifest = try loadOrRebuildManifest()
+        try saveManifest(manifest)
 
-        return urls
-            .filter { $0.pathExtension.lowercased() == "txt" }
-            .sorted { $0.lastPathComponent.lowercased() < $1.lastPathComponent.lowercased() }
-            .map { txtURL in
-                let baseName = txtURL.deletingPathExtension().lastPathComponent
-                let title = baseName.replacingOccurrences(of: "-", with: " ")
-                return NoteSummary(title: title.capitalized, baseName: baseName)
+        return manifest.entries
+            .sorted { $0.baseName.lowercased() < $1.baseName.lowercased() }
+            .map { entry in
+                let title = entry.title ?? entry.baseName.replacingOccurrences(of: "-", with: " ").capitalized
+                return NoteSummary(noteID: entry.noteID, title: title, baseName: entry.baseName)
             }
+    }
+
+    /// Current vault manifest (for link resolution, etc.).
+    func loadManifest() throws -> VaultManifest {
+        try loadOrRebuildManifest()
+    }
+
+    func linkResolver() throws -> LinkResolver {
+        LinkResolver(manifest: try loadOrRebuildManifest())
+    }
+
+    func loadLinkGraph() throws -> LinkGraph {
+        let url = VaultPaths.linkGraphURL(vaultURL: vaultURL)
+        guard let data = try? Data(contentsOf: url),
+              let graph = try? decoder.decode(LinkGraph.self, from: data) else {
+            return LinkGraph()
+        }
+        return graph
+    }
+
+    func saveLinkGraph(_ graph: LinkGraph) throws {
+        try ensureVault()
+        let url = VaultPaths.linkGraphURL(vaultURL: vaultURL)
+        let data = try encoder.encode(graph)
+        try atomicWrite(data, to: url)
+    }
+
+    /// Updates forward edges for one note and persists the graph (call from debounced save path).
+    func updateLinkGraph(sourceNoteID: UUID, targets: [UUID]) throws {
+        var graph = try loadLinkGraph()
+        graph.setOutgoing(from: sourceNoteID, to: targets)
+        try saveLinkGraph(graph)
+    }
+
+    /// Full scan of vault notes to rebuild `link-graph.json` (cold start, external batch edits).
+    func rebuildLinkGraphFull() throws {
+        let manifest = try loadOrRebuildManifest()
+        try saveManifest(manifest)
+        var graph = LinkGraph()
+        for entry in manifest.entries {
+            let doc = try loadNote(baseName: entry.baseName)
+            graph.setOutgoing(from: entry.noteID, to: doc.metadata.links.map(\.targetNoteID))
+        }
+        try saveLinkGraph(graph)
+        Logger.vault.info("Rebuilt link graph for \(manifest.entries.count, privacy: .public) notes")
     }
 
     func createNote(named name: String) throws -> (NoteDocument, String) {
@@ -79,8 +126,10 @@ actor NoteRepository {
         }
         let baseName = try uniqueAvailableBaseName(slug: slug)
         let text = ""
+        let noteID = UUID()
         let metadata = NoteMetadata(
             schemaVersion: NoteMetadata.currentSchemaVersion,
+            noteID: noteID,
             blocks: [
                 Block(
                     id: UUID().uuidString,
@@ -93,7 +142,7 @@ actor NoteRepository {
             spans: []
         )
 
-        let document = NoteDocument(text: text, metadata: metadata)
+        let document = NoteDocument(id: metadata.noteID, text: text, metadata: metadata)
         try save(document, asBaseName: baseName)
         return (document, baseName)
     }
@@ -102,6 +151,10 @@ actor NoteRepository {
         try Self.validateBaseName(baseName)
         let textURL = vaultURL.appendingPathComponent("\(baseName).txt")
         let metaURL = vaultURL.appendingPathComponent("\(baseName).meta.json")
+
+        guard FileManager.default.fileExists(atPath: textURL.path) else {
+            throw NoteRepositoryError.noteNotFound(baseName)
+        }
 
         let text = (try? String(contentsOf: textURL, encoding: .utf8)) ?? ""
         let metadata: NoteMetadata
@@ -112,6 +165,7 @@ actor NoteRepository {
         } else {
             metadata = NoteMetadata(
                 schemaVersion: NoteMetadata.currentSchemaVersion,
+                noteID: UUID(),
                 blocks: [
                     Block(
                         id: UUID().uuidString,
@@ -126,8 +180,9 @@ actor NoteRepository {
         }
 
         let document = Self.documentAfterLoadRepair(text: text, metadata: metadata)
-        NoteIntegrity.logIfInvalid(document: document)
-        return document
+        let withId = NoteDocument(id: document.metadata.noteID, text: document.text, metadata: document.metadata)
+        NoteIntegrity.logIfInvalid(document: withId)
+        return withId
     }
 
     func noteModifiedDate(baseName: String) throws -> Date? {
@@ -155,7 +210,11 @@ actor NoteRepository {
         try Self.validateBaseName(baseName)
         try ensureVault()
         let normalized = RangeNormalizer.normalize(metadata: note.metadata, for: note.text)
-        let documentToPersist = NoteDocument(text: note.text, metadata: normalized.normalizedMetadata)
+        let documentToPersist = NoteDocument(
+            id: normalized.normalizedMetadata.noteID,
+            text: note.text,
+            metadata: normalized.normalizedMetadata
+        )
         NoteIntegrity.logIfInvalid(document: documentToPersist)
         let textURL = vaultURL.appendingPathComponent("\(baseName).txt")
         let metaURL = vaultURL.appendingPathComponent("\(baseName).meta.json")
@@ -163,6 +222,136 @@ actor NoteRepository {
         try atomicWrite(note.text.data(using: .utf8) ?? Data(), to: textURL)
         let metadataData = try encoder.encode(normalized.normalizedMetadata)
         try atomicWrite(metadataData, to: metaURL)
+
+        var manifest = loadManifestFromDiskOnly() ?? VaultManifest()
+        let title = baseName.replacingOccurrences(of: "-", with: " ").capitalized
+        manifest.upsert(noteID: documentToPersist.metadata.noteID, baseName: baseName, title: title)
+        try saveManifest(manifest)
+
+        let targets = documentToPersist.metadata.links.map(\.targetNoteID)
+        try updateLinkGraph(sourceNoteID: documentToPersist.metadata.noteID, targets: targets)
+    }
+
+    /// Renames note files from `oldBaseName` to a new slug derived from `newTitle`. Returns the new `baseName`.
+    func renameNote(from oldBaseName: String, to newTitle: String) throws -> String {
+        try Self.validateBaseName(oldBaseName)
+        try ensureVault()
+        guard FileManager.default.fileExists(atPath: vaultURL.appendingPathComponent("\(oldBaseName).txt").path) else {
+            throw NoteRepositoryError.noteNotFound(oldBaseName)
+        }
+
+        let doc = try loadNote(baseName: oldBaseName)
+        var slug = slugify(newTitle.isEmpty ? oldBaseName : newTitle)
+        if slug.isEmpty {
+            slug = "untitled-note"
+        }
+
+        let newBaseName: String
+        if slug == oldBaseName {
+            newBaseName = oldBaseName
+        } else {
+            newBaseName = try uniqueAvailableBaseName(slug: slug)
+        }
+
+        if newBaseName == oldBaseName {
+            var manifest = loadManifestFromDiskOnly() ?? VaultManifest()
+            manifest.upsert(noteID: doc.metadata.noteID, baseName: oldBaseName, title: newTitle)
+            try saveManifest(manifest)
+            return oldBaseName
+        }
+
+        let oldTxt = vaultURL.appendingPathComponent("\(oldBaseName).txt")
+        let oldMeta = vaultURL.appendingPathComponent("\(oldBaseName).meta.json")
+        try save(doc, asBaseName: newBaseName)
+
+        if FileManager.default.fileExists(atPath: oldTxt.path) {
+            try FileManager.default.removeItem(at: oldTxt)
+        }
+        if FileManager.default.fileExists(atPath: oldMeta.path) {
+            try FileManager.default.removeItem(at: oldMeta)
+        }
+
+        var manifest = loadManifestFromDiskOnly() ?? VaultManifest()
+        manifest.upsert(noteID: doc.metadata.noteID, baseName: newBaseName, title: newTitle)
+        try saveManifest(manifest)
+
+        return newBaseName
+    }
+
+    // MARK: - Manifest
+
+    private func manifestURL() -> URL {
+        VaultPaths.manifestURL(vaultURL: vaultURL)
+    }
+
+    private func loadOrRebuildManifest() throws -> VaultManifest {
+        let url = manifestURL()
+        if let data = try? Data(contentsOf: url),
+           let decoded = try? decoder.decode(VaultManifest.self, from: data) {
+            return try reconcileManifestWithDisk(decoded)
+        }
+        return try rebuildManifestFromDisk()
+    }
+
+    /// Drops manifest entries whose `.txt` disappeared; adds missing notes on disk.
+    private func reconcileManifestWithDisk(_ manifest: VaultManifest) throws -> VaultManifest {
+        var next = manifest
+        next.entries.removeAll { entry in
+            !FileManager.default.fileExists(atPath: vaultURL.appendingPathComponent("\(entry.baseName).txt").path)
+        }
+
+        let onDisk = try listBaseNamesOnDisk()
+        let knownBases = Set(next.entries.map(\.baseName))
+        for base in onDisk where !knownBases.contains(base) {
+            let doc = try loadNote(baseName: base)
+            let title = base.replacingOccurrences(of: "-", with: " ").capitalized
+            next.upsert(noteID: doc.metadata.noteID, baseName: base, title: title)
+            let metaPath = vaultURL.appendingPathComponent("\(base).meta.json")
+            if !FileManager.default.fileExists(atPath: metaPath.path) {
+                try save(doc, asBaseName: base)
+            }
+        }
+        return next
+    }
+
+    private func rebuildManifestFromDisk() throws -> VaultManifest {
+        try ensureVault()
+        var manifest = VaultManifest()
+        let bases = try listBaseNamesOnDisk()
+        for base in bases {
+            let doc = try loadNote(baseName: base)
+            let metaPath = vaultURL.appendingPathComponent("\(base).meta.json")
+            if !FileManager.default.fileExists(atPath: metaPath.path) {
+                try save(doc, asBaseName: base)
+            }
+            let title = base.replacingOccurrences(of: "-", with: " ").capitalized
+            manifest.upsert(noteID: doc.metadata.noteID, baseName: base, title: title)
+        }
+        try saveManifest(manifest)
+        return manifest
+    }
+
+    private func listBaseNamesOnDisk() throws -> [String] {
+        let urls = try FileManager.default.contentsOfDirectory(at: vaultURL, includingPropertiesForKeys: nil)
+        return urls
+            .filter { $0.pathExtension.lowercased() == "txt" }
+            .map { $0.deletingPathExtension().lastPathComponent }
+            .sorted { $0.lowercased() < $1.lowercased() }
+    }
+
+    private func saveManifest(_ manifest: VaultManifest) throws {
+        try ensureVault()
+        let data = try encoder.encode(manifest)
+        try atomicWrite(data, to: manifestURL())
+    }
+
+    private func loadManifestFromDiskOnly() -> VaultManifest? {
+        let url = manifestURL()
+        guard let data = try? Data(contentsOf: url),
+              let decoded = try? decoder.decode(VaultManifest.self, from: data) else {
+            return nil
+        }
+        return decoded
     }
 
     private func uniqueAvailableBaseName(slug: String) throws -> String {
@@ -209,17 +398,23 @@ actor NoteRepository {
 
     private nonisolated static func documentAfterLoadRepair(text: String, metadata: NoteMetadata) -> NoteDocument {
         let normalized = RangeNormalizer.normalize(metadata: metadata, for: text)
-        var document = NoteDocument(text: text, metadata: normalized.normalizedMetadata)
+        var document = NoteDocument(
+            id: normalized.normalizedMetadata.noteID,
+            text: text,
+            metadata: normalized.normalizedMetadata
+        )
 
         if !NoteIntegrity.check(document: document).isValid {
             let again = RangeNormalizer.normalize(metadata: document.metadata, for: document.text)
-            document = NoteDocument(text: text, metadata: again.normalizedMetadata)
+            document = NoteDocument(id: again.normalizedMetadata.noteID, text: text, metadata: again.normalizedMetadata)
         }
 
         if !NoteIntegrity.check(document: document).isValid {
             let total = RangeNormalizer.utf16Length(of: text)
+            let noteID = document.metadata.noteID
             let fallback = NoteMetadata(
                 schemaVersion: NoteMetadata.currentSchemaVersion,
+                noteID: noteID,
                 blocks: [
                     Block(
                         id: UUID().uuidString,
@@ -232,7 +427,7 @@ actor NoteRepository {
                 spans: []
             )
             let repaired = RangeNormalizer.normalize(metadata: fallback, for: text).normalizedMetadata
-            document = NoteDocument(text: text, metadata: repaired)
+            document = NoteDocument(id: repaired.noteID, text: text, metadata: repaired)
         }
 
         return document

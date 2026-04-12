@@ -55,6 +55,7 @@ final class NoteRepositoryTests: XCTestCase {
         try "hello world".write(to: textURL, atomically: true, encoding: .utf8)
         let staleMeta = NoteMetadata(
             schemaVersion: NoteMetadata.currentSchemaVersion,
+            noteID: UUID(),
             blocks: [
                 Block(id: "a", type: .paragraph, range: TextRange(start: 0, length: 3), level: nil, icon: nil),
                 Block(id: "b", type: .paragraph, range: TextRange(start: 3, length: 2), level: nil, icon: nil)
@@ -76,8 +77,10 @@ final class NoteRepositoryTests: XCTestCase {
         let repo = NoteRepository(vaultURL: vault)
         try await repo.ensureVault()
         let base = "round-trip"
+        let noteID = UUID()
         let metadata = NoteMetadata(
             schemaVersion: NoteMetadata.currentSchemaVersion,
+            noteID: noteID,
             blocks: [
                 Block(
                     id: "b1",
@@ -89,7 +92,7 @@ final class NoteRepositoryTests: XCTestCase {
             ],
             spans: []
         )
-        let original = NoteDocument(text: "hello", metadata: metadata)
+        let original = NoteDocument(id: noteID, text: "hello", metadata: metadata)
         try await repo.save(original, asBaseName: base)
         let loaded = try await repo.loadNote(baseName: base)
         XCTAssertEqual(loaded.text, "hello")

@@ -6,6 +6,10 @@ public enum EditCommand {
     case mergeWithPrevious(blockID: String)
     case changeBlockType(blockID: String, type: BlockType)
     case toggleSpanStyle(range: TextRange, style: SpanStyle)
+    /// Inserts `[[displayText]]` at UTF-16 offset and records a wiki link to `targetNoteID` over the inserted token.
+    case insertWikiLink(utf16Offset: Int, targetNoteID: UUID, displayText: String)
+    /// Registers a table artifact path under `_aux/{noteID}/` (file created by repository / UI).
+    case registerTableArtifact(artifactID: UUID, relativePath: String)
     case repairMetadata
 }
 
@@ -24,6 +28,10 @@ public struct EditCommandEngine {
             next = updateBlockType(document: next, blockID: blockID, type: type)
         case let .toggleSpanStyle(range, style):
             next = toggleSpan(document: next, range: range, style: style)
+        case let .insertWikiLink(utf16Offset, targetNoteID, displayText):
+            next = insertWikiLink(document: next, utf16Offset: utf16Offset, targetNoteID: targetNoteID, displayText: displayText)
+        case let .registerTableArtifact(artifactID, relativePath):
+            next = registerTableArtifact(document: next, artifactID: artifactID, relativePath: relativePath)
         case .repairMetadata:
             next = repair(document: next)
         }
@@ -44,15 +52,23 @@ public struct EditCommandEngine {
             return next
         }
 
+        let metadataBeforeEdit = next.metadata
         next.text.replaceSubrange(swiftRange, with: replacement)
         next.metadata.blocks = adjustBlocks(
             blocks: next.metadata.blocks,
             replacedRange: safeRange,
             replacementUTF16Length: replacement.utf16.count,
-            text: next.text
+            text: next.text,
+            contextMetadata: metadataBeforeEdit
         )
         next.metadata.spans = SpanAdjuster.adjust(
             spans: next.metadata.spans,
+            replacedRange: safeRange,
+            replacementUTF16Length: replacement.utf16.count,
+            constrainedTo: next.metadata.blocks
+        )
+        next.metadata.links = LinkAdjuster.adjust(
+            links: next.metadata.links,
             replacedRange: safeRange,
             replacementUTF16Length: replacement.utf16.count,
             constrainedTo: next.metadata.blocks
@@ -75,6 +91,12 @@ public struct EditCommandEngine {
         let splitOffset = min(max(block.range.start, atOffset), block.range.end)
         let leftLength = max(0, splitOffset - block.range.start)
         let rightLength = max(0, block.range.end - splitOffset)
+
+        if leftLength == 0 {
+            // Degenerate split (would create two blocks with the same `start`); keep a single partition.
+            next.metadata.blocks[index].range = TextRange(start: splitOffset, length: rightLength)
+            return next
+        }
 
         next.metadata.blocks[index].range = TextRange(start: block.range.start, length: leftLength)
         let newBlock = Block(
@@ -146,6 +168,33 @@ public struct EditCommandEngine {
         return next
     }
 
+    private static func insertWikiLink(document: NoteDocument, utf16Offset: Int, targetNoteID: UUID, displayText: String) -> NoteDocument {
+        let token = "[[\(displayText)]]"
+        let len = RangeNormalizer.utf16Length(of: document.text)
+        let safeOffset = min(max(0, utf16Offset), len)
+        var next = applyTextReplacement(
+            document: document,
+            range: TextRange(start: safeOffset, length: 0),
+            replacement: token
+        )
+        let linkRange = TextRange(start: safeOffset, length: token.utf16.count)
+        next.metadata.links.append(NoteLink(range: linkRange, targetNoteID: targetNoteID, label: displayText))
+        if !RangeNormalizer.isValid(metadata: next.metadata, for: next.text) {
+            let repaired = RangeNormalizer.normalize(metadata: next.metadata, for: next.text)
+            next.metadata = repaired.normalizedMetadata
+        }
+        return next
+    }
+
+    private static func registerTableArtifact(document: NoteDocument, artifactID: UUID, relativePath: String) -> NoteDocument {
+        var next = document
+        let artifact = EmbeddedArtifact(id: artifactID, kind: .table, relativePath: relativePath)
+        if !next.metadata.artifacts.contains(where: { $0.id == artifactID }) {
+            next.metadata.artifacts.append(artifact)
+        }
+        return next
+    }
+
     private static func repair(document: NoteDocument) -> NoteDocument {
         var next = document
         let normalized = RangeNormalizer.normalize(metadata: next.metadata, for: next.text)
@@ -158,13 +207,22 @@ public struct EditCommandEngine {
         blocks: [Block],
         replacedRange: TextRange,
         replacementUTF16Length: Int,
-        text: String
+        text: String,
+        contextMetadata: NoteMetadata
     ) -> [Block] {
         let delta = replacementUTF16Length - replacedRange.length
         let totalLength = RangeNormalizer.utf16Length(of: text)
         guard let affectedIndex = blocks.firstIndex(where: { $0.range.contains(replacedRange.start) || $0.range.end == replacedRange.start }) else {
             return RangeNormalizer.normalize(
-                metadata: NoteMetadata(schemaVersion: NoteMetadata.currentSchemaVersion, blocks: blocks, spans: []),
+                metadata: NoteMetadata(
+                    schemaVersion: contextMetadata.schemaVersion,
+                    noteID: contextMetadata.noteID,
+                    blocks: blocks,
+                    spans: contextMetadata.spans,
+                    links: contextMetadata.links,
+                    artifacts: contextMetadata.artifacts,
+                    properties: contextMetadata.properties
+                ),
                 for: text
             ).normalizedMetadata.blocks
         }
@@ -189,9 +247,13 @@ public struct EditCommandEngine {
         if overlapsMultipleBlocks {
             return RangeNormalizer.normalize(
                 metadata: NoteMetadata(
-                    schemaVersion: NoteMetadata.currentSchemaVersion,
+                    schemaVersion: contextMetadata.schemaVersion,
+                    noteID: contextMetadata.noteID,
                     blocks: next,
-                    spans: []
+                    spans: contextMetadata.spans,
+                    links: contextMetadata.links,
+                    artifacts: contextMetadata.artifacts,
+                    properties: contextMetadata.properties
                 ),
                 for: text
             ).normalizedMetadata.blocks
