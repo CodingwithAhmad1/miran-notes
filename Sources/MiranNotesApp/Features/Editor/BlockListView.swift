@@ -4,7 +4,7 @@ import SwiftUI
 
 struct BlockListView: View {
     @Binding var document: NoteDocument
-    let onCommand: (EditCommand) -> Void
+    let onCommand: (EditCommand) -> NoteDocument
 
     var body: some View {
         ScrollView {
@@ -25,7 +25,7 @@ struct BlockListView: View {
 private struct BlockRowView: View {
     let block: Block
     @Binding var document: NoteDocument
-    let onCommand: (EditCommand) -> Void
+    let onCommand: (EditCommand) -> NoteDocument
 
     var body: some View {
         switch block.type {

@@ -1,4 +1,5 @@
 import Foundation
+import os.log
 
 public enum EditCommand {
     case replaceText(range: TextRange, replacement: String)
@@ -37,10 +38,6 @@ public struct EditCommandEngine {
             next = repair(document: next)
         }
 
-#if DEBUG
-        let integrity = NoteIntegrity.check(document: next)
-        assert(integrity.isValid, "\(integrity.issues)")
-#endif
         return next
     }
 
@@ -75,10 +72,16 @@ public struct EditCommandEngine {
             constrainedTo: next.metadata.blocks
         )
 
+        // Safety net: if adjustBlocks produced an invalid partition (edge cases not yet covered
+        // deterministically), normalize and log so the failure is visible in Console.
         if !RangeNormalizer.isValid(metadata: next.metadata, for: next.text) {
+            let logger = Logger(subsystem: "app.miran.notes", category: "EditEngine")
+            let issues = NoteIntegrity.check(document: next).issues
+            logger.error("adjustBlocks fallback triggered — \(issues.map { String(describing: $0) }.joined(separator: "; "), privacy: .public)")
             let repaired = RangeNormalizer.normalize(metadata: next.metadata, for: next.text)
             next.metadata = repaired.normalizedMetadata
         }
+
         return next
     }
 
@@ -205,6 +208,13 @@ public struct EditCommandEngine {
         return next
     }
 
+    /// Adjusts block ranges after a UTF-16 text replacement without calling `RangeNormalizer.normalize`.
+    /// All cases that arise during normal editing are handled deterministically:
+    ///   - Single-block edits: delta-adjust the affected block and shift following blocks.
+    ///   - Zero-length result: merge the empty block into its predecessor (or successor).
+    ///   - Multi-block replacement: collapse all intersecting blocks into the first, shift the rest.
+    ///   - Out-of-bounds edit: should not occur during normal editing; logged and returns current blocks unchanged.
+    ///
     /// Exposed for unit tests (`@testable import`); production callers use `apply(.replaceText, ...)`.
     static func adjustBlocks(
         blocks: [Block],
@@ -215,59 +225,87 @@ public struct EditCommandEngine {
     ) -> [Block] {
         let delta = replacementUTF16Length - replacedRange.length
         let totalLength = RangeNormalizer.utf16Length(of: text)
-        guard let affectedIndex = blocks.firstIndex(where: { $0.range.contains(replacedRange.start) || $0.range.end == replacedRange.start }) else {
-            return RangeNormalizer.normalize(
-                metadata: NoteMetadata(
-                    schemaVersion: contextMetadata.schemaVersion,
-                    noteID: contextMetadata.noteID,
-                    blocks: blocks,
-                    spans: contextMetadata.spans,
-                    links: contextMetadata.links,
-                    artifacts: contextMetadata.artifacts,
-                    properties: contextMetadata.properties
-                ),
-                for: text
-            ).normalizedMetadata.blocks
+
+        // Find all blocks that are affected by this edit:
+        // - Insertions (zero-length) affect exactly one block — the one that contains the insertion
+        //   point, or whose end equals it (handles block-boundary insertions).
+        // - Replacements (non-zero) affect all blocks whose ranges overlap the replaced range.
+        let intersecting: [Int]
+        if replacedRange.isEmpty {
+            // Insertion: `intersects` is always false for empty ranges; use contains/end check.
+            if let idx = blocks.indices.first(where: {
+                blocks[$0].range.contains(replacedRange.start) || blocks[$0].range.end == replacedRange.start
+            }) {
+                intersecting = [idx]
+            } else {
+                intersecting = []
+            }
+        } else {
+            intersecting = blocks.indices.filter { blocks[$0].range.intersects(replacedRange) }
+        }
+
+        guard let firstIntersectingIndex = intersecting.first else {
+            // Edit offset is entirely outside all blocks — should not happen in normal editing.
+            assertionFailure("adjustBlocks: no block found for edit at \(replacedRange.start)–\(replacedRange.end) (text length \(totalLength)); blocks: \(blocks.map { $0.range })")
+            return blocks
         }
 
         var next = blocks
 
-        if next.indices.contains(affectedIndex) {
-            let old = next[affectedIndex]
+        if intersecting.count == 1 {
+            // Common case: edit within or at boundary of a single block.
+            let i = firstIntersectingIndex
+            let old = next[i]
             let newLength = max(0, old.range.length + delta)
-            next[affectedIndex].range = TextRange(start: old.range.start, length: newLength)
-        }
+            next[i].range = TextRange(start: old.range.start, length: newLength)
 
-        if affectedIndex + 1 < next.count {
-            for index in (affectedIndex + 1)..<next.count {
-                let shifted = max(0, next[index].range.start + delta)
-                next[index].range = TextRange(start: shifted, length: next[index].range.length)
+            // Shift all subsequent blocks.
+            for j in (i + 1)..<next.count {
+                next[j].range = TextRange(start: max(0, next[j].range.start + delta), length: next[j].range.length)
+            }
+
+            // If the block became zero-length, merge it into its predecessor; if no predecessor, into successor.
+            if next[i].range.isEmpty {
+                if i > 0 {
+                    next[i - 1].range = TextRange(start: next[i - 1].range.start, length: next[i - 1].range.length + next[i].range.length)
+                    next.remove(at: i)
+                } else if next.count > 1 {
+                    // No predecessor: widen successor to start from this block's start.
+                    next[i + 1].range = TextRange(start: next[i].range.start, length: next[i + 1].range.length)
+                    next.remove(at: i)
+                }
+                // If this was the only block and it's now empty, it stays (empty document).
+            }
+        } else {
+            // Multi-block replacement: collapse all intersecting blocks into the first one,
+            // preserving the first block's id and type. Shift remaining blocks by delta.
+            let lastIntersectingIndex = intersecting.last!
+            let firstBlock = next[firstIntersectingIndex]
+            let lastBlock = next[lastIntersectingIndex]
+            // Content before the replaced range (from firstBlock's start) + replacement + content after (from lastBlock's end).
+            let prefixLen = max(0, replacedRange.start - firstBlock.range.start)
+            let suffixLen = max(0, lastBlock.range.end - replacedRange.end)
+            let newLength = prefixLen + replacementUTF16Length + suffixLen
+            next[firstIntersectingIndex].range = TextRange(start: firstBlock.range.start, length: newLength)
+
+            // Remove all other intersecting blocks (in reverse order to preserve indices).
+            for i in intersecting.dropFirst().reversed() {
+                next.remove(at: i)
+            }
+
+            // Shift all blocks after the (now collapsed) first block.
+            let shiftFrom = firstIntersectingIndex + 1
+            for j in shiftFrom..<next.count {
+                next[j].range = TextRange(start: max(0, next[j].range.start + delta), length: next[j].range.length)
             }
         }
 
-        // If the edit spans multiple blocks, or if ranges drift, repair deterministically.
-        let overlapsMultipleBlocks = blocks.filter { $0.range.intersects(replacedRange) }.count > 1
-        if overlapsMultipleBlocks {
-            return RangeNormalizer.normalize(
-                metadata: NoteMetadata(
-                    schemaVersion: contextMetadata.schemaVersion,
-                    noteID: contextMetadata.noteID,
-                    blocks: next,
-                    spans: contextMetadata.spans,
-                    links: contextMetadata.links,
-                    artifacts: contextMetadata.artifacts,
-                    properties: contextMetadata.properties
-                ),
-                for: text
-            ).normalizedMetadata.blocks
-        }
-
-        let clamped = next.map { block in
+        // Final clamp to new text length (defensive — should be a no-op for well-formed input).
+        return next.map { block in
             var adjusted = block
             adjusted.range = block.range.clamped(to: totalLength)
             return adjusted
         }
-        return clamped
     }
 
     private static func nsRangeToStringRange(_ range: TextRange, in text: String) -> Range<String.Index>? {

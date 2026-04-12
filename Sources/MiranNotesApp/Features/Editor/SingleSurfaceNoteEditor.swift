@@ -56,7 +56,11 @@ private final class WikiLinkTextView: NSTextView {
 
 struct SingleSurfaceNoteEditor: NSViewRepresentable {
     @Binding var document: NoteDocument
-    var onCommands: ([EditCommand]) -> Void
+    /// Updated on every selection change so callers (e.g. insertWikiLink) know the cursor position.
+    @Binding var cursorOffset: Int
+    /// Returns the resulting NoteDocument synchronously so the coordinator can apply styling immediately,
+    /// eliminating the brief lag between command dispatch and the next SwiftUI render cycle.
+    var onCommands: ([EditCommand]) -> NoteDocument
     var onWikiLinkClick: ((UUID) -> Void)?
 
     func makeCoordinator() -> Coordinator {
@@ -71,7 +75,7 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
         textView.usesAdaptiveColorMappingForDarkAppearance = true
         textView.usesFontPanel = false
         textView.textContainerInset = NSSize(width: 8, height: 10)
-        // Document-level undo is handled by the window `UndoManager` in `AppModel`; disable `NSTextView`’s separate stack.
+        // Document-level undo is handled by the window `UndoManager` in `AppModel`; disable `NSTextView`'s separate stack.
         textView.allowsUndo = false
         textView.delegate = context.coordinator
         textView.textStorage?.delegate = context.coordinator
@@ -114,7 +118,6 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
         weak var textView: NSTextView?
         private var isApplyingModelUpdate = false
         private var pendingSelection: NSRange?
-        private var pendingCommands: [EditCommand]?
 
         init(_ parent: SingleSurfaceNoteEditor) {
             self.parent = parent
@@ -125,9 +128,10 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
             guard !textView.hasMarkedText() else { return }
             let r = textView.selectedRange()
             guard r.length > 0 else { return }
-            parent.onCommands([
+            let newDoc = parent.onCommands([
                 .toggleSpanStyle(range: TextRange(start: r.location, length: r.length), style: style)
             ])
+            refreshVisualChrome(textView: textView, document: newDoc)
         }
 
         func textStorage(
@@ -160,25 +164,28 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
                     ) {
                     let blockID = parent.document.metadata.blocks[blockIndex].id
                     if let slashCommands = SlashCommandRegistry.editCommands(for: slashMatch, blockID: blockID) {
-                        parent.onCommands(slashCommands)
+                        let newDoc = parent.onCommands(slashCommands)
+                        refreshVisualChrome(textView: textView, document: newDoc)
                         return
                     }
                 }
 
-                parent.onCommands([
+                let newDoc = parent.onCommands([
                     .replaceText(
                         range: TextRange(start: diff.range.location, length: diff.range.length),
                         replacement: diff.replacement
                     )
                 ])
+                refreshVisualChrome(textView: textView, document: newDoc)
             } else {
                 let previous = parent.document.text
-                parent.onCommands([
+                let newDoc = parent.onCommands([
                     .replaceText(
                         range: TextRange(start: 0, length: previous.utf16.count),
                         replacement: storageString
                     )
                 ])
+                refreshVisualChrome(textView: textView, document: newDoc)
             }
         }
 
@@ -188,26 +195,16 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
             if textView.hasMarkedText() { return }
 
             if textView.string == parent.document.text {
-                refreshVisualChrome(textView: textView)
+                refreshVisualChrome(textView: textView, document: parent.document)
                 applyPendingSelectionIfNeeded()
                 return
             }
-
-            if let commands = pendingCommands,
-               applyPendingCommandsIfConsistent(commands, textView: textView) {
-                pendingCommands = nil
-                refreshVisualChrome(textView: textView)
-                applyPendingSelectionIfNeeded()
-                return
-            }
-
-            pendingCommands = nil
 
             if let diff = TextEditDiff.singleUTF16Replacement(from: textView.string, to: parent.document.text) {
                 isApplyingModelUpdate = true
                 textView.textStorage?.replaceCharacters(in: diff.range, with: diff.replacement)
                 isApplyingModelUpdate = false
-                refreshVisualChrome(textView: textView)
+                refreshVisualChrome(textView: textView, document: parent.document)
                 applyPendingSelectionIfNeeded()
                 return
             }
@@ -216,15 +213,15 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
             isApplyingModelUpdate = true
             textView.string = parent.document.text
             isApplyingModelUpdate = false
-            refreshVisualChrome(textView: textView)
+            refreshVisualChrome(textView: textView, document: parent.document)
             restoreSelectionClamped(savedSelection)
             applyPendingSelectionIfNeeded()
         }
 
-        private func refreshVisualChrome(textView: NSTextView) {
-            EditorVisualStyle.apply(to: textView, document: parent.document)
+        private func refreshVisualChrome(textView: NSTextView, document: NoteDocument) {
+            EditorVisualStyle.apply(to: textView, document: document)
             if let w = textView as? WikiLinkTextView {
-                w.wikiLinks = parent.document.metadata.links
+                w.wikiLinks = document.metadata.links
             }
         }
 
@@ -236,30 +233,12 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
             textView.setSelectedRange(NSRange(location: loc, length: len))
         }
 
-        private func applyPendingCommandsIfConsistent(_ commands: [EditCommand], textView: NSTextView) -> Bool {
-            var mutable = textView.string
-            for command in commands {
-                guard case let .replaceText(range, replacement) = command else { continue }
-                let textRange = TextRange(start: range.start, length: range.length)
-                guard let swiftRange = nsRangeToStringRange(textRange, in: mutable) else {
-                    return false
-                }
-                mutable.replaceSubrange(swiftRange, with: replacement)
-            }
-
-            guard mutable == parent.document.text else {
-                return false
-            }
-
-            isApplyingModelUpdate = true
-            textView.string = mutable
-            isApplyingModelUpdate = false
-            return textView.string == parent.document.text
-        }
-
-        private func nsRangeToStringRange(_ range: MiranNotesCore.TextRange, in text: String) -> Range<String.Index>? {
-            let nsRange = NSRange(location: range.start, length: range.length)
-            return Range(nsRange, in: text)
+        private func applyPendingSelectionIfNeeded() {
+            guard let textView, let pendingSelection else { return }
+            let maxOffset = textView.string.utf16.count
+            let clampedLocation = min(max(0, pendingSelection.location), maxOffset)
+            textView.setSelectedRange(NSRange(location: clampedLocation, length: 0))
+            self.pendingSelection = nil
         }
 
         func textView(
@@ -281,20 +260,29 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
                 selectedLocation: selectedLocation
             ) {
                 pendingSelection = NSRange(location: affectedCharRange.location + replacement.utf16.count, length: 0)
-                pendingCommands = structural
-                parent.onCommands(structural)
+                let newDoc = parent.onCommands(structural)
+                // Apply the new text from the model immediately (avoids the full-replace path in applyDocumentText).
+                isApplyingModelUpdate = true
+                if let diff = TextEditDiff.singleUTF16Replacement(from: textView.string, to: newDoc.text) {
+                    textView.textStorage?.replaceCharacters(in: diff.range, with: diff.replacement)
+                } else {
+                    textView.string = newDoc.text
+                }
+                isApplyingModelUpdate = false
+                refreshVisualChrome(textView: textView, document: newDoc)
+                applyPendingSelectionIfNeeded()
                 return false
             }
 
             return true
         }
 
-        private func applyPendingSelectionIfNeeded() {
-            guard let textView, let pendingSelection else { return }
-            let maxOffset = textView.string.utf16.count
-            let clampedLocation = min(max(0, pendingSelection.location), maxOffset)
-            textView.setSelectedRange(NSRange(location: clampedLocation, length: 0))
-            self.pendingSelection = nil
+        func textViewDidChangeSelection(_ notification: Notification) {
+            guard let tv = notification.object as? NSTextView else { return }
+            let loc = tv.selectedRange().location
+            if parent.cursorOffset != loc {
+                parent.cursorOffset = loc
+            }
         }
     }
 }

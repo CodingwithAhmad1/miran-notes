@@ -2,6 +2,17 @@ import Foundation
 import MiranNotesCore
 import os.log
 
+/// Result of loading a note from disk, including any structural repair warnings.
+struct NoteLoadResult {
+    var document: NoteDocument
+    /// Non-empty when `RangeNormalizer` had to repair block ranges or spans on load.
+    /// Surfaced to the user as a non-blocking advisory so they know metadata may not perfectly
+    /// reflect the original block structure.
+    var repairWarnings: [String]
+
+    var wasRepaired: Bool { !repairWarnings.isEmpty }
+}
+
 enum NoteRepositoryError: LocalizedError, Equatable {
     case invalidBaseName(String)
     case tooManyFilenameCollisions
@@ -111,7 +122,7 @@ actor NoteRepository {
         try saveManifest(manifest)
         var graph = LinkGraph()
         for entry in manifest.entries {
-            let doc = try loadNote(baseName: entry.baseName)
+            let doc = try loadNote(baseName: entry.baseName).document
             graph.setOutgoing(from: entry.noteID, to: doc.metadata.links.map(\.targetNoteID))
         }
         try saveLinkGraph(graph)
@@ -147,7 +158,7 @@ actor NoteRepository {
         return (document, baseName)
     }
 
-    func loadNote(baseName: String) throws -> NoteDocument {
+    func loadNote(baseName: String) throws -> NoteLoadResult {
         try Self.validateBaseName(baseName)
         let textURL = vaultURL.appendingPathComponent("\(baseName).txt")
         let metaURL = vaultURL.appendingPathComponent("\(baseName).meta.json")
@@ -179,10 +190,10 @@ actor NoteRepository {
             )
         }
 
-        let document = Self.documentAfterLoadRepair(text: text, metadata: metadata)
-        let withId = NoteDocument(id: document.metadata.noteID, text: document.text, metadata: document.metadata)
+        let (repaired, repairWarnings) = Self.documentAfterLoadRepair(text: text, metadata: metadata)
+        let withId = NoteDocument(id: repaired.metadata.noteID, text: repaired.text, metadata: repaired.metadata)
         NoteIntegrity.logIfInvalid(document: withId)
-        return withId
+        return NoteLoadResult(document: withId, repairWarnings: repairWarnings)
     }
 
     func noteModifiedDate(baseName: String) throws -> Date? {
@@ -240,7 +251,7 @@ actor NoteRepository {
             throw NoteRepositoryError.noteNotFound(oldBaseName)
         }
 
-        let doc = try loadNote(baseName: oldBaseName)
+        let doc = try loadNote(baseName: oldBaseName).document
         var slug = slugify(newTitle.isEmpty ? oldBaseName : newTitle)
         if slug.isEmpty {
             slug = "untitled-note"
@@ -303,7 +314,7 @@ actor NoteRepository {
         let onDisk = try listBaseNamesOnDisk()
         let knownBases = Set(next.entries.map(\.baseName))
         for base in onDisk where !knownBases.contains(base) {
-            let doc = try loadNote(baseName: base)
+            let doc = try loadNote(baseName: base).document
             let title = base.replacingOccurrences(of: "-", with: " ").capitalized
             next.upsert(noteID: doc.metadata.noteID, baseName: base, title: title)
             let metaPath = vaultURL.appendingPathComponent("\(base).meta.json")
@@ -319,7 +330,7 @@ actor NoteRepository {
         var manifest = VaultManifest()
         let bases = try listBaseNamesOnDisk()
         for base in bases {
-            let doc = try loadNote(baseName: base)
+            let doc = try loadNote(baseName: base).document
             let metaPath = vaultURL.appendingPathComponent("\(base).meta.json")
             if !FileManager.default.fileExists(atPath: metaPath.path) {
                 try save(doc, asBaseName: base)
@@ -396,17 +407,21 @@ actor NoteRepository {
             .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
     }
 
-    private nonisolated static func documentAfterLoadRepair(text: String, metadata: NoteMetadata) -> NoteDocument {
-        let normalized = RangeNormalizer.normalize(metadata: metadata, for: text)
+    private nonisolated static func documentAfterLoadRepair(text: String, metadata: NoteMetadata) -> (NoteDocument, [String]) {
+        var allWarnings: [String] = []
+
+        let pass1 = RangeNormalizer.normalize(metadata: metadata, for: text)
+        allWarnings.append(contentsOf: pass1.warnings)
         var document = NoteDocument(
-            id: normalized.normalizedMetadata.noteID,
+            id: pass1.normalizedMetadata.noteID,
             text: text,
-            metadata: normalized.normalizedMetadata
+            metadata: pass1.normalizedMetadata
         )
 
         if !NoteIntegrity.check(document: document).isValid {
-            let again = RangeNormalizer.normalize(metadata: document.metadata, for: document.text)
-            document = NoteDocument(id: again.normalizedMetadata.noteID, text: text, metadata: again.normalizedMetadata)
+            let pass2 = RangeNormalizer.normalize(metadata: document.metadata, for: document.text)
+            allWarnings.append(contentsOf: pass2.warnings)
+            document = NoteDocument(id: pass2.normalizedMetadata.noteID, text: text, metadata: pass2.normalizedMetadata)
         }
 
         if !NoteIntegrity.check(document: document).isValid {
@@ -426,10 +441,12 @@ actor NoteRepository {
                 ],
                 spans: []
             )
-            let repaired = RangeNormalizer.normalize(metadata: fallback, for: text).normalizedMetadata
-            document = NoteDocument(id: repaired.noteID, text: text, metadata: repaired)
+            let pass3 = RangeNormalizer.normalize(metadata: fallback, for: text)
+            allWarnings.append(contentsOf: pass3.warnings)
+            allWarnings.append("Metadata was too corrupt to repair incrementally; rebuilt as single paragraph block.")
+            document = NoteDocument(id: pass3.normalizedMetadata.noteID, text: text, metadata: pass3.normalizedMetadata)
         }
 
-        return document
+        return (document, allWarnings)
     }
 }

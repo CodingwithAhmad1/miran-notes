@@ -22,7 +22,7 @@ final class RenameNoteTests: XCTestCase {
         XCTAssertTrue(newBase.contains("renamed"))
 
         let loaded = try await repo.loadNote(baseName: newBase)
-        XCTAssertEqual(loaded.metadata.noteID, id)
+        XCTAssertEqual(loaded.document.metadata.noteID, id)
         XCTAssertFalse(FileManager.default.fileExists(atPath: vault.appendingPathComponent("\(oldBase).txt").path))
     }
 }

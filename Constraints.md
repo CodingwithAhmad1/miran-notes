@@ -1,6 +1,6 @@
 # Constraints
 
-This document records **non-negotiable product and engineering constraints** for Miran Notes, including known limits that no implementation can fully “solve.”
+This document records **non-negotiable product and engineering constraints** for Miran Notes, including known limits that no implementation can fully "solve."
 
 ## Product scope
 
@@ -13,7 +13,9 @@ When plain text and metadata disagree (for example after an external edit to `no
 
 **Constraint:** The app must **detect** inconsistency, **classify** it (safe vs ambiguous), and **never silently pick a semantic winner** when ambiguity matters. Acceptable behavior includes: blocking save, offering a **repair preview**, or requiring explicit user confirmation before rewriting sidecar metadata.
 
-This limitation is **fundamental**; later discussion may refine UX, not “solve” intent inference.
+**Load-time advisory:** `NoteRepository.loadNote` now returns `NoteLoadResult` which carries any `repairWarnings` collected during the three `RangeNormalizer.normalize` passes. `AppModel` surfaces these via `@Published var repairNotice: String?`, displayed as a dismissible banner. This satisfies the "detect and classify" requirement without blocking the editor. A missing `[[...]]` link-metadata gap is detected separately and included in the same notice.
+
+This limitation is **fundamental**; later discussion may refine UX, not "solve" intent inference.
 
 ## Storage format evolution
 
@@ -31,9 +33,10 @@ The canonical note model and `NSTextView` are two representations of text. Engin
 
 ## Rich text and slash commands
 
-- **Dual representation:** Canonical plain text plus sidecar metadata (blocks, spans, links) is the source of truth. `NSTextView` attributes are **derived**: an `EditorVisualStyle` pass applies block fonts, span styles (bold / italic / code), and link coloring whenever the model updates from **any** source (typing, undo, structural commands, external reload). If that pass is skipped, the buffer can briefly disagree with metadata.
+- **Dual representation:** Canonical plain text plus sidecar metadata (blocks, spans, links) is the source of truth. `NSTextView` attributes are **derived**: an `EditorVisualStyle` pass applies block fonts, span styles (bold / italic / code), and link coloring whenever the model updates from **any** source (typing, undo, structural commands, external reload). `onCommands` returns `NoteDocument` synchronously so the coordinator calls `refreshVisualChrome` with the updated document immediately — no lag between command dispatch and visual update.
+- **Cursor position:** `SingleSurfaceNoteEditor` exposes `@Binding var cursorOffset: Int`; the coordinator writes it on every `textViewDidChangeSelection`. `AppModel.editorCursorOffset` tracks the live caret position so cursor-aware operations (e.g. wiki-link insertion via the toolbar) land at the cursor rather than end-of-document.
 - **IME / marked text:** While the text view has **marked text** (composition), the editor does not run slash detection and formatting shortcuts (`toggleBold:`, etc.) do not apply, so composition is not torn down mid-sequence.
-- **Slash commands (MVP):** Detection is **line-start only** (after a newline or at document start, with `/` as the first character on the line). A command **commits** when the user types **Space** or **Return** after a registered token (`/h1`–`/h3`, `/p`, `/code`). Partial tokens such as `/h` do nothing until a commit character. **Registry order** defines which pattern wins if two entries could match (built-ins are disjoint). “Slash anywhere” would need a separate spec.
+- **Slash commands:** Detection is **line-start only** (after a newline or at document start, with `/` as the first character on the line). A command **commits** when the user types **Space** or **Return** after a registered token (`/h1`–`/h3`, `/p`, `/code`, `/list`, `/divider`, `/callout`). Partial tokens such as `/h` do nothing until a commit character. **Registry order** defines which pattern wins if two entries could match (built-ins are disjoint). "Slash anywhere" would need a separate spec.
 - **External editors:** A literal `/h1` in `note.txt` stays plain text until the user edits in-app in a way that triggers detection (or a future explicit conversion). This aligns with **Semantic reconciliation**: no silent semantic rewrite of metadata without an explicit editing action the user can reason about.
 - **Notion parity limits:** Slash commands plus heading fonts improve the experience but do **not** deliver full per-block chrome (gutters, drag handles, block menus) in a single `NSTextView`; see **Block chrome and layout** above.
 
@@ -62,11 +65,11 @@ The app uses **document-level undo** via the window `UndoManager`: each user edi
 
 ## Integrity and automated tests (Phase 4)
 
-- **`NoteIntegrity`** ([`Sources/MiranNotesCore/NoteIntegrity.swift`](Sources/MiranNotesCore/NoteIntegrity.swift)) is the single validation entry point: it reports whether block ranges form a **exact UTF-16 partition** of the text and whether spans sit in bounds.
+- **`NoteIntegrity`** ([`Sources/MiranNotesCore/NoteIntegrity.swift`](Sources/MiranNotesCore/NoteIntegrity.swift)) is the single validation entry point: it reports whether block ranges form an **exact UTF-16 partition** of the text and whether spans sit in bounds.
 - **Load and save** paths call **`NoteIntegrity.logIfInvalid`** so invalid states are visible in the unified logging system without crashing in release ([`NoteRepository`](Sources/MiranNotesApp/Data/NoteRepository.swift)).
-- **Debug builds** assert on `NoteIntegrity` after each `EditCommandEngine.apply` (replacing the older `RangeNormalizer.isValid`-only assert).
+- **`adjustBlocks` is now exhaustive** for the common cases: single-block edits (delta-adjust + zero-length merge), multi-block replacements (deterministic collapse into first block preserving its id and type), and out-of-bounds edits (logged `assertionFailure`). `RangeNormalizer.normalize` fires only as a safety-net fallback and logs to the `EditEngine` category when it does.
 - **Regression tests** live under [`Tests/MiranNotesTests/`](Tests/MiranNotesTests/) (`swift test`). They include deterministic **random `replaceText` sequences**, [`SpanAndBlockAdjustmentTests`](Tests/MiranNotesTests/SpanAndBlockAdjustmentTests.swift) for `SpanAdjuster` and `EditCommandEngine.adjustBlocks`, and span/block scenarios.
-- **Safety net:** if incremental block adjustment after a replace ever leaves metadata invalid, **`EditCommandEngine` applies `RangeNormalizer.normalize`** for that step so the in-memory document does not stay broken. This heals drift but can **change block boundaries**; long-term, tighten `adjustBlocks` so the fallback rarely runs. Silent destructive repair of **on-disk** files is still governed by the semantic reconciliation rules above.
+- **Safety net:** if incremental block adjustment after a replace ever leaves metadata invalid (logged under `app.miran.notes/EditEngine`), `EditCommandEngine` applies `RangeNormalizer.normalize` for that step so the in-memory document does not stay broken. Silent destructive repair of **on-disk** files is still governed by the semantic reconciliation rules above.
 
 ## External file changes and conflicts (Phase 5)
 
@@ -79,12 +82,16 @@ The app uses **document-level undo** via the window `UndoManager`: each user edi
 
 ## Future model and sync hooks (Phase 6)
 
-Types in [`Sources/MiranNotesCore/ExtensionPoints.swift`](Sources/MiranNotesCore/ExtensionPoints.swift) document **intentional extension points** only: rich inline canonical snapshots, tree-shaped blocks vs today’s flat `[Block]` list, structured artifacts (tables / DB-like blobs) likely needing auxiliary storage, and a placeholder for a future sync transport. They are **not** wired into editing or persistence; they exist so features can name shared concepts without ad-hoc one-off types.
+Types in [`Sources/MiranNotesCore/ExtensionPoints.swift`](Sources/MiranNotesCore/ExtensionPoints.swift) document **intentional extension points** only: rich inline canonical snapshots, tree-shaped blocks vs today's flat `[Block]` list, structured artifacts (tables / DB-like blobs) likely needing auxiliary storage, and a placeholder for a future sync transport. They are **not** wired into editing or persistence; they exist so features can name shared concepts without ad-hoc one-off types.
 
 ## Vault tooling and observability
 
 - **Link graph rebuild:** `NoteRepository.rebuildLinkGraphFull()` performs a full vault scan; success and note counts are logged via `Logger` (`Vault` category, subsystem `app.miran.notes`). Use sparingly on cold start or after bulk external edits; normal editing updates the graph incrementally on save.
+- **`EditEngine` category** (`app.miran.notes/EditEngine`): logged when the `adjustBlocks` normalize fallback fires. Useful for measuring fallback frequency in Console during development.
 
 ## Related planning
 
-Implementation work is guided by the editor hardening roadmap in `.cursor/plans/` (see `editor_hardening_roadmap_*.plan.md`). This file names constraints; the roadmap names phases and tasks.
+- **Repository index:** [docs/README.md](docs/README.md) links constraints, ADRs, and in-repo plans.
+- **In-repo plans and roadmaps:** [docs/plans/](docs/plans/) — durable planning notes that ship with the repo. IDE-only plans (for example under `.cursor/plans/` on a developer machine) should be copied or summarized there when they matter to contributors.
+
+This file names constraints; roadmaps and feature plans live under `docs/plans/` and in linked ADRs.

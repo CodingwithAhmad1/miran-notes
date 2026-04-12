@@ -6,7 +6,7 @@ import SwiftUI
 struct TextKit2BlockEditor: NSViewRepresentable {
     let block: Block
     @Binding var document: NoteDocument
-    var onCommand: (EditCommand) -> Void
+    var onCommand: (EditCommand) -> NoteDocument
 
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
@@ -113,7 +113,7 @@ struct TextKit2BlockEditor: NSViewRepresentable {
 
             let replacement = textView.string
             let command = EditCommand.insertText(range: parent.block.range, text: replacement)
-            parent.onCommand(command)
+            _ = parent.onCommand(command)
         }
     }
 }

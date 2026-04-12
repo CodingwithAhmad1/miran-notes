@@ -24,6 +24,9 @@ final class AppModel: ObservableObject {
     @Published var tableEditorPayload: TableEditorPayload?
     @Published var isLoading = false
     @Published var lastError: String?
+    /// Non-nil when load-time structural repair ran or wiki-link metadata is missing.
+    /// Shown as a dismissible advisory banner — the editor is always open.
+    @Published var repairNotice: String?
     /// When non-nil, shows the external-edit conflict alert (`diskDate` is the on-disk modification time that triggered it).
     @Published var externalEditConflictAlert: ExternalEditConflict?
 
@@ -36,6 +39,10 @@ final class AppModel: ObservableObject {
     private var lastPersistedDocument: NoteDocument?
     private var lastKnownDiskDate: Date?
     private var undoManager: UndoManager?
+    /// Bumped when the selected note identity changes so debounced autosave completions cannot apply stale persistence state.
+    private var navigationGeneration = 0
+    /// Current cursor offset (UTF-16) in the active editor surface, updated by the coordinator on selection change.
+    @Published var editorCursorOffset: Int = 0
 
     init(repository: NoteRepository) {
         self.repository = repository
@@ -104,6 +111,7 @@ final class AppModel: ObservableObject {
             backlinks = result
         } catch {
             backlinks = []
+            lastError = "Could not refresh backlinks: \(error.localizedDescription)"
         }
     }
 
@@ -118,13 +126,16 @@ final class AppModel: ObservableObject {
     func insertWikiLink(to targetNoteID: UUID, displayText: String? = nil) {
         guard let doc = activeDocument else { return }
         let text = displayText ?? (noteSummaries.first { $0.noteID == targetNoteID }?.title ?? "note")
-        let offset = RangeNormalizer.utf16Length(of: doc.text)
+        let docLength = RangeNormalizer.utf16Length(of: doc.text)
+        let offset = min(max(0, editorCursorOffset), docLength)
         apply([.insertWikiLink(utf16Offset: offset, targetNoteID: targetNoteID, displayText: text)])
     }
 
     func renameActiveNote(newTitle: String) {
         guard let oldBase = selectedBaseName else { return }
         Task { @MainActor in
+            await flushCurrentNoteToDiskIfDirty()
+            navigationGeneration += 1
             do {
                 let newBase = try await repository.renameNote(from: oldBase, to: newTitle)
                 await refreshNotes()
@@ -137,7 +148,7 @@ final class AppModel: ObservableObject {
     }
 
     func addTableToActiveNote() {
-        guard let doc = activeDocument, let baseName = selectedBaseName else { return }
+        guard let doc = activeDocument else { return }
         let noteID = doc.metadata.noteID
         let artifactID = UUID()
         Task { @MainActor in
@@ -147,9 +158,8 @@ final class AppModel: ObservableObject {
                     noteID: noteID,
                     artifactID: artifactID
                 )
+                // Register the artifact in the model — scheduleAutosave handles persistence.
                 apply([.registerTableArtifact(artifactID: artifactID, relativePath: paths.relativePath)])
-                guard let updated = activeDocument else { return }
-                try await repository.save(updated, asBaseName: baseName)
                 tableEditorPayload = TableEditorPayload(id: artifactID, jsonlURL: paths.jsonl, schemaURL: paths.schema)
             } catch {
                 lastError = "Could not create table: \(error.localizedDescription)"
@@ -172,6 +182,8 @@ final class AppModel: ObservableObject {
 
     func createNote() {
         Task { @MainActor in
+            await flushCurrentNoteToDiskIfDirty()
+            navigationGeneration += 1
             do {
                 let (document, baseName) = try await repository.createNote(named: "untitled-note")
                 await refreshNotes()
@@ -195,14 +207,16 @@ final class AppModel: ObservableObject {
             activeDocument = nil
             lastPersistedDocument = nil
             lastKnownDiskDate = nil
+            repairNotice = nil
             backlinks = []
             clearUndoStack()
             return
         }
         do {
-            let loaded = try await repository.loadNote(baseName: selectedBaseName)
-            activeDocument = loaded
-            lastPersistedDocument = loaded
+            let result = try await repository.loadNote(baseName: selectedBaseName)
+            activeDocument = result.document
+            lastPersistedDocument = result.document
+            repairNotice = Self.buildRepairNotice(result: result)
             do {
                 lastKnownDiskDate = try await repository.noteModifiedDate(baseName: selectedBaseName)
             } catch {
@@ -215,17 +229,36 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func apply(_ command: EditCommand) {
+    private static func buildRepairNotice(result: NoteLoadResult) -> String? {
+        var parts: [String] = []
+
+        if result.wasRepaired {
+            parts.append("Block structure was repaired on load — metadata may not perfectly reflect the original block types.")
+        }
+
+        let text = result.document.text
+        let hasWikiSyntax = text.contains("[[")
+        let hasMissingLinkMetadata = hasWikiSyntax && result.document.metadata.links.isEmpty
+        if hasMissingLinkMetadata {
+            parts.append("Note contains [[link]] syntax with no recorded link metadata. Links will not be navigable until re-created in the editor.")
+        }
+
+        return parts.isEmpty ? nil : parts.joined(separator: "\n")
+    }
+
+    @discardableResult
+    func apply(_ command: EditCommand) -> NoteDocument {
         apply([command])
     }
 
-    func apply(_ commands: [EditCommand], recordUndo: Bool = true) {
-        guard var doc = activeDocument else { return }
+    @discardableResult
+    func apply(_ commands: [EditCommand], recordUndo: Bool = true) -> NoteDocument {
+        guard var doc = activeDocument else { return activeDocument ?? NoteDocument(text: "", metadata: .empty) }
         let before = doc
         for command in commands {
             doc = EditCommandEngine.apply(command, to: doc)
         }
-        guard doc != before else { return }
+        guard doc != before else { return doc }
 
         if recordUndo, let undo = undoManager {
             let after = doc
@@ -238,6 +271,7 @@ final class AppModel: ObservableObject {
         activeDocument = doc
         scheduleAutosave()
         Task { await refreshBacklinks() }
+        return doc
     }
 
     private func applyUndoSnapshot(from after: NoteDocument, to before: NoteDocument) {
@@ -293,16 +327,37 @@ final class AppModel: ObservableObject {
 
     func changeSelection(baseName: String?) {
         externalEditConflictAlert = nil
-        selectedBaseName = baseName
         Task { @MainActor in
+            if selectedBaseName == baseName { return }
+            await flushCurrentNoteToDiskIfDirty()
+            navigationGeneration += 1
+            selectedBaseName = baseName
             await loadSelectedNote()
+        }
+    }
+
+    /// Cancels any debounced save, then persists the current buffer if it differs from the last known on-disk snapshot.
+    private func flushCurrentNoteToDiskIfDirty() async {
+        saveTask?.cancel()
+        saveTask = nil
+        guard let doc = activeDocument, let baseName = selectedBaseName else { return }
+        guard doc != lastPersistedDocument else { return }
+        do {
+            try await repository.save(doc, asBaseName: baseName)
+            let modified = try await repository.noteModifiedDate(baseName: baseName)
+            lastKnownDiskDate = modified
+            lastPersistedDocument = doc
+            await refreshBacklinks()
+        } catch {
+            lastError = "Autosave failed: \(error.localizedDescription)"
         }
     }
 
     private func scheduleAutosave() {
         saveTask?.cancel()
-        guard let note = activeDocument, let baseName = selectedBaseName else { return }
-        saveTask = Task {
+        guard let expectedBaseName = selectedBaseName, activeDocument != nil else { return }
+        let gen = navigationGeneration
+        saveTask = Task { @MainActor in
             defer {
                 Task { @MainActor in
                     self.saveTask = nil
@@ -311,19 +366,18 @@ final class AppModel: ObservableObject {
             }
             try? await Task.sleep(for: .milliseconds(400))
             guard !Task.isCancelled else { return }
+            guard gen == navigationGeneration else { return }
+            guard selectedBaseName == expectedBaseName else { return }
+            guard let latest = activeDocument else { return }
             do {
-                try await repository.save(note, asBaseName: baseName)
-                let modified = try await repository.noteModifiedDate(baseName: baseName)
-                await MainActor.run {
-                    self.lastKnownDiskDate = modified
-                    // Persist authority matches the bytes written (`note`), not a possibly newer `activeDocument`.
-                    self.lastPersistedDocument = note
-                    Task { await self.refreshBacklinks() }
-                }
+                try await repository.save(latest, asBaseName: expectedBaseName)
+                let modified = try await repository.noteModifiedDate(baseName: expectedBaseName)
+                guard gen == navigationGeneration, selectedBaseName == expectedBaseName else { return }
+                lastKnownDiskDate = modified
+                lastPersistedDocument = latest
+                Task { await self.refreshBacklinks() }
             } catch {
-                await MainActor.run {
-                    self.lastError = "Autosave failed: \(error.localizedDescription)"
-                }
+                lastError = "Autosave failed: \(error.localizedDescription)"
             }
         }
     }
@@ -391,7 +445,7 @@ final class AppModel: ObservableObject {
         let loadedFromDisk: NoteDocument
         do {
             let raw = try await repository.loadNote(baseName: selectedBaseName)
-            loadedFromDisk = EditCommandEngine.apply(.repairMetadata, to: raw)
+            loadedFromDisk = EditCommandEngine.apply(.repairMetadata, to: raw.document)
         } catch {
             lastError = "Failed to read external changes: \(error.localizedDescription)"
             return

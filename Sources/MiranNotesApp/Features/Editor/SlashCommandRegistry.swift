@@ -19,6 +19,15 @@ enum SlashCommandRegistry {
         if SlashCode.matches(token) {
             return SlashCode.commands(tokenRange: tokenRange, blockID: blockID)
         }
+        if SlashListItem.matches(token) {
+            return SlashListItem.commands(tokenRange: tokenRange, blockID: blockID)
+        }
+        if SlashDivider.matches(token) {
+            return SlashDivider.commands(tokenRange: tokenRange, blockID: blockID)
+        }
+        if SlashCallout.matches(token) {
+            return SlashCallout.commands(tokenRange: tokenRange, blockID: blockID)
+        }
         return nil
     }
 }
@@ -65,6 +74,45 @@ private enum SlashCode {
         [
             .replaceText(range: tokenRange, replacement: ""),
             .changeBlockType(blockID: blockID, type: .code, headingLevel: nil)
+        ]
+    }
+}
+
+private enum SlashListItem {
+    static func matches(_ tokenWithoutSlash: String) -> Bool {
+        tokenWithoutSlash == "list"
+    }
+
+    static func commands(tokenRange: MiranNotesCore.TextRange, blockID: String) -> [EditCommand] {
+        [
+            .replaceText(range: tokenRange, replacement: ""),
+            .changeBlockType(blockID: blockID, type: .listItem, headingLevel: nil)
+        ]
+    }
+}
+
+private enum SlashDivider {
+    static func matches(_ tokenWithoutSlash: String) -> Bool {
+        tokenWithoutSlash == "divider"
+    }
+
+    static func commands(tokenRange: MiranNotesCore.TextRange, blockID: String) -> [EditCommand] {
+        [
+            .replaceText(range: tokenRange, replacement: ""),
+            .changeBlockType(blockID: blockID, type: .divider, headingLevel: nil)
+        ]
+    }
+}
+
+private enum SlashCallout {
+    static func matches(_ tokenWithoutSlash: String) -> Bool {
+        tokenWithoutSlash == "callout"
+    }
+
+    static func commands(tokenRange: MiranNotesCore.TextRange, blockID: String) -> [EditCommand] {
+        [
+            .replaceText(range: tokenRange, replacement: ""),
+            .changeBlockType(blockID: blockID, type: .callout, headingLevel: nil)
         ]
     }
 }

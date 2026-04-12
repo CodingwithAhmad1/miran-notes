@@ -66,10 +66,10 @@ final class NoteRepositoryTests: XCTestCase {
         try data.write(to: metaURL)
 
         let repo = NoteRepository(vaultURL: vault)
-        let loaded = try await repo.loadNote(baseName: base)
-        let report = NoteIntegrity.check(document: loaded)
+        let result = try await repo.loadNote(baseName: base)
+        let report = NoteIntegrity.check(document: result.document)
         XCTAssertTrue(report.isValid, "\(report.issues)")
-        XCTAssertEqual(loaded.text, "hello world")
+        XCTAssertEqual(result.document.text, "hello world")
     }
 
     func testSaveAndLoadRoundTrip() async throws {
@@ -94,8 +94,8 @@ final class NoteRepositoryTests: XCTestCase {
         )
         let original = NoteDocument(id: noteID, text: "hello", metadata: metadata)
         try await repo.save(original, asBaseName: base)
-        let loaded = try await repo.loadNote(baseName: base)
-        XCTAssertEqual(loaded.text, "hello")
-        XCTAssertTrue(NoteIntegrity.check(document: loaded).isValid)
+        let result = try await repo.loadNote(baseName: base)
+        XCTAssertEqual(result.document.text, "hello")
+        XCTAssertTrue(NoteIntegrity.check(document: result.document).isValid)
     }
 }

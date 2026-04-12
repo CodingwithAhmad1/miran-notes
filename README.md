@@ -2,14 +2,18 @@
 
 Local-first, Swift-native notes editor with plain-text storage and sidecar metadata.
 
+**Documentation hub (start here for context in a new session):** [docs/README.md](docs/README.md) — map of [Constraints.md](Constraints.md), ADRs, plans, and code pointers.
+
 ## Implemented Architecture
 
 - `note.txt` holds canonical text content.
-- `note.meta.json` stores `schemaVersion`, block ranges, and span styles.
+- `note.meta.json` stores `schemaVersion`, block ranges, span styles, links, and artifact refs.
 - SwiftUI renders block rows while TextKit2 powers inline text editing via `NSTextView`.
-- All editor mutations run through `EditCommandEngine`.
-- Metadata invariants: incremental updates with `RangeNormalizer` fallback when needed; `NoteIntegrity` validates structure.
-- Debounced autosave writes text and metadata using **per-file** atomic replaces (`tmp` + `replaceItemAt`). A crash between the two writes can leave the pair briefly inconsistent; **load** re-runs `RangeNormalizer` and falls back to a single-block repair so the editor always opens a structurally valid document.
+- All editor mutations run through `EditCommandEngine`; `apply(_:)` returns the resulting `NoteDocument` synchronously so callers (editor coordinator, tests) can refresh immediately.
+- Metadata invariants: `adjustBlocks` handles single-block, zero-length-merge, and multi-block-collapse cases deterministically; `RangeNormalizer` fallback fires only for edge cases and logs when it does; `NoteIntegrity` validates structure.
+- Debounced autosave writes text and metadata using **per-file** atomic replaces (`tmp` + `replaceItemAt`). A crash between the two writes can leave the pair briefly inconsistent; **load** (`NoteLoadResult`) re-runs `RangeNormalizer` and falls back to a single-block repair; any repair warnings are surfaced to the user via a dismissible banner (`repairNotice`).
+- **Cursor tracking:** `SingleSurfaceNoteEditor` publishes `cursorOffset` via `@Binding`; `AppModel.editorCursorOffset` reflects the live caret position so operations like wiki-link insertion land at the cursor rather than end-of-document.
+- **Slash commands:** `/h1`–`/h3`, `/p`, `/code`, `/list`, `/divider`, `/callout` — all line-start only, commit on Space or Return.
 
 ## Module Layout
 
@@ -29,10 +33,13 @@ Local-first, Swift-native notes editor with plain-text storage and sidecar metad
 
 - [x] Local vault storage using `.txt` + `.meta.json`.
 - [x] Block types modeled for paragraph, heading, list item, callout, code, divider.
-- [x] Command-based edit pipeline with post-edit normalization.
-- [x] TextKit2-backed editable block integration on macOS.
-- [x] Debounced persistence with atomic writes.
-- [x] Project builds successfully with `swift build`.
+- [x] Command-based edit pipeline; `apply(_:)` returns `NoteDocument` synchronously.
+- [x] TextKit2-backed editable block integration on macOS; cursor position tracked via `@Binding`.
+- [x] Debounced persistence with atomic writes; `NoteLoadResult` surfaces repair warnings.
+- [x] Dismissible repair-notice banner when load-time structural repair ran or link metadata is missing.
+- [x] Slash commands `/list`, `/divider`, `/callout` registered alongside `/h1`–`/h3`, `/p`, `/code`.
+- [x] Deterministic `adjustBlocks` without normalize in common paths; fallback logged when triggered.
+- [x] Project builds and all 55 tests pass (`swift test`).
 
 ## Run
 

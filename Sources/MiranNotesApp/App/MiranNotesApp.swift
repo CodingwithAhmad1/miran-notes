@@ -108,16 +108,24 @@ private struct EditorRootView: View {
         Group {
             if let current = model.activeDocument {
                 HSplitView {
-                    SingleSurfaceNoteEditor(
-                        document: Binding(
-                            get: { model.activeDocument ?? current },
-                            set: { model.activeDocument = $0 }
-                        ),
-                        onCommands: { model.apply($0) },
-                        onWikiLinkClick: { targetID in
-                            model.openNote(noteID: targetID)
+                    VStack(spacing: 0) {
+                        if let notice = model.repairNotice {
+                            RepairNoticeBanner(message: notice) {
+                                model.repairNotice = nil
+                            }
                         }
-                    )
+                        SingleSurfaceNoteEditor(
+                            document: Binding(
+                                get: { model.activeDocument ?? current },
+                                set: { model.activeDocument = $0 }
+                            ),
+                            cursorOffset: $model.editorCursorOffset,
+                            onCommands: { commands in model.apply(commands) },
+                            onWikiLinkClick: { targetID in
+                                model.openNote(noteID: targetID)
+                            }
+                        )
+                    }
                     .frame(minWidth: 320)
                     .navigationTitle("Editor")
 
@@ -167,5 +175,29 @@ private struct EditorRootView: View {
         .onChange(of: undoManager) { _, newValue in
             model.setUndoManager(newValue)
         }
+    }
+}
+
+private struct RepairNoticeBanner: View {
+    let message: String
+    let onDismiss: () -> Void
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "exclamationmark.triangle")
+                .foregroundStyle(.orange)
+            Text(message)
+                .font(.caption)
+                .foregroundStyle(.primary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer()
+            Button("Dismiss", action: onDismiss)
+                .buttonStyle(.plain)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Color.orange.opacity(0.12))
     }
 }

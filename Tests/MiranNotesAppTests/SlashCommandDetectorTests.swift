@@ -74,4 +74,56 @@ final class SlashCommandDetectorTests: XCTestCase {
         XCTAssertEqual(type, .heading)
         XCTAssertEqual(level, 1)
     }
+
+    func testListSpaceAtLineStartProducesListItemBlockType() {
+        let model = "/list"
+        let storage = "/list "
+        let diff = (NSRange(location: 5, length: 0), " ")
+        let m = SlashCommandDetector.match(modelText: model, storageText: storage, insertion: diff)
+        XCTAssertNotNil(m)
+        let cmds = SlashCommandRegistry.editCommands(for: m!, blockID: "b1")
+        XCTAssertEqual(cmds?.count, 2)
+        guard case let .changeBlockType(_, type, _) = cmds?[1] else { XCTFail(); return }
+        XCTAssertEqual(type, .listItem)
+    }
+
+    func testDividerSpaceAtLineStartProducesDividerBlockType() {
+        let model = "/divider"
+        let storage = "/divider "
+        let diff = (NSRange(location: 8, length: 0), " ")
+        let m = SlashCommandDetector.match(modelText: model, storageText: storage, insertion: diff)
+        XCTAssertNotNil(m)
+        let cmds = SlashCommandRegistry.editCommands(for: m!, blockID: "b2")
+        XCTAssertEqual(cmds?.count, 2)
+        guard case let .changeBlockType(_, type, _) = cmds?[1] else { XCTFail(); return }
+        XCTAssertEqual(type, .divider)
+    }
+
+    func testCalloutSpaceAtLineStartProducesCalloutBlockType() {
+        let model = "/callout"
+        let storage = "/callout "
+        let diff = (NSRange(location: 8, length: 0), " ")
+        let m = SlashCommandDetector.match(modelText: model, storageText: storage, insertion: diff)
+        XCTAssertNotNil(m)
+        let cmds = SlashCommandRegistry.editCommands(for: m!, blockID: "b3")
+        XCTAssertEqual(cmds?.count, 2)
+        guard case let .changeBlockType(_, type, _) = cmds?[1] else { XCTFail(); return }
+        XCTAssertEqual(type, .callout)
+    }
+
+    func testPartialListTokenDoesNotCommitBeforeSpace() {
+        let model = "/lis"
+        let storage = "/lis"
+        let diff = (NSRange(location: 4, length: 0), "")
+        let m = SlashCommandDetector.match(modelText: model, storageText: storage, insertion: diff)
+        XCTAssertNil(m, "/lis without commit character should not produce a match")
+    }
+
+    func testPartialDividerTokenDoesNotCommitBeforeSpace() {
+        let model = "/divide"
+        let storage = "/divider"
+        let diff = (NSRange(location: 7, length: 0), "r")
+        let m = SlashCommandDetector.match(modelText: model, storageText: storage, insertion: diff)
+        XCTAssertNil(m, "/divider without trailing space/return should not produce a match")
+    }
 }
