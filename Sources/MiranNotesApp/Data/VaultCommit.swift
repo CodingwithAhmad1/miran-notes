@@ -25,9 +25,15 @@ struct VaultCommitContext {
     let metaURL: URL
     let manifestURL: URL
     let linkGraphURL: URL
+    let relationshipIndexURL: URL
+    let folderCatalogURL: URL
+    let pathIndexURL: URL
     let encoder: JSONEncoder
     let manifest: VaultManifest
     let linkGraph: LinkGraph
+    let relationshipIndex: RelationshipIndex
+    let folderCatalog: FolderCatalog
+    let pathIndex: PathIndex
     let atomicWrite: (Data, URL) throws -> Void
 }
 

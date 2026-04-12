@@ -3,6 +3,10 @@ import MiranNotesCore
 
 /// In-memory JSONL table with debounced atomic persistence (lazy full read on load).
 actor TableDocument {
+    private enum Budget {
+        static let maxLoadedRows = 20_000
+    }
+
     private let jsonlURL: URL
     private let schemaURL: URL
     private let encoder: JSONEncoder
@@ -44,6 +48,7 @@ actor TableDocument {
         let data = try String(contentsOf: jsonlURL, encoding: .utf8)
         var parsed: [TableRowRecord] = []
         for line in data.split(whereSeparator: \.isNewline) {
+            if parsed.count >= Budget.maxLoadedRows { break }
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             guard !trimmed.isEmpty else { continue }
             if let rowData = trimmed.data(using: .utf8),
@@ -72,6 +77,8 @@ actor TableDocument {
 
     func updateCell(rowId: UUID, columnId: String, value: String, recordUndo: Bool = true) {
         guard let index = rows.firstIndex(where: { $0.id == rowId }) else { return }
+        let columnType = schema.columnType(for: columnId)
+        guard columnType.accepts(value) else { return }
         if recordUndo {
             pushUndo()
         }
@@ -150,6 +157,15 @@ actor TableDocument {
 
     func snapshot() -> (schema: TableSchemaRecord, rows: [TableRowRecord]) {
         (schema, rows)
+    }
+
+    /// Lightweight query primitive for table-backed filtering without requiring full DB subsystem yet.
+    func filteredRows(columnId: String, contains query: String) -> [TableRowRecord] {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return rows }
+        return rows.filter { row in
+            row.cells[columnId]?.localizedCaseInsensitiveContains(trimmed) == true
+        }
     }
 }
 

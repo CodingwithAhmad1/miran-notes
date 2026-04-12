@@ -258,6 +258,34 @@ actor NoteRepository {
         var graph = try loadLinkGraph()
         let targets = documentToPersist.metadata.links.map(\.targetNoteID)
         graph.setOutgoing(from: documentToPersist.metadata.noteID, to: targets)
+        var relationshipIndex = try loadRelationshipIndex()
+        let linkRelationships = documentToPersist.metadata.links.map { link in
+            LinkRelationship(
+                sourceNoteID: documentToPersist.metadata.noteID,
+                target: .note(noteID: link.targetNoteID),
+                relationshipKind: "noteLink"
+            )
+        }
+        let artifactRelationships = documentToPersist.metadata.artifacts.map { artifact in
+            LinkRelationship(
+                sourceNoteID: documentToPersist.metadata.noteID,
+                target: .artifact(noteID: documentToPersist.metadata.noteID, artifactID: artifact.id, kind: artifact.kind),
+                relationshipKind: "artifactLink"
+            )
+        }
+        relationshipIndex.replaceLinks(
+            from: documentToPersist.metadata.noteID,
+            with: linkRelationships + artifactRelationships
+        )
+
+        var folderCatalog = try loadFolderCatalog()
+        folderCatalog.ensureRoot()
+        var pathIndex = try loadPathIndex()
+        pathIndex.upsert(
+            noteID: documentToPersist.metadata.noteID,
+            folderID: FolderCatalog.rootFolderID,
+            relativePath: baseName
+        )
 
         let context = VaultCommitContext(
             baseName: baseName,
@@ -266,9 +294,15 @@ actor NoteRepository {
             metaURL: metaURL,
             manifestURL: manifestURL(),
             linkGraphURL: VaultPaths.linkGraphURL(vaultURL: vaultURL),
+            relationshipIndexURL: VaultPaths.relationshipIndexURL(vaultURL: vaultURL),
+            folderCatalogURL: VaultPaths.folderCatalogURL(vaultURL: vaultURL),
+            pathIndexURL: VaultPaths.pathIndexURL(vaultURL: vaultURL),
             encoder: encoder,
             manifest: manifest,
             linkGraph: graph,
+            relationshipIndex: relationshipIndex,
+            folderCatalog: folderCatalog,
+            pathIndex: pathIndex,
             atomicWrite: { data, url in
                 try self.atomicWrite(data, to: url)
             }
@@ -277,7 +311,10 @@ actor NoteRepository {
         let participants: [VaultCommitParticipant] = [
             NoteFilesCommitParticipant(),
             ManifestCommitParticipant(),
-            LinkGraphCommitParticipant()
+            LinkGraphCommitParticipant(),
+            RelationshipIndexCommitParticipant(),
+            FolderCatalogCommitParticipant(),
+            PathIndexCommitParticipant()
         ]
         var operations: [VaultCommitOperation] = []
         for participant in participants {
@@ -414,6 +451,33 @@ actor NoteRepository {
         guard let data = try? Data(contentsOf: url),
               let decoded = try? decoder.decode(VaultManifest.self, from: data) else {
             return nil
+        }
+        return decoded
+    }
+
+    private func loadRelationshipIndex() throws -> RelationshipIndex {
+        let url = VaultPaths.relationshipIndexURL(vaultURL: vaultURL)
+        guard let data = try? Data(contentsOf: url),
+              let decoded = try? decoder.decode(RelationshipIndex.self, from: data) else {
+            return RelationshipIndex()
+        }
+        return decoded
+    }
+
+    private func loadFolderCatalog() throws -> FolderCatalog {
+        let url = VaultPaths.folderCatalogURL(vaultURL: vaultURL)
+        guard let data = try? Data(contentsOf: url),
+              let decoded = try? decoder.decode(FolderCatalog.self, from: data) else {
+            return FolderCatalog()
+        }
+        return decoded
+    }
+
+    private func loadPathIndex() throws -> PathIndex {
+        let url = VaultPaths.pathIndexURL(vaultURL: vaultURL)
+        guard let data = try? Data(contentsOf: url),
+              let decoded = try? decoder.decode(PathIndex.self, from: data) else {
+            return PathIndex()
         }
         return decoded
     }
@@ -563,6 +627,57 @@ private struct LinkGraphCommitParticipant: VaultCommitParticipant {
                 operationID: "linkGraph",
                 execute: {
                     try context.atomicWrite(data, context.linkGraphURL)
+                }
+            )
+        ]
+    }
+}
+
+private struct RelationshipIndexCommitParticipant: VaultCommitParticipant {
+    let participantID = "relationshipIndex"
+
+    func operations(for context: VaultCommitContext) throws -> [VaultCommitOperation] {
+        let data = try context.encoder.encode(context.relationshipIndex)
+        return [
+            VaultCommitOperation(
+                participantID: participantID,
+                operationID: "relationshipIndex",
+                execute: {
+                    try context.atomicWrite(data, context.relationshipIndexURL)
+                }
+            )
+        ]
+    }
+}
+
+private struct FolderCatalogCommitParticipant: VaultCommitParticipant {
+    let participantID = "folderCatalog"
+
+    func operations(for context: VaultCommitContext) throws -> [VaultCommitOperation] {
+        let data = try context.encoder.encode(context.folderCatalog)
+        return [
+            VaultCommitOperation(
+                participantID: participantID,
+                operationID: "folderCatalog",
+                execute: {
+                    try context.atomicWrite(data, context.folderCatalogURL)
+                }
+            )
+        ]
+    }
+}
+
+private struct PathIndexCommitParticipant: VaultCommitParticipant {
+    let participantID = "pathIndex"
+
+    func operations(for context: VaultCommitContext) throws -> [VaultCommitOperation] {
+        let data = try context.encoder.encode(context.pathIndex)
+        return [
+            VaultCommitOperation(
+                participantID: participantID,
+                operationID: "pathIndex",
+                execute: {
+                    try context.atomicWrite(data, context.pathIndexURL)
                 }
             )
         ]

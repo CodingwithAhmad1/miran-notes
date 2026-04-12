@@ -120,4 +120,29 @@ final class AppModelTableTests: XCTestCase {
         XCTAssertEqual(returned.text, model.activeDocument?.text, "apply should return the same document that was set as activeDocument")
         XCTAssertTrue(returned.text.contains("Hello"))
     }
+
+    func testCommandInterceptorCanTransformCommandBatch() async throws {
+        let vault = try tempVaultURL()
+        let repo = NoteRepository(vaultURL: vault)
+        try await repo.ensureVault()
+        let (_, baseName) = try await repo.createNote(named: "interceptor-test")
+
+        let model = AppModel(repository: repo)
+        model.selectedBaseName = baseName
+        await model.loadSelectedNote()
+
+        model.registerCommandInterceptor { commands, _, _ in
+            commands.map { command in
+                switch command {
+                case let .replaceText(range, replacement):
+                    return .replaceText(range: range, replacement: replacement.uppercased())
+                default:
+                    return command
+                }
+            }
+        }
+
+        _ = model.apply(.replaceText(range: TextRange(start: 0, length: 0), replacement: "hello"))
+        XCTAssertEqual(model.activeDocument?.text, "HELLO")
+    }
 }

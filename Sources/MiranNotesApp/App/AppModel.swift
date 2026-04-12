@@ -48,6 +48,8 @@ final class AppModel: ObservableObject {
     @Published var editorCursorOffset: Int = 0
     private let undoPolicy = UndoPolicy.defaultPolicy
     private var approxUndoSnapshotBytes = 0
+    private let commandPipelineContract = CommandPipelineContract()
+    private var localCommandInterceptors: [([EditCommand], NoteDocument, CommandContext) -> [EditCommand]] = []
 
     init(repository: NoteRepository) {
         self.repository = repository
@@ -259,11 +261,20 @@ final class AppModel: ObservableObject {
         apply([command])
     }
 
+    func registerCommandInterceptor(_ interceptor: @escaping ([EditCommand], NoteDocument, CommandContext) -> [EditCommand]) {
+        localCommandInterceptors.append(interceptor)
+    }
+
     @discardableResult
     func apply(_ commands: [EditCommand], recordUndo: Bool = true) -> NoteDocument {
         guard var doc = activeDocument else { return activeDocument ?? NoteDocument(text: "", metadata: .empty) }
+        let sanitized = Array(commands.prefix(commandPipelineContract.maxCommandsPerBatch))
+        let context = CommandContext(trigger: "appModel.apply", selectionRange: nil)
+        let intercepted = localCommandInterceptors.reduce(sanitized) { partial, interceptor in
+            interceptor(partial, doc, context)
+        }
         let before = doc
-        for command in commands {
+        for command in intercepted {
             doc = EditCommandEngine.apply(command, to: doc)
         }
         guard doc != before else { return doc }
@@ -275,7 +286,7 @@ final class AppModel: ObservableObject {
             undo.registerUndo(withTarget: self) { model in
                 model.applyUndoSnapshot(from: after, to: before)
             }
-            undo.setActionName(Self.undoActionName(for: commands))
+            undo.setActionName(Self.undoActionName(for: intercepted))
             approxUndoSnapshotBytes += beforeCost + afterCost
             enforceUndoPolicyIfNeeded()
         }

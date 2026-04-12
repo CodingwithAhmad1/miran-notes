@@ -141,4 +141,50 @@ final class NoteRepositoryTests: XCTestCase {
         let metaURL = vault.appendingPathComponent("orphan.meta.json")
         XCTAssertTrue(FileManager.default.fileExists(atPath: metaURL.path))
     }
+
+    func testSaveUpdatesRelationshipAndPathIndexes() async throws {
+        let vault = try tempVaultURL()
+        let repo = NoteRepository(vaultURL: vault)
+        try await repo.ensureVault()
+        let noteID = UUID()
+        let targetID = UUID()
+        var metadata = NoteMetadata(
+            schemaVersion: NoteMetadata.currentSchemaVersion,
+            noteID: noteID,
+            blocks: [
+                Block(id: "b1", type: .paragraph, range: TextRange(start: 0, length: 5), level: nil, icon: nil)
+            ],
+            spans: [],
+            links: [
+                NoteLink(range: TextRange(start: 0, length: 5), targetNoteID: targetID, label: "target")
+            ]
+        )
+        let artifactID = UUID()
+        metadata.artifacts = [
+            EmbeddedArtifact(id: artifactID, kind: .table, relativePath: "tables/\(artifactID.uuidString.lowercased()).jsonl")
+        ]
+        let doc = NoteDocument(id: noteID, text: "hello", metadata: metadata)
+        try await repo.save(doc, asBaseName: "index-check")
+
+        let relationshipURL = VaultPaths.relationshipIndexURL(vaultURL: vault)
+        let pathIndexURL = VaultPaths.pathIndexURL(vaultURL: vault)
+        let folderCatalogURL = VaultPaths.folderCatalogURL(vaultURL: vault)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: relationshipURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: pathIndexURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: folderCatalogURL.path))
+
+        let relData = try Data(contentsOf: relationshipURL)
+        let pathData = try Data(contentsOf: pathIndexURL)
+        let decoder = JSONDecoder()
+        let rel = try decoder.decode(RelationshipIndex.self, from: relData)
+        let path = try decoder.decode(PathIndex.self, from: pathData)
+
+        XCTAssertTrue(rel.relationships.contains { relationship in
+            relationship.sourceNoteID == noteID && relationship.relationshipKind == "noteLink"
+        })
+        XCTAssertTrue(rel.relationships.contains { relationship in
+            relationship.sourceNoteID == noteID && relationship.relationshipKind == "artifactLink"
+        })
+        XCTAssertTrue(path.entries.contains { $0.noteID == noteID && $0.relativePath == "index-check" })
+    }
 }
