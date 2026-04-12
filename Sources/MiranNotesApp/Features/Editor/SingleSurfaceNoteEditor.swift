@@ -306,6 +306,16 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
                 ]
             }
 
+            if let slashMatch = SlashCommandDetector.match(
+                modelText: parent.document.text,
+                storageText: storageText,
+                insertion: insertion
+            ), let commands = SlashCommandRegistry.editCommands(
+                for: slashMatch, blockID: block.id, blockType: block.type
+            ) {
+                return commands
+            }
+
             return nil
         }
 

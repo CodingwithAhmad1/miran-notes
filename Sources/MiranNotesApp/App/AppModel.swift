@@ -51,8 +51,11 @@ final class AppModel: ObservableObject {
     private let commandPipelineContract = CommandPipelineContract()
     private var localCommandInterceptors: [([EditCommand], NoteDocument, CommandContext) -> [EditCommand]] = []
 
-    init(repository: NoteRepository) {
+    private let autosaveDebounceMilliseconds: UInt64
+
+    init(repository: NoteRepository, autosaveDebounceMilliseconds: UInt64 = 400) {
         self.repository = repository
+        self.autosaveDebounceMilliseconds = autosaveDebounceMilliseconds
     }
 
     func setUndoManager(_ manager: UndoManager?) {
@@ -397,7 +400,7 @@ final class AppModel: ObservableObject {
                     await self.runPendingExternalDiskReconciliationIfNeeded()
                 }
             }
-            try? await Task.sleep(for: .milliseconds(400))
+            try? await Task.sleep(for: .milliseconds(autosaveDebounceMilliseconds))
             guard !Task.isCancelled else { return }
             guard gen == navigationGeneration else { return }
             guard selectedBaseName == expectedBaseName else { return }
@@ -440,6 +443,12 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Test helper: mirrors what the vault watcher closure does without relying on filesystem events.
+    func simulateWatcherEvent() async {
+        pendingExternalDiskCheck = true
+        await runPendingExternalDiskReconciliationIfNeeded()
+    }
+
     private func startVaultWatcher() {
         vaultWatcher?.cancel()
         vaultWatcher = VaultDirectoryWatcher(
@@ -457,7 +466,7 @@ final class AppModel: ObservableObject {
         )
     }
 
-    private func runPendingExternalDiskReconciliationIfNeeded() async {
+    func runPendingExternalDiskReconciliationIfNeeded() async {
         guard pendingExternalDiskCheck else { return }
         guard saveTask == nil else { return }
         pendingExternalDiskCheck = false

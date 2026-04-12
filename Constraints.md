@@ -44,6 +44,7 @@ The canonical note model and `NSTextView` are two representations of text. Engin
   - Enter without a selectable command follows normal editor behavior (no hidden slash fallback rewrite).
   - Registered commands currently include `/h1`–`/h3`, `/p`, `/code`, `/list` (alias `/bullet`), `/divider`, `/callout`.
   - **Registry order** defines precedence if two patterns could match.
+  - **Auto-commit path (active):** Typing `/token⎵` or `/token↵` without navigating the menu auto-commits via `SlashCommandDetector` in `inlineTriggerCommands` (parallel to `MarkdownCommandDetector`). Both the menu path and the auto-commit path produce identical `EditCommand` arrays through `SlashCommandRegistry`. Unknown tokens fall through to the normal `replaceText` path — no silent rewrite.
 - **External editors:** A literal `/h1` in `note.txt` stays plain text until the user edits in-app in a way that triggers detection (or a future explicit conversion). This aligns with **Semantic reconciliation**: no silent semantic rewrite of metadata without an explicit editing action the user can reason about.
 - **Notion parity limits:** Slash commands plus heading fonts improve the experience but do **not** deliver full per-block chrome (gutters, drag handles, block menus) in a single `NSTextView`; see **Block chrome and layout** above.
 
@@ -77,6 +78,8 @@ The app uses **document-level undo** via the window `UndoManager`: each user edi
 - **`adjustBlocks` is now exhaustive** for the common cases: single-block edits (delta-adjust + zero-length merge), multi-block replacements (deterministic collapse into first block preserving its id and type), and out-of-bounds edits (logged `assertionFailure`). `RangeNormalizer.normalize` fires only as a safety-net fallback and logs to the `EditEngine` category when it does.
 - **Regression tests** live under [`Tests/MiranNotesTests/`](Tests/MiranNotesTests/) (`swift test`). They include deterministic **random `replaceText` sequences**, [`SpanAndBlockAdjustmentTests`](Tests/MiranNotesTests/SpanAndBlockAdjustmentTests.swift) for `SpanAdjuster` and `EditCommandEngine.adjustBlocks`, and span/block scenarios.
 - **Safety net:** if incremental block adjustment after a replace ever leaves metadata invalid (logged under `app.miran.notes/EditEngine`), `EditCommandEngine` applies `RangeNormalizer.normalize` for that step so the in-memory document does not stay broken. Silent destructive repair of **on-disk** files is still governed by the semantic reconciliation rules above.
+- **Watcher race coverage:** [`AppModelWatcherRaceTests`](Tests/MiranNotesAppTests/AppModelWatcherRaceTests.swift) covers deferred reconciliation while autosave is in flight, silent clean-buffer reload, and coalescing of rapid watcher events into a single reconciliation pass.
+- **Performance baselines:** [`EditEnginePerformanceTests`](Tests/MiranNotesTests/EditEnginePerformanceTests.swift) establishes `measure {}` baselines for 500 sequential inserts on a 10,000-character document and 200 replacements on a span-heavy document. Xcode records the baseline on first run and flags subsequent regressions automatically.
 
 ## External file changes and conflicts (Phase 5)
 
@@ -102,3 +105,15 @@ Types in [`Sources/MiranNotesCore/ExtensionPoints.swift`](Sources/MiranNotesCore
 - **In-repo plans and roadmaps:** [docs/plans/](docs/plans/) — durable planning notes that ship with the repo. IDE-only plans (for example under `.cursor/plans/` on a developer machine) should be copied or summarized there when they matter to contributors.
 
 This file names constraints; roadmaps and feature plans live under `docs/plans/` and in linked ADRs.
+
+## Implementation gap resolution
+
+The three open implementation gaps identified in the constraint audit have been resolved in a single pass:
+
+1. **Slash auto-commit path** — `SlashCommandDetector` is now wired into `SingleSurfaceNoteEditor.Coordinator.inlineTriggerCommands`, alongside the existing `MarkdownCommandDetector` bullet path. No architectural change was needed; the detector and registry were already complete.
+
+2. **Watcher race coverage** — `AppModel` gained a configurable `autosaveDebounceMilliseconds` init parameter and a `simulateWatcherEvent()` test helper. `runPendingExternalDiskReconciliationIfNeeded` is now `internal`. `AppModelWatcherRaceTests` covers the deferred-reconciliation invariant directly.
+
+3. **Performance baselines** — `EditEnginePerformanceTests` establishes `measure {}` baselines for large-document edit throughput.
+
+**No open implementation gaps remain against the constraints listed in this document.** Future feature work should add a constraint entry here before implementation begins.
