@@ -1,12 +1,12 @@
 import Foundation
 
 public struct NoteDocument: Identifiable, Equatable {
-    public var id: UUID
+    /// Stable vault-wide identity; delegates to `metadata.noteID` so there is exactly one source of truth.
+    public var id: UUID { metadata.noteID }
     public var text: String
     public var metadata: NoteMetadata
 
-    public init(id: UUID = UUID(), text: String, metadata: NoteMetadata) {
-        self.id = id
+    public init(text: String, metadata: NoteMetadata) {
         self.text = text
         self.metadata = metadata
     }

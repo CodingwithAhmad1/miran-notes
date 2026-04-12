@@ -15,6 +15,7 @@ struct MiranNotesApp: App {
     @StateObject private var model: AppModel
 
     init() {
+        SlashCommandRegistry.registerBuiltins()
         let vault = URL(fileURLWithPath: NSHomeDirectory())
             .appendingPathComponent("MiranNotesVault", isDirectory: true)
         let repository = NoteRepository(vaultURL: vault)
@@ -123,6 +124,12 @@ private struct EditorRootView: View {
                             onCommands: { commands in model.apply(commands) },
                             onWikiLinkClick: { targetID in
                                 model.openNote(noteID: targetID)
+                            },
+                            onFullReplaceWarning: {
+                                model.repairNotice = "Block structure may have been partially lost due to a complex paste or undo operation."
+                            },
+                            onSizeLimitExceeded: {
+                                model.repairNotice = "Note is at the 1 MB size limit. Content was not added."
                             }
                         )
                     }

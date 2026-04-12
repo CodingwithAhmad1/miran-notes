@@ -1,9 +1,8 @@
 import Foundation
 
 struct UndoPolicy {
-    let maxApproxBytes: Int
+    /// Maximum number of undo steps to keep. When exceeded, the oldest entries are pruned.
+    let maxUndoSteps: Int
 
-    static let defaultPolicy = UndoPolicy(
-        maxApproxBytes: 8 * 1024 * 1024
-    )
+    static let defaultPolicy = UndoPolicy(maxUndoSteps: 200)
 }

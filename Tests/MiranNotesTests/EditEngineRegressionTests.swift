@@ -5,7 +5,6 @@ final class EditEngineRegressionTests: XCTestCase {
     private func baselineDocument(text: String) -> NoteDocument {
         let noteID = UUID()
         return NoteDocument(
-            id: noteID,
             text: text,
             metadata: NoteMetadata(
                 schemaVersion: NoteMetadata.currentSchemaVersion,

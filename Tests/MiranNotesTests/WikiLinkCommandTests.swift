@@ -6,7 +6,6 @@ final class WikiLinkCommandTests: XCTestCase {
         let noteID = UUID()
         let target = UUID()
         var doc = NoteDocument(
-            id: noteID,
             text: "hi",
             metadata: NoteMetadata(
                 schemaVersion: 2,

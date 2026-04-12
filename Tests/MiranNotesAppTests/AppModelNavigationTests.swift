@@ -101,4 +101,23 @@ final class AppModelNavigationTests: XCTestCase {
         let onDiskB = try String(contentsOf: textURLB, encoding: .utf8)
         XCTAssertEqual(onDiskB, "")
     }
+
+    func testEditorCursorOffsetResetOnNoteSwitch() async throws {
+        let vault = try tempVaultURL()
+        let repo = NoteRepository(vaultURL: vault)
+        try await repo.ensureVault()
+        let (_, baseA) = try await repo.createNote(named: "cursor-note-a")
+        let (_, baseB) = try await repo.createNote(named: "cursor-note-b")
+
+        let model = AppModel(repository: repo)
+        model.selectedBaseName = baseA
+        await model.loadSelectedNote()
+        model.editorCursorOffset = 42
+
+        model.changeSelection(baseName: baseB)
+        // editorCursorOffset must be reset to 0 immediately when loadSelectedNote runs
+        await model.loadSelectedNote()
+
+        XCTAssertEqual(model.editorCursorOffset, 0, "editorCursorOffset must reset to 0 on note switch")
+    }
 }

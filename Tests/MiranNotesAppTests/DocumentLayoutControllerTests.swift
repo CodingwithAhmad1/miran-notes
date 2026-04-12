@@ -8,7 +8,6 @@ final class DocumentLayoutControllerTests: XCTestCase {
     private func singleBlockDocument(text: String) -> NoteDocument {
         let noteID = UUID()
         return NoteDocument(
-            id: noteID,
             text: text,
             metadata: NoteMetadata(
                 schemaVersion: NoteMetadata.currentSchemaVersion,
@@ -30,7 +29,6 @@ final class DocumentLayoutControllerTests: XCTestCase {
     private func listItemDocument(text: String) -> NoteDocument {
         let noteID = UUID()
         return NoteDocument(
-            id: noteID,
             text: text,
             metadata: NoteMetadata(
                 schemaVersion: NoteMetadata.currentSchemaVersion,
@@ -77,7 +75,6 @@ final class DocumentLayoutControllerTests: XCTestCase {
         let text = "helloworld"
         let noteID = UUID()
         let doc = NoteDocument(
-            id: noteID,
             text: text,
             metadata: NoteMetadata(
                 schemaVersion: NoteMetadata.currentSchemaVersion,
@@ -109,7 +106,6 @@ final class DocumentLayoutControllerTests: XCTestCase {
         let text = "a\nb"
         let noteID = UUID()
         let doc = NoteDocument(
-            id: noteID,
             text: text,
             metadata: NoteMetadata(
                 schemaVersion: NoteMetadata.currentSchemaVersion,

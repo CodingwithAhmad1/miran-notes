@@ -124,6 +124,10 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
     /// eliminating the brief lag between command dispatch and the next SwiftUI render cycle.
     var onCommands: ([EditCommand]) -> NoteDocument
     var onWikiLinkClick: ((UUID) -> Void)?
+    /// Called when the incremental diff fails and a full-buffer replace fallback fires (block structure may be partially lost).
+    var onFullReplaceWarning: (() -> Void)?
+    /// Called when a typed insertion would push the note past the 1 MB UTF-16 size limit.
+    var onSizeLimitExceeded: (() -> Void)?
 
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
@@ -191,6 +195,9 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
         private var highlightedSlashIndex = 0
         private var slashMenuPopover: NSPopover?
         private var slashMenuHost: NSHostingController<SlashCommandMenuView>?
+        /// Last document identity for which `EditorVisualStyle.apply` ran, used to skip unchanged redraws.
+        private var lastStyledDocumentID: UUID?
+        private var lastStyledDocumentText: String?
 
         init(_ parent: SingleSurfaceNoteEditor) {
             self.parent = parent
@@ -266,8 +273,11 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
                     ]
                 )
             } else {
+                // Full-buffer fallback: diff could not be reduced to a single region.
+                // Block structure may be partially collapsed, so attempt best-effort recovery.
                 let previous = parent.document.text
-                _ = runCommandSession(
+                let oldBlocks = parent.document.metadata.blocks
+                let afterReplace = runCommandSession(
                     textView: textView,
                     commands: [
                     .replaceText(
@@ -276,6 +286,11 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
                     )
                     ]
                 )
+                let reconciled = EditCommandEngine.reconcileBlocksFromText(document: afterReplace, oldBlocks: oldBlocks)
+                if reconciled != afterReplace {
+                    _ = parent.onCommands([.repairMetadata])
+                }
+                parent.onFullReplaceWarning?()
             }
         }
 
@@ -471,7 +486,13 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
         }
 
         private func refreshVisualChrome(textView: NSTextView, document: NoteDocument) {
+            // Skip full redraw if the document identity and text are unchanged since last apply.
+            if lastStyledDocumentID == document.id, lastStyledDocumentText == document.text {
+                return
+            }
             EditorVisualStyle.apply(to: textView, document: document)
+            lastStyledDocumentID = document.id
+            lastStyledDocumentText = document.text
             if let w = textView as? WikiLinkTextView {
                 w.wikiLinks = document.metadata.links
             }
@@ -503,6 +524,14 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
             }
 
             let replacement = replacementString ?? ""
+
+            // 1 MB UTF-16 unit guard — reject insertions that would overflow.
+            let newLength = (textView.string.utf16.count - affectedCharRange.length) + replacement.utf16.count
+            if newLength > 1_048_576 {
+                parent.onSizeLimitExceeded?()
+                return false
+            }
+
             let selectedLocation = textView.selectedRange().location
 
             if let structural = DocumentLayoutController.commandsForEdit(

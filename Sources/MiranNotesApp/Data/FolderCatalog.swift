@@ -7,6 +7,11 @@ struct FolderCatalog: Codable, Equatable {
 
     var schemaVersion: Int
     var folders: [FolderEntry]
+    var isDirty: Bool = false
+
+    enum CodingKeys: String, CodingKey {
+        case schemaVersion, folders
+    }
 
     init(schemaVersion: Int = currentSchemaVersion, folders: [FolderEntry] = [FolderEntry.root]) {
         self.schemaVersion = schemaVersion
@@ -16,6 +21,7 @@ struct FolderCatalog: Codable, Equatable {
     mutating func ensureRoot() {
         if !folders.contains(where: { $0.id == Self.rootFolderID }) {
             folders.insert(.root, at: 0)
+            isDirty = true
         }
     }
 }
@@ -37,6 +43,11 @@ struct PathIndex: Codable, Equatable {
 
     var schemaVersion: Int
     var entries: [PathIndexEntry]
+    var isDirty: Bool = false
+
+    enum CodingKeys: String, CodingKey {
+        case schemaVersion, entries
+    }
 
     init(schemaVersion: Int = currentSchemaVersion, entries: [PathIndexEntry] = []) {
         self.schemaVersion = schemaVersion
@@ -51,6 +62,7 @@ struct PathIndex: Codable, Equatable {
         } else {
             entries.append(PathIndexEntry(noteID: noteID, folderID: folderID, relativePath: relativePath, aliases: aliases))
         }
+        isDirty = true
     }
 }
 

@@ -155,7 +155,7 @@ actor NoteRepository {
             spans: []
         )
 
-        let document = NoteDocument(id: metadata.noteID, text: text, metadata: metadata)
+        let document = NoteDocument(text: text, metadata: metadata)
         try save(document, asBaseName: baseName)
         return (document, baseName)
     }
@@ -193,7 +193,7 @@ actor NoteRepository {
         }
 
         let (repaired, repairWarnings) = Self.documentAfterLoadRepair(text: text, metadata: metadata)
-        let withId = NoteDocument(id: repaired.metadata.noteID, text: repaired.text, metadata: repaired.metadata)
+        let withId = NoteDocument(text: repaired.text, metadata: repaired.metadata)
         if !repairWarnings.isEmpty {
             VaultTelemetry.logRepairWarnings(count: repairWarnings.count)
         }
@@ -245,7 +245,6 @@ actor NoteRepository {
         try ensureVault()
         let normalized = RangeNormalizer.normalize(metadata: note.metadata, for: note.text)
         let documentToPersist = NoteDocument(
-            id: normalized.normalizedMetadata.noteID,
             text: note.text,
             metadata: normalized.normalizedMetadata
         )
@@ -287,6 +286,9 @@ actor NoteRepository {
             relativePath: baseName
         )
 
+        let commitTempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("miran-commit-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: commitTempDir, withIntermediateDirectories: true)
         let context = VaultCommitContext(
             baseName: baseName,
             document: documentToPersist,
@@ -305,7 +307,8 @@ actor NoteRepository {
             pathIndex: pathIndex,
             atomicWrite: { data, url in
                 try self.atomicWrite(data, to: url)
-            }
+            },
+            tempDirectory: commitTempDir
         )
 
         let participants: [VaultCommitParticipant] = [
@@ -468,7 +471,10 @@ actor NoteRepository {
         let url = VaultPaths.folderCatalogURL(vaultURL: vaultURL)
         guard let data = try? Data(contentsOf: url),
               let decoded = try? decoder.decode(FolderCatalog.self, from: data) else {
-            return FolderCatalog()
+            // First write — new catalog; mark dirty so the participant persists it.
+            var fresh = FolderCatalog()
+            fresh.isDirty = true
+            return fresh
         }
         return decoded
     }
@@ -517,11 +523,23 @@ actor NoteRepository {
     }
 
     private func slugify(_ value: String) -> String {
-        value
+        let slug = value
             .lowercased()
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .replacingOccurrences(of: "[^a-z0-9]+", with: "-", options: .regularExpression)
             .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+        // Cap at 200 UTF-8 bytes, reserving room for numeric suffix + .meta.json extension.
+        // Truncate at a Unicode scalar boundary to avoid splitting multi-byte sequences.
+        guard slug.utf8.count > 200 else { return slug }
+        var byteCount = 0
+        var truncated = ""
+        for scalar in slug.unicodeScalars {
+            let scalarBytes = UTF8.width(scalar)
+            guard byteCount + scalarBytes <= 200 else { break }
+            truncated.unicodeScalars.append(scalar)
+            byteCount += scalarBytes
+        }
+        return truncated.trimmingCharacters(in: CharacterSet(charactersIn: "-"))
     }
 
     private nonisolated static func documentAfterLoadRepair(text: String, metadata: NoteMetadata) -> (NoteDocument, [String]) {
@@ -530,7 +548,6 @@ actor NoteRepository {
         let pass1 = RangeNormalizer.normalize(metadata: metadata, for: text)
         allWarnings.append(contentsOf: pass1.warnings)
         var document = NoteDocument(
-            id: pass1.normalizedMetadata.noteID,
             text: text,
             metadata: pass1.normalizedMetadata
         )
@@ -538,7 +555,7 @@ actor NoteRepository {
         if !NoteIntegrity.check(document: document).isValid {
             let pass2 = RangeNormalizer.normalize(metadata: document.metadata, for: document.text)
             allWarnings.append(contentsOf: pass2.warnings)
-            document = NoteDocument(id: pass2.normalizedMetadata.noteID, text: text, metadata: pass2.normalizedMetadata)
+            document = NoteDocument(text: text, metadata: pass2.normalizedMetadata)
         }
 
         if !NoteIntegrity.check(document: document).isValid {
@@ -561,7 +578,7 @@ actor NoteRepository {
             let pass3 = RangeNormalizer.normalize(metadata: fallback, for: text)
             allWarnings.append(contentsOf: pass3.warnings)
             allWarnings.append("Metadata was too corrupt to repair incrementally; rebuilt as single paragraph block.")
-            document = NoteDocument(id: pass3.normalizedMetadata.noteID, text: text, metadata: pass3.normalizedMetadata)
+            document = NoteDocument(text: text, metadata: pass3.normalizedMetadata)
         }
 
         return (document, allWarnings)
@@ -580,21 +597,17 @@ private struct NoteFilesCommitParticipant: VaultCommitParticipant {
     func operations(for context: VaultCommitContext) throws -> [VaultCommitOperation] {
         let metadataData = try context.encoder.encode(context.document.metadata)
         let textData = context.document.text.data(using: .utf8) ?? Data()
+        let tempText = context.tempDirectory.appendingPathComponent("note.txt")
+        let tempMeta = context.tempDirectory.appendingPathComponent("note.meta.json")
         return [
-            VaultCommitOperation(
-                participantID: participantID,
-                operationID: "text",
-                execute: {
-                    try context.atomicWrite(textData, context.textURL)
-                }
-            ),
-            VaultCommitOperation(
-                participantID: participantID,
-                operationID: "metadata",
-                execute: {
-                    try context.atomicWrite(metadataData, context.metaURL)
-                }
-            )
+            VaultCommitOperation(participantID: participantID, operationID: "text") {
+                try textData.write(to: tempText, options: .atomic)
+                return (tempText, context.textURL)
+            },
+            VaultCommitOperation(participantID: participantID, operationID: "metadata") {
+                try metadataData.write(to: tempMeta, options: .atomic)
+                return (tempMeta, context.metaURL)
+            }
         ]
     }
 }
@@ -604,14 +617,12 @@ private struct ManifestCommitParticipant: VaultCommitParticipant {
 
     func operations(for context: VaultCommitContext) throws -> [VaultCommitOperation] {
         let data = try context.encoder.encode(context.manifest)
+        let tempURL = context.tempDirectory.appendingPathComponent("manifest.json")
         return [
-            VaultCommitOperation(
-                participantID: participantID,
-                operationID: "manifest",
-                execute: {
-                    try context.atomicWrite(data, context.manifestURL)
-                }
-            )
+            VaultCommitOperation(participantID: participantID, operationID: "manifest") {
+                try data.write(to: tempURL, options: .atomic)
+                return (tempURL, context.manifestURL)
+            }
         ]
     }
 }
@@ -620,15 +631,14 @@ private struct LinkGraphCommitParticipant: VaultCommitParticipant {
     let participantID = "linkGraph"
 
     func operations(for context: VaultCommitContext) throws -> [VaultCommitOperation] {
+        guard context.linkGraph.isDirty else { return [] }
         let data = try context.encoder.encode(context.linkGraph)
+        let tempURL = context.tempDirectory.appendingPathComponent("link-graph.json")
         return [
-            VaultCommitOperation(
-                participantID: participantID,
-                operationID: "linkGraph",
-                execute: {
-                    try context.atomicWrite(data, context.linkGraphURL)
-                }
-            )
+            VaultCommitOperation(participantID: participantID, operationID: "linkGraph") {
+                try data.write(to: tempURL, options: .atomic)
+                return (tempURL, context.linkGraphURL)
+            }
         ]
     }
 }
@@ -637,15 +647,14 @@ private struct RelationshipIndexCommitParticipant: VaultCommitParticipant {
     let participantID = "relationshipIndex"
 
     func operations(for context: VaultCommitContext) throws -> [VaultCommitOperation] {
+        guard context.relationshipIndex.isDirty else { return [] }
         let data = try context.encoder.encode(context.relationshipIndex)
+        let tempURL = context.tempDirectory.appendingPathComponent("relationship-index.json")
         return [
-            VaultCommitOperation(
-                participantID: participantID,
-                operationID: "relationshipIndex",
-                execute: {
-                    try context.atomicWrite(data, context.relationshipIndexURL)
-                }
-            )
+            VaultCommitOperation(participantID: participantID, operationID: "relationshipIndex") {
+                try data.write(to: tempURL, options: .atomic)
+                return (tempURL, context.relationshipIndexURL)
+            }
         ]
     }
 }
@@ -654,15 +663,14 @@ private struct FolderCatalogCommitParticipant: VaultCommitParticipant {
     let participantID = "folderCatalog"
 
     func operations(for context: VaultCommitContext) throws -> [VaultCommitOperation] {
+        guard context.folderCatalog.isDirty else { return [] }
         let data = try context.encoder.encode(context.folderCatalog)
+        let tempURL = context.tempDirectory.appendingPathComponent("folder-catalog.json")
         return [
-            VaultCommitOperation(
-                participantID: participantID,
-                operationID: "folderCatalog",
-                execute: {
-                    try context.atomicWrite(data, context.folderCatalogURL)
-                }
-            )
+            VaultCommitOperation(participantID: participantID, operationID: "folderCatalog") {
+                try data.write(to: tempURL, options: .atomic)
+                return (tempURL, context.folderCatalogURL)
+            }
         ]
     }
 }
@@ -671,15 +679,14 @@ private struct PathIndexCommitParticipant: VaultCommitParticipant {
     let participantID = "pathIndex"
 
     func operations(for context: VaultCommitContext) throws -> [VaultCommitOperation] {
+        guard context.pathIndex.isDirty else { return [] }
         let data = try context.encoder.encode(context.pathIndex)
+        let tempURL = context.tempDirectory.appendingPathComponent("path-index.json")
         return [
-            VaultCommitOperation(
-                participantID: participantID,
-                operationID: "pathIndex",
-                execute: {
-                    try context.atomicWrite(data, context.pathIndexURL)
-                }
-            )
+            VaultCommitOperation(participantID: participantID, operationID: "pathIndex") {
+                try data.write(to: tempURL, options: .atomic)
+                return (tempURL, context.pathIndexURL)
+            }
         ]
     }
 }

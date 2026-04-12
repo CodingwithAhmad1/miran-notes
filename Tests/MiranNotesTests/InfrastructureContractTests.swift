@@ -10,6 +10,19 @@ final class InfrastructureContractTests: XCTestCase {
         XCTAssertFalse(TableColumnType.boolean.accepts("maybe"))
     }
 
+    func testNoteDocumentIdDelegatestoMetadataNoteID() {
+        let noteID = UUID()
+        let meta = NoteMetadata(
+            schemaVersion: NoteMetadata.currentSchemaVersion,
+            noteID: noteID,
+            blocks: [],
+            spans: []
+        )
+        let doc = NoteDocument(text: "hello", metadata: meta)
+        XCTAssertEqual(doc.id, noteID, "NoteDocument.id must equal metadata.noteID — single identity source")
+        XCTAssertEqual(doc.id, doc.metadata.noteID)
+    }
+
     func testExtensionCompatibilityRequiresCapabilitiesAndVersion() {
         let descriptor = ExtensionDescriptor(
             id: "ext.sample",

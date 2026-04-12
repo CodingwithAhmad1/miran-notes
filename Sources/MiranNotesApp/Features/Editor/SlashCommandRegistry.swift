@@ -10,7 +10,8 @@ struct SlashCommandCatalogItem: Equatable, Identifiable {
     let preview: String
 }
 
-private struct SlashCommandDescriptor {
+/// Descriptor for a single slash command. `internal` so feature modules in the same package can register custom descriptors.
+struct SlashCommandDescriptor {
     let id: String
     let title: String
     let category: String
@@ -44,8 +45,156 @@ private struct SlashCommandDescriptor {
     }
 }
 
-/// Built-in slash commands with deterministic descriptor ordering.
+/// Slash command registry with open registration so feature modules can add commands at startup.
 enum SlashCommandRegistry {
+    private static var descriptors: [SlashCommandDescriptor] = []
+    private static var builtinsRegistered = false
+
+    /// Register all built-in commands. Called once from app startup via `MiranNotesApp.init`.
+    static func registerBuiltins() {
+        guard !builtinsRegistered else { return }
+        builtinsRegistered = true
+        let builtins: [SlashCommandDescriptor] = [
+            .init(
+                id: "h1",
+                title: "Heading 1",
+                category: "Basic Blocks",
+                aliases: [],
+                keywords: ["title", "header", "large"],
+                preview: "Turn text into a large heading.",
+                commitPolicy: defaultCommitPolicy,
+                applicability: nil,
+                produce: { _, tokenRange, blockID in
+                    [
+                        .replaceText(range: tokenRange, replacement: ""),
+                        .changeBlockType(blockID: blockID, type: .heading, headingLevel: 1)
+                    ]
+                }
+            ),
+            .init(
+                id: "h2",
+                title: "Heading 2",
+                category: "Basic Blocks",
+                aliases: [],
+                keywords: ["subtitle", "header", "medium"],
+                preview: "Turn text into a medium heading.",
+                commitPolicy: defaultCommitPolicy,
+                applicability: nil,
+                produce: { _, tokenRange, blockID in
+                    [
+                        .replaceText(range: tokenRange, replacement: ""),
+                        .changeBlockType(blockID: blockID, type: .heading, headingLevel: 2)
+                    ]
+                }
+            ),
+            .init(
+                id: "h3",
+                title: "Heading 3",
+                category: "Basic Blocks",
+                aliases: [],
+                keywords: ["subheading", "header", "small"],
+                preview: "Turn text into a small heading.",
+                commitPolicy: defaultCommitPolicy,
+                applicability: nil,
+                produce: { _, tokenRange, blockID in
+                    [
+                        .replaceText(range: tokenRange, replacement: ""),
+                        .changeBlockType(blockID: blockID, type: .heading, headingLevel: 3)
+                    ]
+                }
+            ),
+            .init(
+                id: "p",
+                title: "Text",
+                category: "Basic Blocks",
+                aliases: [],
+                keywords: ["paragraph", "body", "normal"],
+                preview: "Turn text into a normal paragraph.",
+                commitPolicy: defaultCommitPolicy,
+                applicability: nil,
+                produce: { _, tokenRange, blockID in
+                    [
+                        .replaceText(range: tokenRange, replacement: ""),
+                        .changeBlockType(blockID: blockID, type: .paragraph, headingLevel: nil)
+                    ]
+                }
+            ),
+            .init(
+                id: "code",
+                title: "Code",
+                category: "Basic Blocks",
+                aliases: [],
+                keywords: ["snippet", "monospace", "programming"],
+                preview: "Turn text into a code block.",
+                commitPolicy: defaultCommitPolicy,
+                applicability: nil,
+                produce: { _, tokenRange, blockID in
+                    [
+                        .replaceText(range: tokenRange, replacement: ""),
+                        .changeBlockType(blockID: blockID, type: .code, headingLevel: nil)
+                    ]
+                }
+            ),
+            .init(
+                id: "list",
+                title: "Bulleted List",
+                category: "Lists",
+                aliases: ["bullet"],
+                keywords: ["bullets", "unordered", "list item"],
+                preview: "Turn text into a bulleted list item.",
+                commitPolicy: defaultCommitPolicy,
+                applicability: nil,
+                produce: { _, tokenRange, blockID in
+                    [
+                        .replaceText(range: tokenRange, replacement: ""),
+                        .changeBlockType(blockID: blockID, type: .listItem, headingLevel: nil)
+                    ]
+                }
+            ),
+            .init(
+                id: "divider",
+                title: "Divider",
+                category: "Layout",
+                aliases: [],
+                keywords: ["horizontal rule", "separator", "line"],
+                preview: "Insert a visual divider block.",
+                commitPolicy: defaultCommitPolicy,
+                applicability: nil,
+                produce: { _, tokenRange, blockID in
+                    [
+                        .replaceText(range: tokenRange, replacement: ""),
+                        .changeBlockType(blockID: blockID, type: .divider, headingLevel: nil)
+                    ]
+                }
+            ),
+            .init(
+                id: "callout",
+                title: "Callout",
+                category: "Basic Blocks",
+                aliases: [],
+                keywords: ["highlight", "note", "tip"],
+                preview: "Turn text into a callout block.",
+                commitPolicy: defaultCommitPolicy,
+                applicability: nil,
+                produce: { _, tokenRange, blockID in
+                    [
+                        .replaceText(range: tokenRange, replacement: ""),
+                        .changeBlockType(blockID: blockID, type: .callout, headingLevel: nil)
+                    ]
+                }
+            )
+        ]
+        for descriptor in builtins {
+            register(descriptor)
+        }
+    }
+
+    /// Register a custom slash command descriptor. Duplicate `id`s are ignored (idempotent).
+    static func register(_ descriptor: SlashCommandDescriptor) {
+        guard !descriptors.contains(where: { $0.id == descriptor.id }) else { return }
+        descriptors.append(descriptor)
+    }
+
     static func editCommands(for match: SlashCommitMatch, blockID: String, blockType: BlockType? = nil) -> [EditCommand]? {
         let tokenRange = MiranNotesCore.TextRange(
             start: match.lineStartUTF16,
@@ -83,136 +232,4 @@ enum SlashCommandRegistry {
     }
 
     private static let defaultCommitPolicy: Set<SlashCommitMatch.CommitCharacter> = [.space, .newline]
-
-    // Ordered by precedence: first match wins.
-    private static let descriptors: [SlashCommandDescriptor] = [
-        SlashCommandDescriptor(
-            id: "h1",
-            title: "Heading 1",
-            category: "Basic Blocks",
-            aliases: [],
-            keywords: ["title", "header", "large"],
-            preview: "Turn text into a large heading.",
-            commitPolicy: defaultCommitPolicy,
-            applicability: nil,
-            produce: { _, tokenRange, blockID in
-                [
-                    .replaceText(range: tokenRange, replacement: ""),
-                    .changeBlockType(blockID: blockID, type: .heading, headingLevel: 1)
-                ]
-            }
-        ),
-        SlashCommandDescriptor(
-            id: "h2",
-            title: "Heading 2",
-            category: "Basic Blocks",
-            aliases: [],
-            keywords: ["subtitle", "header", "medium"],
-            preview: "Turn text into a medium heading.",
-            commitPolicy: defaultCommitPolicy,
-            applicability: nil,
-            produce: { _, tokenRange, blockID in
-                [
-                    .replaceText(range: tokenRange, replacement: ""),
-                    .changeBlockType(blockID: blockID, type: .heading, headingLevel: 2)
-                ]
-            }
-        ),
-        SlashCommandDescriptor(
-            id: "h3",
-            title: "Heading 3",
-            category: "Basic Blocks",
-            aliases: [],
-            keywords: ["subheading", "header", "small"],
-            preview: "Turn text into a small heading.",
-            commitPolicy: defaultCommitPolicy,
-            applicability: nil,
-            produce: { _, tokenRange, blockID in
-                [
-                    .replaceText(range: tokenRange, replacement: ""),
-                    .changeBlockType(blockID: blockID, type: .heading, headingLevel: 3)
-                ]
-            }
-        ),
-        SlashCommandDescriptor(
-            id: "p",
-            title: "Text",
-            category: "Basic Blocks",
-            aliases: [],
-            keywords: ["paragraph", "body", "normal"],
-            preview: "Turn text into a normal paragraph.",
-            commitPolicy: defaultCommitPolicy,
-            applicability: nil,
-            produce: { _, tokenRange, blockID in
-                [
-                    .replaceText(range: tokenRange, replacement: ""),
-                    .changeBlockType(blockID: blockID, type: .paragraph, headingLevel: nil)
-                ]
-            }
-        ),
-        SlashCommandDescriptor(
-            id: "code",
-            title: "Code",
-            category: "Basic Blocks",
-            aliases: [],
-            keywords: ["snippet", "monospace", "programming"],
-            preview: "Turn text into a code block.",
-            commitPolicy: defaultCommitPolicy,
-            applicability: nil,
-            produce: { _, tokenRange, blockID in
-                [
-                    .replaceText(range: tokenRange, replacement: ""),
-                    .changeBlockType(blockID: blockID, type: .code, headingLevel: nil)
-                ]
-            }
-        ),
-        SlashCommandDescriptor(
-            id: "list",
-            title: "Bulleted List",
-            category: "Lists",
-            aliases: ["bullet"],
-            keywords: ["bullets", "unordered", "list item"],
-            preview: "Turn text into a bulleted list item.",
-            commitPolicy: defaultCommitPolicy,
-            applicability: nil,
-            produce: { _, tokenRange, blockID in
-                [
-                    .replaceText(range: tokenRange, replacement: ""),
-                    .changeBlockType(blockID: blockID, type: .listItem, headingLevel: nil)
-                ]
-            }
-        ),
-        SlashCommandDescriptor(
-            id: "divider",
-            title: "Divider",
-            category: "Layout",
-            aliases: [],
-            keywords: ["horizontal rule", "separator", "line"],
-            preview: "Insert a visual divider block.",
-            commitPolicy: defaultCommitPolicy,
-            applicability: nil,
-            produce: { _, tokenRange, blockID in
-                [
-                    .replaceText(range: tokenRange, replacement: ""),
-                    .changeBlockType(blockID: blockID, type: .divider, headingLevel: nil)
-                ]
-            }
-        ),
-        SlashCommandDescriptor(
-            id: "callout",
-            title: "Callout",
-            category: "Basic Blocks",
-            aliases: [],
-            keywords: ["highlight", "note", "tip"],
-            preview: "Turn text into a callout block.",
-            commitPolicy: defaultCommitPolicy,
-            applicability: nil,
-            produce: { _, tokenRange, blockID in
-                [
-                    .replaceText(range: tokenRange, replacement: ""),
-                    .changeBlockType(blockID: blockID, type: .callout, headingLevel: nil)
-                ]
-            }
-        )
-    ]
 }

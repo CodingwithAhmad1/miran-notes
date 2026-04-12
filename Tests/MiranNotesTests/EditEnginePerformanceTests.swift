@@ -5,7 +5,6 @@ final class EditEnginePerformanceTests: XCTestCase {
     private func makeDocument(text: String, spans: [Span] = []) -> NoteDocument {
         let noteID = UUID()
         var doc = NoteDocument(
-            id: noteID,
             text: text,
             metadata: NoteMetadata(
                 schemaVersion: NoteMetadata.currentSchemaVersion,

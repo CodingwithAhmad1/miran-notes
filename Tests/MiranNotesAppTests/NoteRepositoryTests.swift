@@ -92,7 +92,7 @@ final class NoteRepositoryTests: XCTestCase {
             ],
             spans: []
         )
-        let original = NoteDocument(id: noteID, text: "hello", metadata: metadata)
+        let original = NoteDocument(text: "hello", metadata: metadata)
         try await repo.save(original, asBaseName: base)
         let result = try await repo.loadNote(baseName: base)
         XCTAssertEqual(result.document.text, "hello")
@@ -113,7 +113,7 @@ final class NoteRepositoryTests: XCTestCase {
             ],
             spans: []
         )
-        let original = NoteDocument(id: noteID, text: "hello", metadata: metadata)
+        let original = NoteDocument(text: "hello", metadata: metadata)
         try await repo.save(original, asBaseName: base)
         let firstToken = try await repo.noteRevisionToken(baseName: base)
         XCTAssertNotNil(firstToken)
@@ -163,7 +163,7 @@ final class NoteRepositoryTests: XCTestCase {
         metadata.artifacts = [
             EmbeddedArtifact(id: artifactID, kind: .table, relativePath: "tables/\(artifactID.uuidString.lowercased()).jsonl")
         ]
-        let doc = NoteDocument(id: noteID, text: "hello", metadata: metadata)
+        let doc = NoteDocument(text: "hello", metadata: metadata)
         try await repo.save(doc, asBaseName: "index-check")
 
         let relationshipURL = VaultPaths.relationshipIndexURL(vaultURL: vault)
@@ -186,5 +186,28 @@ final class NoteRepositoryTests: XCTestCase {
             relationship.sourceNoteID == noteID && relationship.relationshipKind == "artifactLink"
         })
         XCTAssertTrue(path.entries.contains { $0.noteID == noteID && $0.relativePath == "index-check" })
+    }
+
+    func testSlugifyLongTitleIsCapedAt200Bytes() async throws {
+        let vault = try tempVaultURL()
+        let repo = NoteRepository(vaultURL: vault)
+        try await repo.ensureVault()
+        let longTitle = String(repeating: "a", count: 300)
+        let (_, baseName) = try await repo.createNote(named: longTitle)
+        XCTAssertLessThanOrEqual(baseName.utf8.count, 200, "baseName must be ≤ 200 UTF-8 bytes")
+        let textURL = vault.appendingPathComponent("\(baseName).txt")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: textURL.path), "File must exist after createNote with long title")
+    }
+
+    func testSlugifyMultibyteCharactersCapedAtBoundary() async throws {
+        let vault = try tempVaultURL()
+        let repo = NoteRepository(vaultURL: vault)
+        try await repo.ensureVault()
+        // Each Japanese character is 3 bytes in UTF-8; 100 chars = 300 bytes — must be truncated
+        let longTitle = String(repeating: "あ", count: 100)
+        let (_, baseName) = try await repo.createNote(named: longTitle)
+        XCTAssertLessThanOrEqual(baseName.utf8.count, 200)
+        // Result should be valid UTF-8 (no split multi-byte sequences)
+        XCTAssertNotNil(String(baseName.utf8), "baseName must be valid UTF-8 after truncation")
     }
 }

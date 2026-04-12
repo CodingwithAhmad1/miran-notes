@@ -111,6 +111,11 @@ public struct EditCommandEngine {
             icon: block.icon
         )
         next.metadata.blocks.insert(newBlock, at: index + 1)
+
+        // Constrain spans and links to the new block boundaries so neither crosses the split point.
+        next.metadata.spans = SpanAdjuster.constrainToBlocks(spans: next.metadata.spans, blocks: next.metadata.blocks)
+        next.metadata.links = LinkAdjuster.constrainToBlocks(links: next.metadata.links, blocks: next.metadata.blocks)
+
         return next
     }
 
@@ -205,6 +210,42 @@ public struct EditCommandEngine {
         var next = document
         let normalized = RangeNormalizer.normalize(metadata: next.metadata, for: next.text)
         next.metadata = normalized.normalizedMetadata
+        return next
+    }
+
+    /// Best-effort recovery after a full-buffer replacement. Walks the new text and attempts to re-assign
+    /// block types from `oldBlocks` where the line content is unambiguously the same heading line.
+    /// Returns a document whose block types are partially recovered — structural integrity is still
+    /// guaranteed by the existing `RangeNormalizer` guard in the caller.
+    public static func reconcileBlocksFromText(document: NoteDocument, oldBlocks: [Block]) -> NoteDocument {
+        var next = document
+        let lines = next.text.components(separatedBy: "\n")
+        var offset = 0
+        var recovered: [Block] = []
+
+        for (i, line) in lines.enumerated() {
+            let length = line.utf16.count
+            let range = TextRange(start: offset, length: i < lines.count - 1 ? length + 1 : length)
+
+            // Find the first old block that covered this offset and had a non-paragraph type.
+            let matchedType = oldBlocks.first { old in
+                old.range.contains(offset) && old.type != .paragraph
+            }
+
+            if var block = next.metadata.blocks.first(where: { $0.range.intersects(range) }) {
+                if let matched = matchedType, block.type == .paragraph {
+                    block.type = matched.type
+                    block.level = matched.level
+                }
+                recovered.append(block)
+            }
+
+            offset += (i < lines.count - 1) ? length + 1 : length
+        }
+
+        if !recovered.isEmpty {
+            next.metadata.blocks = recovered
+        }
         return next
     }
 

@@ -65,6 +65,11 @@ public enum LinkAdjuster {
         return splitAcrossBlockBoundaries(links: shifted, blocks: blocks)
     }
 
+    /// Clips links so that none cross a block boundary. Called after `splitBlock` to keep link metadata consistent.
+    static func constrainToBlocks(links: [NoteLink], blocks: [Block]) -> [NoteLink] {
+        splitAcrossBlockBoundaries(links: links, blocks: blocks)
+    }
+
     private static func splitAcrossBlockBoundaries(links: [NoteLink], blocks: [Block]) -> [NoteLink] {
         guard !blocks.isEmpty else { return [] }
         var adjusted: [NoteLink] = []

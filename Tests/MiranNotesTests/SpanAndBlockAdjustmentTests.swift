@@ -140,4 +140,66 @@ final class SpanAndBlockAdjustmentTests: XCTestCase {
         XCTAssertEqual(out[0].id, "only")
         XCTAssertEqual(out[0].range, TextRange(start: 0, length: 0))
     }
+
+    // MARK: - splitBlock span/link constraining
+
+    func testSplitBlockSplitsBoldSpanAtSplitPoint() {
+        // "hello\nworld" with a bold span covering the entire first word + newline (0..<6)
+        // After splitting at offset 6, the bold span must be clipped to the first block only.
+        let text = "hello\nworld"
+        let noteID = UUID()
+        var doc = NoteDocument(
+            text: text,
+            metadata: NoteMetadata(
+                schemaVersion: 2,
+                noteID: noteID,
+                blocks: [
+                    Block(id: "b0", type: .paragraph, range: TextRange(start: 0, length: 11), level: nil, icon: nil)
+                ],
+                spans: [
+                    Span(range: TextRange(start: 0, length: 6), style: .bold)
+                ]
+            )
+        )
+        doc = EditCommandEngine.apply(.splitBlock(blockID: "b0", atOffset: 6), to: doc)
+
+        XCTAssertEqual(doc.metadata.blocks.count, 2, "split must produce two blocks")
+        for span in doc.metadata.spans {
+            let crossesBlock0End = span.range.end > doc.metadata.blocks[0].range.end
+            XCTAssertFalse(crossesBlock0End, "No span should cross block boundary after split")
+        }
+        let report = NoteIntegrity.check(document: doc)
+        XCTAssertTrue(report.isValid, "Document must be valid after split: \(report.issues)")
+    }
+
+    func testSplitBlockSplitsWikiLinkAtSplitPoint() {
+        let text = "ab\ncd"
+        let noteID = UUID()
+        let targetID = UUID()
+        var doc = NoteDocument(
+            text: text,
+            metadata: NoteMetadata(
+                schemaVersion: 2,
+                noteID: noteID,
+                blocks: [
+                    Block(id: "b0", type: .paragraph, range: TextRange(start: 0, length: 5), level: nil, icon: nil)
+                ],
+                spans: [],
+                links: [
+                    NoteLink(range: TextRange(start: 1, length: 3), targetNoteID: targetID)
+                ]
+            )
+        )
+        doc = EditCommandEngine.apply(.splitBlock(blockID: "b0", atOffset: 3), to: doc)
+
+        XCTAssertEqual(doc.metadata.blocks.count, 2)
+        for link in doc.metadata.links {
+            let block = doc.metadata.blocks.first { $0.range.contains(link.range.start) }
+            if let block {
+                XCTAssertLessThanOrEqual(link.range.end, block.range.end, "Link must not extend beyond its block")
+            }
+        }
+        let report = NoteIntegrity.check(document: doc)
+        XCTAssertTrue(report.isValid, "\(report.issues)")
+    }
 }

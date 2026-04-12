@@ -47,11 +47,18 @@ final class AppModel: ObservableObject {
     /// Current cursor offset (UTF-16) in the active editor surface, updated by the coordinator on selection change.
     @Published var editorCursorOffset: Int = 0
     private let undoPolicy = UndoPolicy.defaultPolicy
-    private var approxUndoSnapshotBytes = 0
+    typealias UndoStep = (before: NoteDocument, after: NoteDocument, actionName: String)
+    /// Parallel history deque for count-based pruning. Oldest entry is index 0. Internal for tests.
+    var undoHistory: [UndoStep] = []
     private let commandPipelineContract = CommandPipelineContract()
-    private var localCommandInterceptors: [([EditCommand], NoteDocument, CommandContext) -> [EditCommand]] = []
+    private var localCommandInterceptors: [UUID: ([EditCommand], NoteDocument, CommandContext) -> [EditCommand]] = [:]
+    /// Insertion-ordered list of interceptor keys, so interceptors fire in registration order.
+    private var localCommandInterceptorOrder: [UUID] = []
 
     private let autosaveDebounceMilliseconds: UInt64
+    /// In-memory cache to avoid repeated disk reads during rapid edits. Invalidated after successful save and vault rebuild.
+    private var cachedLinkGraph: LinkGraph?
+    private var backlinkRefreshTask: Task<Void, Never>?
 
     init(repository: NoteRepository, autosaveDebounceMilliseconds: UInt64 = 400) {
         self.repository = repository
@@ -67,6 +74,7 @@ final class AppModel: ObservableObject {
             await refreshNotes()
             do {
                 try await repository.rebuildLinkGraphFull()
+                cachedLinkGraph = nil
             } catch {
                 lastError = "Link index rebuild failed: \(error.localizedDescription)"
             }
@@ -106,7 +114,14 @@ final class AppModel: ObservableObject {
         }
         let id = doc.metadata.noteID
         do {
-            let graph = try await repository.loadLinkGraph()
+            let graph: LinkGraph
+            if let cached = cachedLinkGraph {
+                graph = cached
+            } else {
+                let loaded = try await repository.loadLinkGraph()
+                cachedLinkGraph = loaded
+                graph = loaded
+            }
             let resolver = try await repository.linkResolver()
             let sourceIDs = graph.backlinks(to: id)
             var result: [NoteSummary] = []
@@ -122,6 +137,15 @@ final class AppModel: ObservableObject {
         } catch {
             backlinks = []
             lastError = "Could not refresh backlinks: \(error.localizedDescription)"
+        }
+    }
+
+    private func scheduleBacklinkRefresh() {
+        backlinkRefreshTask?.cancel()
+        backlinkRefreshTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(1500))
+            guard !Task.isCancelled, let self else { return }
+            await self.refreshBacklinks()
         }
     }
 
@@ -214,6 +238,7 @@ final class AppModel: ObservableObject {
     }
 
     func loadSelectedNote() async {
+        editorCursorOffset = 0
         guard let selectedBaseName else {
             activeDocument = nil
             lastPersistedDocument = nil
@@ -264,17 +289,32 @@ final class AppModel: ObservableObject {
         apply([command])
     }
 
-    func registerCommandInterceptor(_ interceptor: @escaping ([EditCommand], NoteDocument, CommandContext) -> [EditCommand]) {
-        localCommandInterceptors.append(interceptor)
+    @discardableResult
+    func registerCommandInterceptor(_ interceptor: @escaping ([EditCommand], NoteDocument, CommandContext) -> [EditCommand]) -> UUID {
+        let token = UUID()
+        localCommandInterceptors[token] = interceptor
+        localCommandInterceptorOrder.append(token)
+        return token
+    }
+
+    func removeCommandInterceptor(_ token: UUID) {
+        localCommandInterceptors.removeValue(forKey: token)
+        localCommandInterceptorOrder.removeAll { $0 == token }
     }
 
     @discardableResult
     func apply(_ commands: [EditCommand], recordUndo: Bool = true) -> NoteDocument {
         guard var doc = activeDocument else { return activeDocument ?? NoteDocument(text: "", metadata: .empty) }
-        let sanitized = Array(commands.prefix(commandPipelineContract.maxCommandsPerBatch))
+        let maxBatch = commandPipelineContract.maxCommandsPerBatch
+        if commands.count > maxBatch {
+            assertionFailure("Command batch of \(commands.count) exceeds contract limit \(maxBatch); tail silently dropped")
+            Logger.editEngine.error("Command batch truncated from \(commands.count, privacy: .public) to \(maxBatch, privacy: .public)")
+        }
+        let sanitized = Array(commands.prefix(maxBatch))
         let context = CommandContext(trigger: "appModel.apply", selectionRange: nil)
-        let intercepted = localCommandInterceptors.reduce(sanitized) { partial, interceptor in
-            interceptor(partial, doc, context)
+        let intercepted = localCommandInterceptorOrder.reduce(sanitized) { partial, token in
+            guard let interceptor = localCommandInterceptors[token] else { return partial }
+            return interceptor(partial, doc, context)
         }
         let before = doc
         for command in intercepted {
@@ -284,19 +324,18 @@ final class AppModel: ObservableObject {
 
         if recordUndo, let undo = undoManager {
             let after = doc
-            let beforeCost = before.text.utf16.count + before.metadata.blocks.count * 64 + before.metadata.spans.count * 48
-            let afterCost = after.text.utf16.count + after.metadata.blocks.count * 64 + after.metadata.spans.count * 48
+            let name = Self.undoActionName(for: intercepted)
             undo.registerUndo(withTarget: self) { model in
                 model.applyUndoSnapshot(from: after, to: before)
             }
-            undo.setActionName(Self.undoActionName(for: intercepted))
-            approxUndoSnapshotBytes += beforeCost + afterCost
+            undo.setActionName(name)
+            undoHistory.append((before: before, after: after, actionName: name))
             enforceUndoPolicyIfNeeded()
         }
 
         activeDocument = doc
         scheduleAutosave()
-        Task { await refreshBacklinks() }
+        scheduleBacklinkRefresh()
         return doc
     }
 
@@ -310,13 +349,24 @@ final class AppModel: ObservableObject {
 
     private func clearUndoStack() {
         undoManager?.removeAllActions(withTarget: self)
-        approxUndoSnapshotBytes = 0
+        undoHistory.removeAll()
     }
 
     private func enforceUndoPolicyIfNeeded() {
-        guard approxUndoSnapshotBytes > undoPolicy.maxApproxBytes else { return }
-        clearUndoStack()
-        Logger.vault.info("Undo stack pruned due to policy cap=\(self.undoPolicy.maxApproxBytes, privacy: .public)")
+        let max = undoPolicy.maxUndoSteps
+        guard undoHistory.count > max else { return }
+        // Trim oldest entries, then re-register surviving steps so NSUndoManager stays in sync.
+        undoHistory = Array(undoHistory.suffix(max))
+        undoManager?.removeAllActions(withTarget: self)
+        for step in undoHistory {
+            let before = step.before
+            let after = step.after
+            undoManager?.registerUndo(withTarget: self) { model in
+                model.applyUndoSnapshot(from: after, to: before)
+            }
+            undoManager?.setActionName(step.actionName)
+        }
+        Logger.vault.info("Undo stack pruned to \(max, privacy: .public) steps")
     }
 
     private static func undoActionName(for commands: [EditCommand]) -> String {
@@ -382,6 +432,7 @@ final class AppModel: ObservableObject {
             lastKnownDiskDate = modified
             lastKnownDiskRevision = revision
             lastPersistedDocument = doc
+            cachedLinkGraph = nil
             await refreshBacklinks()
         } catch {
             lastError = "Autosave failed: \(error.localizedDescription)"
@@ -413,9 +464,10 @@ final class AppModel: ObservableObject {
                 lastKnownDiskDate = modified
                 lastKnownDiskRevision = revision
                 lastPersistedDocument = latest
+                cachedLinkGraph = nil
                 let latencyMs = Int(Date().timeIntervalSince(startedAt) * 1000)
                 VaultTelemetry.logAutosave(latencyMs: max(0, latencyMs))
-                Task { await self.refreshBacklinks() }
+                await self.refreshBacklinks()
             } catch {
                 lastError = "Autosave failed: \(error.localizedDescription)"
             }

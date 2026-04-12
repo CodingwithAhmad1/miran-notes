@@ -31,6 +31,11 @@ enum SpanAdjuster {
         return splitAcrossBlockBoundaries(spans: shifted, blocks: blocks)
     }
 
+    /// Clips spans so that none cross a block boundary. Called after `splitBlock` to keep span metadata consistent.
+    static func constrainToBlocks(spans: [Span], blocks: [Block]) -> [Span] {
+        splitAcrossBlockBoundaries(spans: spans, blocks: blocks)
+    }
+
     private static func splitAcrossBlockBoundaries(spans: [Span], blocks: [Block]) -> [Span] {
         guard !blocks.isEmpty else { return [] }
         var adjusted: [Span] = []
