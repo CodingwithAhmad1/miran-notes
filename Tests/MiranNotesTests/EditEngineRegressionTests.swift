@@ -66,6 +66,17 @@ final class EditEngineRegressionTests: XCTestCase {
         XCTAssertTrue(NoteIntegrity.check(document: doc).isValid)
     }
 
+    func testChangeBlockTypeHeadingLevel() {
+        var doc = baselineDocument(text: "Hi")
+        doc = EditCommandEngine.apply(
+            .changeBlockType(blockID: "b0", type: .heading, headingLevel: 3),
+            to: doc
+        )
+        XCTAssertEqual(doc.metadata.blocks[0].type, .heading)
+        XCTAssertEqual(doc.metadata.blocks[0].level, 3)
+        XCTAssertTrue(NoteIntegrity.check(document: doc).isValid)
+    }
+
     func testToggleSpanBeyondTextIsClampedAndValid() {
         var doc = baselineDocument(text: "hi")
         doc = EditCommandEngine.apply(

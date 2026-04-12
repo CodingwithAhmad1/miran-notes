@@ -6,6 +6,7 @@ import SwiftUI
 private final class WikiLinkTextView: NSTextView {
     var wikiLinks: [NoteLink] = []
     var linkHitHandler: ((UUID) -> Void)?
+    var formattingCommandHandler: ((SpanStyle) -> Void)?
 
     override func mouseDown(with event: NSEvent) {
         NSApp.activate(ignoringOtherApps: true)
@@ -24,47 +25,32 @@ private final class WikiLinkTextView: NSTextView {
         }
         super.mouseDown(with: event)
     }
-}
 
-private enum EditorTypography {
-    static let bodyPointSize: CGFloat = 15
-    static var bodyFont: NSFont { .systemFont(ofSize: bodyPointSize) }
-
-    /// Programmatic `string` / `replaceCharacters` updates often install the field editor’s default font (~13pt).
-    /// Reapply our body font to the full storage and typing attributes so typing stays the same size after Return, etc.
-    static func applyBodyStyle(to textView: NSTextView) {
-        let font = bodyFont
-        textView.font = font
-        var attrs = textView.typingAttributes
-        attrs[.font] = font
-        if attrs[.foregroundColor] == nil {
-            attrs[.foregroundColor] = NSColor.textColor
+    override func doCommand(by selector: Selector) {
+        // Standard key bindings use these selectors (not exposed as Swift `#selector` on `NSTextView`).
+        switch selector {
+        case Selector(("toggleBold:")):
+            formattingCommandHandler?(.bold)
+        case Selector(("toggleItalic:")):
+            formattingCommandHandler?(.italic)
+        default:
+            super.doCommand(by: selector)
         }
-        textView.typingAttributes = attrs
-        guard let storage = textView.textStorage else { return }
-        let fullRange = NSRange(location: 0, length: storage.length)
-        guard fullRange.length > 0 else { return }
-        storage.beginEditing()
-        storage.addAttribute(.font, value: font, range: fullRange)
-        storage.endEditing()
     }
 
-    static func applyWikiLinkHighlight(_ textView: NSTextView, links: [NoteLink]) {
-        guard let storage = textView.textStorage, storage.length > 0 else { return }
-        let font = bodyFont
-        let bodyColor = NSColor.textColor
-        let linkColor = NSColor.linkColor
-        let fullRange = NSRange(location: 0, length: storage.length)
-        storage.beginEditing()
-        storage.addAttribute(.foregroundColor, value: bodyColor, range: fullRange)
-        for link in links {
-            let r = NSRange(location: link.range.start, length: link.range.length)
-            guard r.location + r.length <= storage.length else { continue }
-            guard r.length > 0 else { continue }
-            storage.addAttribute(.font, value: font, range: r)
-            storage.addAttribute(.foregroundColor, value: linkColor, range: r)
+    /// Format menu and Cmd+Shift+C; avoids Cmd+` (reserved for window cycling on macOS).
+    @objc func toggleCodeSpan(_ sender: Any?) {
+        formattingCommandHandler?(.code)
+    }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if event.modifierFlags.contains(.command),
+           event.modifierFlags.contains(.shift),
+           event.charactersIgnoringModifiers?.lowercased() == "c" {
+            formattingCommandHandler?(.code)
+            return true
         }
-        storage.endEditing()
+        return super.performKeyEquivalent(with: event)
     }
 }
 
@@ -83,7 +69,7 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
         textView.isRichText = true
         textView.importsGraphics = false
         textView.usesAdaptiveColorMappingForDarkAppearance = true
-        EditorTypography.applyBodyStyle(to: textView)
+        textView.usesFontPanel = false
         textView.textContainerInset = NSSize(width: 8, height: 10)
         // Document-level undo is handled by the window `UndoManager` in `AppModel`; disable `NSTextView`’s separate stack.
         textView.allowsUndo = false
@@ -102,6 +88,9 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
         textView.linkHitHandler = { [weak coordinator] id in
             coordinator?.parent.onWikiLinkClick?(id)
         }
+        textView.formattingCommandHandler = { [weak coordinator] style in
+            coordinator?.toggleSpanStyle(style)
+        }
         coordinator.applyDocumentText()
         return scrollView
     }
@@ -112,6 +101,9 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
             let coordinator = context.coordinator
             tv.linkHitHandler = { [weak coordinator] id in
                 coordinator?.parent.onWikiLinkClick?(id)
+            }
+            tv.formattingCommandHandler = { [weak coordinator] style in
+                coordinator?.toggleSpanStyle(style)
             }
         }
         context.coordinator.applyDocumentText()
@@ -126,6 +118,16 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
 
         init(_ parent: SingleSurfaceNoteEditor) {
             self.parent = parent
+        }
+
+        func toggleSpanStyle(_ style: SpanStyle) {
+            guard let textView else { return }
+            guard !textView.hasMarkedText() else { return }
+            let r = textView.selectedRange()
+            guard r.length > 0 else { return }
+            parent.onCommands([
+                .toggleSpanStyle(range: TextRange(start: r.location, length: r.length), style: style)
+            ])
         }
 
         func textStorage(
@@ -147,6 +149,22 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
             if storageString == parent.document.text { return }
 
             if let diff = TextEditDiff.singleUTF16Replacement(from: parent.document.text, to: storageString) {
+                if let slashMatch = SlashCommandDetector.match(
+                    modelText: parent.document.text,
+                    storageText: storageString,
+                    insertion: (diff.range, diff.replacement)
+                ),
+                    let blockIndex = DocumentLayoutController.blockIndex(
+                        at: diff.range.location,
+                        blocks: parent.document.metadata.blocks
+                    ) {
+                    let blockID = parent.document.metadata.blocks[blockIndex].id
+                    if let slashCommands = SlashCommandRegistry.editCommands(for: slashMatch, blockID: blockID) {
+                        parent.onCommands(slashCommands)
+                        return
+                    }
+                }
+
                 parent.onCommands([
                     .replaceText(
                         range: TextRange(start: diff.range.location, length: diff.range.length),
@@ -170,7 +188,7 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
             if textView.hasMarkedText() { return }
 
             if textView.string == parent.document.text {
-                refreshWikiLinkChrome(textView: textView)
+                refreshVisualChrome(textView: textView)
                 applyPendingSelectionIfNeeded()
                 return
             }
@@ -178,8 +196,7 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
             if let commands = pendingCommands,
                applyPendingCommandsIfConsistent(commands, textView: textView) {
                 pendingCommands = nil
-                EditorTypography.applyBodyStyle(to: textView)
-                refreshWikiLinkChrome(textView: textView)
+                refreshVisualChrome(textView: textView)
                 applyPendingSelectionIfNeeded()
                 return
             }
@@ -190,8 +207,7 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
                 isApplyingModelUpdate = true
                 textView.textStorage?.replaceCharacters(in: diff.range, with: diff.replacement)
                 isApplyingModelUpdate = false
-                EditorTypography.applyBodyStyle(to: textView)
-                refreshWikiLinkChrome(textView: textView)
+                refreshVisualChrome(textView: textView)
                 applyPendingSelectionIfNeeded()
                 return
             }
@@ -200,14 +216,13 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
             isApplyingModelUpdate = true
             textView.string = parent.document.text
             isApplyingModelUpdate = false
-            EditorTypography.applyBodyStyle(to: textView)
-            refreshWikiLinkChrome(textView: textView)
+            refreshVisualChrome(textView: textView)
             restoreSelectionClamped(savedSelection)
             applyPendingSelectionIfNeeded()
         }
 
-        private func refreshWikiLinkChrome(textView: NSTextView) {
-            EditorTypography.applyWikiLinkHighlight(textView, links: parent.document.metadata.links)
+        private func refreshVisualChrome(textView: NSTextView) {
+            EditorVisualStyle.apply(to: textView, document: parent.document)
             if let w = textView as? WikiLinkTextView {
                 w.wikiLinks = parent.document.metadata.links
             }

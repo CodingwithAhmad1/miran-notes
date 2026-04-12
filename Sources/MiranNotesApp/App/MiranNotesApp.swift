@@ -82,6 +82,22 @@ struct MiranNotesApp: App {
                 }
             )
         }
+        .commands {
+            CommandMenu("Format") {
+                Button("Bold") {
+                    NSApp.sendAction(Selector(("toggleBold:")), to: nil, from: nil)
+                }
+                .keyboardShortcut("b", modifiers: .command)
+                Button("Italic") {
+                    NSApp.sendAction(Selector(("toggleItalic:")), to: nil, from: nil)
+                }
+                .keyboardShortcut("i", modifiers: .command)
+                Button("Code") {
+                    NSApp.sendAction(Selector(("toggleCodeSpan:")), to: nil, from: nil)
+                }
+                .keyboardShortcut("c", modifiers: [.command, .shift])
+            }
+        }
     }
 }
 

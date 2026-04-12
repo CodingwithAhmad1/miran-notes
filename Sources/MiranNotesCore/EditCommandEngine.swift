@@ -4,7 +4,8 @@ public enum EditCommand {
     case replaceText(range: TextRange, replacement: String)
     case splitBlock(blockID: String, atOffset: Int)
     case mergeWithPrevious(blockID: String)
-    case changeBlockType(blockID: String, type: BlockType)
+    /// `headingLevel` applies when `type == .heading` (1–6); ignored for other types.
+    case changeBlockType(blockID: String, type: BlockType, headingLevel: Int?)
     case toggleSpanStyle(range: TextRange, style: SpanStyle)
     /// Inserts `[[displayText]]` at UTF-16 offset and records a wiki link to `targetNoteID` over the inserted token.
     case insertWikiLink(utf16Offset: Int, targetNoteID: UUID, displayText: String)
@@ -24,8 +25,8 @@ public struct EditCommandEngine {
             next = splitBlock(document: next, blockID: blockID, atOffset: atOffset)
         case let .mergeWithPrevious(blockID):
             next = mergeBlock(document: next, blockID: blockID)
-        case let .changeBlockType(blockID, type):
-            next = updateBlockType(document: next, blockID: blockID, type: type)
+        case let .changeBlockType(blockID, type, headingLevel):
+            next = updateBlockType(document: next, blockID: blockID, type: type, headingLevel: headingLevel)
         case let .toggleSpanStyle(range, style):
             next = toggleSpan(document: next, range: range, style: style)
         case let .insertWikiLink(utf16Offset, targetNoteID, displayText):
@@ -128,7 +129,7 @@ public struct EditCommandEngine {
         return next
     }
 
-    private static func updateBlockType(document: NoteDocument, blockID: String, type: BlockType) -> NoteDocument {
+    private static func updateBlockType(document: NoteDocument, blockID: String, type: BlockType, headingLevel: Int?) -> NoteDocument {
         var next = document
         guard let index = next.metadata.blocks.firstIndex(where: { $0.id == blockID }) else {
             return next
@@ -137,6 +138,8 @@ public struct EditCommandEngine {
         next.metadata.blocks[index].type = type
         if type != .heading {
             next.metadata.blocks[index].level = nil
+        } else if let level = headingLevel {
+            next.metadata.blocks[index].level = min(max(level, 1), 6)
         } else if next.metadata.blocks[index].level == nil {
             next.metadata.blocks[index].level = 1
         }

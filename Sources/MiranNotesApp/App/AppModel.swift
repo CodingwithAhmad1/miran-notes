@@ -263,6 +263,10 @@ final class AppModel: ObservableObject {
                     }
                 case (.mergeWithPrevious, .replaceText):
                     return "Merge Blocks"
+                case let (.replaceText(range, replacement), .changeBlockType):
+                    if replacement.isEmpty, range.length > 0 {
+                        return "Slash Command"
+                    }
                 default:
                     break
                 }

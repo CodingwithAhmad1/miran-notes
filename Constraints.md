@@ -29,6 +29,14 @@ Aligning visual block affordances (callouts, gutters, handles) with TextKit layo
 
 The canonical note model and `NSTextView` are two representations of text. Engineering discipline and tests keep them aligned; **formal proof** of impossible desync is not assumed.
 
+## Rich text and slash commands
+
+- **Dual representation:** Canonical plain text plus sidecar metadata (blocks, spans, links) is the source of truth. `NSTextView` attributes are **derived**: an `EditorVisualStyle` pass applies block fonts, span styles (bold / italic / code), and link coloring whenever the model updates from **any** source (typing, undo, structural commands, external reload). If that pass is skipped, the buffer can briefly disagree with metadata.
+- **IME / marked text:** While the text view has **marked text** (composition), the editor does not run slash detection and formatting shortcuts (`toggleBold:`, etc.) do not apply, so composition is not torn down mid-sequence.
+- **Slash commands (MVP):** Detection is **line-start only** (after a newline or at document start, with `/` as the first character on the line). A command **commits** when the user types **Space** or **Return** after a registered token (`/h1`–`/h3`, `/p`, `/code`). Partial tokens such as `/h` do nothing until a commit character. **Registry order** defines which pattern wins if two entries could match (built-ins are disjoint). “Slash anywhere” would need a separate spec.
+- **External editors:** A literal `/h1` in `note.txt` stays plain text until the user edits in-app in a way that triggers detection (or a future explicit conversion). This aligns with **Semantic reconciliation**: no silent semantic rewrite of metadata without an explicit editing action the user can reason about.
+- **Notion parity limits:** Slash commands plus heading fonts improve the experience but do **not** deliver full per-block chrome (gutters, drag handles, block menus) in a single `NSTextView`; see **Block chrome and layout** above.
+
 ## View sync and text pipeline (Phases 1–2)
 
 - **Incremental model → view updates:** When the canonical string and `NSTextView` differ by a **single UTF-16 edit**, the editor applies `NSTextStorage.replaceCharacters` for that edit instead of assigning `string` wholesale, reducing churn and selection jumps ([`TextEditDiff`](Sources/MiranNotesApp/Features/Editor/TextEditDiff.swift)).
@@ -40,7 +48,7 @@ The canonical note model and `NSTextView` are two representations of text. Engin
 
 The app uses **document-level undo** via the window `UndoManager`: each user editing batch is recorded as a **snapshot** of `NoteDocument` before and after `EditCommand` application. Structural batches (for example newline split or merge) are **one undo step** because they are applied in a single `apply([EditCommand])` call. `NSTextView.allowsUndo` is **off** so the text view does not maintain a second undo stack alongside the document snapshots.
 
-**Undo menu labels:** A newline split (`replaceText` inserting `"\n"` + `splitBlock`) and a merge-at-start-of-block batch (`mergeWithPrevious` + `replaceText`) register under **Split Block** and **Merge Blocks** respectively when those patterns match.
+**Undo menu labels:** A newline split (`replaceText` inserting `"\n"` + `splitBlock`) and a merge-at-start-of-block batch (`mergeWithPrevious` + `replaceText`) register under **Split Block** and **Merge Blocks** respectively when those patterns match. A slash batch (`replaceText` deleting the token + `changeBlockType`) registers as **Slash Command**.
 
 **Highlighted limitations (must stay explicit in product and code):**
 
