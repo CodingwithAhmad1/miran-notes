@@ -112,7 +112,7 @@ The app uses **document-level undo** via the window `UndoManager`: each user edi
 - **Dirty** means the buffer differs from the last snapshot known to match disk (`lastPersistedDocument` after load or successful save).
 - If the buffer is **clean** and on-disk content differs → the app **reloads silently** (undo cleared for that note, same as after external change in earlier builds).
 - If the buffer is **dirty** and the loaded on-disk document differs from the buffer → the app shows a **conflict** alert: **Reload from disk** (discard local edits) or **Keep local edits** (dismiss; the next save may overwrite external changes; the acknowledged file timestamp avoids repeating the same alert until the file changes again).
-- **Limitation (TOCTOU):** A notification is not a guarantee that the file we read is bitwise-identical to the version that triggered the event; another writer could change the file again before we read. The app compares **loaded** `NoteDocument` values to the buffer, not a perfect distributed lock.
+- **Limitation (TOCTOU):** A notification is not a guarantee that the file we read is bitwise-identical to the version that triggered the event; another writer could change the file again before we read. The app compares **loaded** `NoteDocument` values to the buffer, not a perfect distributed lock. Before loading external changes, `AppModel` performs **two consecutive** reads of the raw `.txt` file’s SHA256; if they differ, telemetry records possible concurrent mutation (`VaultTelemetry.logToctouTextHashDrift`). The hash is also tracked after load/save for a stable body-file fingerprint alongside revision tokens.
 
 ## Atomic vault commits and dirty-flag saves (Foundation Hardening)
 

@@ -106,5 +106,30 @@ final class AppModelUndoTests: XCTestCase {
         model.apply(.replaceText(range: TextRange(start: 1, length: 0), replacement: "b"))
         XCTAssertEqual(callCount, 1, "Interceptor must not fire after removal")
     }
+
+    func testTwoLocalInterceptorsRunInRegistrationOrder() async throws {
+        let vault = try tempVaultURL()
+        let repo = NoteRepository(vaultURL: vault)
+        try await repo.ensureVault()
+        let (_, baseName) = try await repo.createNote(named: "order-note")
+
+        let model = AppModel(repository: repo)
+        await model.refreshNotes()
+        model.selectedBaseName = baseName
+        await model.loadSelectedNote()
+
+        var order: [Int] = []
+        _ = model.registerCommandInterceptor { commands, _, _ in
+            order.append(1)
+            return commands
+        }
+        _ = model.registerCommandInterceptor { commands, _, _ in
+            order.append(2)
+            return commands
+        }
+
+        _ = model.apply(.replaceText(range: TextRange(start: 0, length: 0), replacement: "x"))
+        XCTAssertEqual(order, [1, 2], "Local interceptors should run in registration order after extension interceptors")
+    }
 }
 

@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import MiranNotesCore
 import XCTest
@@ -125,6 +126,18 @@ final class NoteRepositoryTests: XCTestCase {
 
         XCTAssertNotNil(secondToken)
         XCTAssertNotEqual(firstToken, secondToken)
+    }
+
+    func testNoteTextFileSHA256MatchesFileBytes() async throws {
+        let vault = try tempVaultURL()
+        let repo = NoteRepository(vaultURL: vault)
+        try await repo.ensureVault()
+        let (_, base) = try await repo.createNote(named: "sha-note")
+        let textURL = vault.appendingPathComponent("\(base).txt")
+        let data = try Data(contentsOf: textURL)
+        let expected = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        let h = try await repo.noteTextFileSHA256(relativePath: base)
+        XCTAssertEqual(h, expected)
     }
 
     func testListNotesRepairsMissingMetadataSidecar() async throws {

@@ -15,3 +15,5 @@ For editor chrome and SwiftUI sidebars, consider **swift-snapshot-testing** or X
 ## Placeholder
 
 Until a workspace exists, critical UI paths remain covered by manual QA (`docs/plans/editor-interaction-scenarios.md`) and `MiranNotesAppTests` integration tests around `AppModel`.
+
+The repository root [UITests/README.md](../../UITests/README.md) documents the intended folder for an Xcode-hosted UI test bundle once you add a workspace.

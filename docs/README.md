@@ -21,6 +21,7 @@ Miran Notes is a **local-first** macOS notes app: canonical text in per-note `.t
 | [architecture/user-and-technical-priorities.md](architecture/user-and-technical-priorities.md) | User and technical priorities brief |
 | [architecture/architecture-flexibility-assessment.md](architecture/architecture-flexibility-assessment.md) | Flexibility and product-fit assessment |
 | [architecture/links-folders-tables-database-analysis.md](architecture/links-folders-tables-database-analysis.md) | Links, folders, tables analysis |
+| [architecture/vault-data-layer.md](architecture/vault-data-layer.md) | Repository, on-disk layout, text hash vs revision token, TOCTOU |
 | **ADRs** | |
 | [adr/README.md](adr/README.md) | Architecture Decision Records index |
 | **Plans and QA** | |

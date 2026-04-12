@@ -23,4 +23,9 @@ enum VaultTelemetry {
     static func logManifestReconcile(removed: Int, added: Int) {
         Logger.vault.debug("manifestReconcile removed=\(removed, privacy: .public) added=\(added, privacy: .public)")
     }
+
+    /// Two back-to-back reads of the note `.txt` SHA256 differed (possible TOCTOU or concurrent writer).
+    static func logToctouTextHashDrift() {
+        Logger.vault.notice("noteTextFileSHA256 drift between consecutive reads (possible concurrent edit)")
+    }
 }

@@ -255,6 +255,17 @@ actor NoteRepository {
         try loadNote(relativePath: baseName)
     }
 
+    /// SHA256 (hex) of raw `.txt` file bytes on disk. Stable identity for the note body file independent of parse/repair.
+    func noteTextFileSHA256(relativePath: String) throws -> String {
+        try VaultPath.validateRelativePath(relativePath)
+        let textURL = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: relativePath, extension: "txt")
+        guard FileManager.default.fileExists(atPath: textURL.path) else {
+            throw NoteRepositoryError.noteNotFound(relativePath)
+        }
+        let data = try Data(contentsOf: textURL)
+        return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
     /// Raw UTF-8 text from the note `.txt` file only (no metadata load or structural repair). Used for search indexing.
     func readRawNoteText(relativePath: String) throws -> String {
         try VaultPath.validateRelativePath(relativePath)

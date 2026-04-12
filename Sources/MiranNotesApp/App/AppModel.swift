@@ -86,6 +86,8 @@ final class AppModel: ObservableObject {
     private var lastPersistedDocument: NoteDocument?
     private var lastKnownDiskDate: Date?
     private var lastKnownDiskRevision: DocumentRevisionToken?
+    /// Last observed SHA256 of raw `.txt` bytes (hex), aligned with load/save and conflict handling.
+    private var lastKnownNoteTextSHA256: String?
     private var undoManager: UndoManager?
     /// Bumped when the selected note identity changes so debounced autosave completions cannot apply stale persistence state.
     private var navigationGeneration = 0
@@ -483,12 +485,7 @@ final class AppModel: ObservableObject {
                 selectedBaseName = relPath
                 activeDocument = document
                 lastPersistedDocument = document
-                do {
-                    lastKnownDiskDate = try await repository.noteModifiedDate(relativePath: relPath)
-                    lastKnownDiskRevision = try await repository.noteRevisionToken(relativePath: relPath)
-                } catch {
-                    lastError = "Failed to read note timestamps: \(error.localizedDescription)"
-                }
+                await refreshOnDiskFingerprints(for: relPath)
                 clearUndoStack()
             } catch {
                 lastError = "Failed to create note: \(error.localizedDescription)"
@@ -505,6 +502,7 @@ final class AppModel: ObservableObject {
             lastPersistedDocument = nil
             lastKnownDiskDate = nil
             lastKnownDiskRevision = nil
+            lastKnownNoteTextSHA256 = nil
             repairAdvisory = nil
             backlinks = []
             clearUndoStack()
@@ -516,12 +514,7 @@ final class AppModel: ObservableObject {
             activeDocument = result.document
             lastPersistedDocument = result.document
             repairAdvisory = RepairDiagnosticsBuilder.buildLoadAdvisory(result: result)
-            do {
-                lastKnownDiskDate = try await repository.noteModifiedDate(relativePath: path)
-                lastKnownDiskRevision = try await repository.noteRevisionToken(relativePath: path)
-            } catch {
-                lastError = "Failed to read note timestamps: \(error.localizedDescription)"
-            }
+            await refreshOnDiskFingerprints(for: path)
             clearUndoStack()
             await refreshBacklinks()
         } catch {
@@ -577,6 +570,7 @@ final class AppModel: ObservableObject {
         localCommandInterceptorOrder.removeAll { $0 == token }
     }
 
+    /// Runs ``ExtensionRegistry`` interceptors first (sorted by each extension's `descriptor.id`), then each local interceptor in ``registerCommandInterceptor`` order. The `document` passed to interceptors is the buffer **before** this batch is applied.
     @discardableResult
     func apply(_ commands: [EditCommand], recordUndo: Bool = true) -> NoteDocument {
         guard var doc = activeDocument else { return activeDocument ?? NoteDocument(text: "", metadata: .empty) }
@@ -846,6 +840,16 @@ final class AppModel: ObservableObject {
         }
     }
 
+    private func refreshOnDiskFingerprints(for path: String) async {
+        do {
+            lastKnownDiskDate = try await repository.noteModifiedDate(relativePath: path)
+            lastKnownDiskRevision = try await repository.noteRevisionToken(relativePath: path)
+            lastKnownNoteTextSHA256 = try await repository.noteTextFileSHA256(relativePath: path)
+        } catch {
+            lastError = "Failed to read note on-disk state: \(error.localizedDescription)"
+        }
+    }
+
     /// Cancels any debounced save, then persists the current buffer if it differs from the last known on-disk snapshot.
     private func flushCurrentNoteToDiskIfDirty() async {
         saveTask?.cancel()
@@ -855,10 +859,7 @@ final class AppModel: ObservableObject {
         do {
             let integrity = try await repository.save(doc, asBaseName: path)
             applyVaultIntegrityAfterSave(integrity)
-            let modified = try await repository.noteModifiedDate(relativePath: path)
-            let revision = try await repository.noteRevisionToken(relativePath: path)
-            lastKnownDiskDate = modified
-            lastKnownDiskRevision = revision
+            await refreshOnDiskFingerprints(for: path)
             lastPersistedDocument = doc
             cachedLinkGraph = nil
             await refreshBacklinks()
@@ -886,12 +887,9 @@ final class AppModel: ObservableObject {
             guard let latest = activeDocument else { return }
             do {
                 let integrity = try await repository.save(latest, asBaseName: expectedPath)
-                let modified = try await repository.noteModifiedDate(relativePath: expectedPath)
-                let revision = try await repository.noteRevisionToken(relativePath: expectedPath)
                 guard gen == navigationGeneration, selectedBaseName == expectedPath else { return }
                 applyVaultIntegrityAfterSave(integrity)
-                lastKnownDiskDate = modified
-                lastKnownDiskRevision = revision
+                await refreshOnDiskFingerprints(for: expectedPath)
                 lastPersistedDocument = latest
                 cachedLinkGraph = nil
                 let latencyMs = Int(Date().timeIntervalSince(startedAt) * 1000)
@@ -918,6 +916,10 @@ final class AppModel: ObservableObject {
         if reloadFromDisk {
             Task { @MainActor in
                 await loadSelectedNote()
+            }
+        } else if let path = selectedBaseName {
+            Task { @MainActor in
+                await refreshOnDiskFingerprints(for: path)
             }
         } else if let diskDate {
             lastKnownDiskDate = diskDate
@@ -972,9 +974,25 @@ final class AppModel: ObservableObject {
         guard let diskDate else { return }
         if let diskRevision, diskRevision == lastKnownDiskRevision {
             lastKnownDiskDate = diskDate
+            if let h = try? await repository.noteTextFileSHA256(relativePath: path) {
+                lastKnownNoteTextSHA256 = h
+            }
             return
         }
         if let lastKnown = lastKnownDiskDate, diskDate <= lastKnown {
+            return
+        }
+
+        let observedTextHash: String
+        do {
+            let h1 = try await repository.noteTextFileSHA256(relativePath: path)
+            let h2 = try await repository.noteTextFileSHA256(relativePath: path)
+            if h1 != h2 {
+                VaultTelemetry.logToctouTextHashDrift()
+            }
+            observedTextHash = h2
+        } catch {
+            lastError = "Failed to read note body fingerprint: \(error.localizedDescription)"
             return
         }
 
@@ -993,6 +1011,7 @@ final class AppModel: ObservableObject {
             if loadedFromDisk == activeDocument {
                 lastKnownDiskDate = diskDate
                 lastKnownDiskRevision = diskRevision
+                lastKnownNoteTextSHA256 = observedTextHash
                 return
             }
             clearUndoStack()
@@ -1000,6 +1019,7 @@ final class AppModel: ObservableObject {
             lastPersistedDocument = loadedFromDisk
             lastKnownDiskDate = diskDate
             lastKnownDiskRevision = diskRevision
+            lastKnownNoteTextSHA256 = observedTextHash
             Task { await refreshBacklinks() }
             return
         }
@@ -1008,6 +1028,7 @@ final class AppModel: ObservableObject {
             lastPersistedDocument = loadedFromDisk
             lastKnownDiskDate = diskDate
             lastKnownDiskRevision = diskRevision
+            lastKnownNoteTextSHA256 = observedTextHash
             return
         }
 
