@@ -6,9 +6,6 @@ import os.log
 /// Result of loading a note from disk, including any structural repair warnings.
 struct NoteLoadResult {
     var document: NoteDocument
-    /// Non-empty when `RangeNormalizer` had to repair block ranges or spans on load.
-    /// Surfaced to the user as a non-blocking advisory so they know metadata may not perfectly
-    /// reflect the original block structure.
     var repairWarnings: [String]
 
     var wasRepaired: Bool { !repairWarnings.isEmpty }
@@ -16,17 +13,38 @@ struct NoteLoadResult {
 
 enum NoteRepositoryError: LocalizedError, Equatable {
     case invalidBaseName(String)
+    case invalidRelativePath(String)
     case tooManyFilenameCollisions
     case noteNotFound(String)
+    case noteNotFoundByID(UUID)
+    case folderNotFound(UUID)
+    case invalidFolderName(String)
+    case duplicateFolderName(String)
+    case invalidFolderMove
+    case folderNotEmpty(UUID)
 
     var errorDescription: String? {
         switch self {
         case let .invalidBaseName(name):
             return "Invalid note name: \(name)"
+        case let .invalidRelativePath(path):
+            return "Invalid path: \(path)"
         case .tooManyFilenameCollisions:
             return "Could not allocate a unique note file name."
         case let .noteNotFound(base):
             return "Note not found: \(base)"
+        case let .noteNotFoundByID(id):
+            return "Note not found: \(id.uuidString)"
+        case let .folderNotFound(id):
+            return "Folder not found: \(id.uuidString)"
+        case let .invalidFolderName(name):
+            return "Invalid folder name: \(name)"
+        case let .duplicateFolderName(name):
+            return "A folder with this name already exists: \(name)"
+        case .invalidFolderMove:
+            return "That folder cannot be moved there."
+        case let .folderNotEmpty(id):
+            return "Folder is not empty (contains notes or folders): \(id.uuidString)"
         }
     }
 }
@@ -35,11 +53,24 @@ struct NoteSummary: Identifiable, Hashable {
     var id: UUID { noteID }
     var noteID: UUID
     var title: String
-    var baseName: String
+    /// Path under the vault root without extension, e.g. `work/a` or `note`.
+    var relativePath: String
+    /// Folder that owns this note in `FolderCatalog` (vault root uses `FolderCatalog.rootFolderID`).
+    var folderID: UUID
+}
+
+/// One incoming link from a source note (backlink row in the UI).
+struct BacklinkItem: Identifiable {
+    var id: UUID { sourceNoteID }
+    var sourceNoteID: UUID
+    var title: String
+    var relativePath: String
+    var snippet: String
+    /// UTF-16 range of the link in the **source** note’s body (for scroll-to-link).
+    var linkRange: MiranNotesCore.TextRange
 }
 
 actor NoteRepository {
-    /// Exposed for vault-wide filesystem observation (`VaultDirectoryWatcher`) without crossing the actor boundary for reads.
     nonisolated let vaultURL: URL
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
@@ -52,20 +83,9 @@ actor NoteRepository {
         self.decoder = JSONDecoder()
     }
 
-    /// Rejects path segments and reserved names so `baseName` cannot escape the vault directory.
+    /// Legacy single-segment validation (flat notes only).
     nonisolated static func validateBaseName(_ baseName: String) throws {
-        guard !baseName.isEmpty else {
-            throw NoteRepositoryError.invalidBaseName(baseName)
-        }
-        guard baseName != "..", !baseName.hasPrefix(".") else {
-            throw NoteRepositoryError.invalidBaseName(baseName)
-        }
-        if baseName.contains("/") || baseName.contains("\\") || baseName.contains(":") {
-            throw NoteRepositoryError.invalidBaseName(baseName)
-        }
-        if baseName.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains) {
-            throw NoteRepositoryError.invalidBaseName(baseName)
-        }
+        try VaultPath.validateSingleSegment(baseName)
     }
 
     func ensureVault() throws {
@@ -75,18 +95,26 @@ actor NoteRepository {
 
     func listNotes() throws -> [NoteSummary] {
         try ensureVault()
-        let manifest = try loadOrRebuildManifest()
+        var manifest = try loadOrRebuildManifest()
+        manifest.schemaVersion = max(manifest.schemaVersion, VaultManifest.currentSchemaVersion)
         try saveManifest(manifest)
 
+        let pathIndex = try loadPathIndex()
+        let folderByNote = Dictionary(uniqueKeysWithValues: pathIndex.entries.map { ($0.noteID, $0.folderID) })
         return manifest.entries
-            .sorted { $0.baseName.lowercased() < $1.baseName.lowercased() }
+            .sorted { $0.relativePath.lowercased() < $1.relativePath.lowercased() }
             .map { entry in
-                let title = entry.title ?? entry.baseName.replacingOccurrences(of: "-", with: " ").capitalized
-                return NoteSummary(noteID: entry.noteID, title: title, baseName: entry.baseName)
+                let title = entry.title ?? entry.relativePath.split(separator: "/").last.map(String.init) ?? entry.relativePath
+                let displayTitle = title.replacingOccurrences(of: "-", with: " ").capitalized
+                return NoteSummary(
+                    noteID: entry.noteID,
+                    title: displayTitle,
+                    relativePath: entry.relativePath,
+                    folderID: folderByNote[entry.noteID] ?? FolderCatalog.rootFolderID
+                )
             }
     }
 
-    /// Current vault manifest (for link resolution, etc.).
     func loadManifest() throws -> VaultManifest {
         try loadOrRebuildManifest()
     }
@@ -111,62 +139,44 @@ actor NoteRepository {
         try atomicWrite(data, to: url)
     }
 
-    /// Updates forward edges for one note and persists the graph (call from debounced save path).
     func updateLinkGraph(sourceNoteID: UUID, targets: [UUID]) throws {
         var graph = try loadLinkGraph()
         graph.setOutgoing(from: sourceNoteID, to: targets)
         try saveLinkGraph(graph)
     }
 
-    /// Full scan of vault notes to rebuild `link-graph.json` (cold start, external batch edits).
     func rebuildLinkGraphFull() throws {
         let manifest = try loadOrRebuildManifest()
         try saveManifest(manifest)
         var graph = LinkGraph()
         for entry in manifest.entries {
-            let doc = try loadNote(baseName: entry.baseName).document
+            let doc = try loadNote(relativePath: entry.relativePath).document
             graph.setOutgoing(from: entry.noteID, to: doc.metadata.links.map(\.targetNoteID))
         }
         try saveLinkGraph(graph)
         Logger.vault.info("Rebuilt link graph for \(manifest.entries.count, privacy: .public) notes")
     }
 
+    /// Creates a note at vault root (folder = root).
     func createNote(named name: String) throws -> (NoteDocument, String) {
-        try ensureVault()
-        var slug = slugify(name.isEmpty ? "untitled-note" : name)
-        if slug.isEmpty {
-            slug = "untitled-note"
-        }
-        let baseName = try uniqueAvailableBaseName(slug: slug)
-        let text = ""
-        let noteID = UUID()
-        let metadata = NoteMetadata(
-            schemaVersion: NoteMetadata.currentSchemaVersion,
-            noteID: noteID,
-            blocks: [
-                Block(
-                    id: UUID().uuidString,
-                    type: .paragraph,
-                    range: TextRange(start: 0, length: 0),
-                    level: nil,
-                    icon: nil
-                )
-            ],
-            spans: []
-        )
-
-        let document = NoteDocument(text: text, metadata: metadata)
-        try save(document, asBaseName: baseName)
-        return (document, baseName)
+        try createNote(named: name, folderID: FolderCatalog.rootFolderID)
     }
 
-    func loadNote(baseName: String) throws -> NoteLoadResult {
-        try Self.validateBaseName(baseName)
-        let textURL = vaultURL.appendingPathComponent("\(baseName).txt")
-        let metaURL = vaultURL.appendingPathComponent("\(baseName).meta.json")
+    func loadNote(noteID: UUID) throws -> NoteLoadResult {
+        let manifest = try loadOrRebuildManifest()
+        guard let entry = manifest.entry(noteID: noteID) else {
+            throw NoteRepositoryError.noteNotFoundByID(noteID)
+        }
+        return try loadNote(relativePath: entry.relativePath)
+    }
+
+    func loadNote(relativePath: String) throws -> NoteLoadResult {
+        try VaultPath.validateRelativePath(relativePath)
+        let textURL = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: relativePath, extension: "txt")
+        let metaURL = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: relativePath, extension: "meta.json")
 
         guard FileManager.default.fileExists(atPath: textURL.path) else {
-            throw NoteRepositoryError.noteNotFound(baseName)
+            throw NoteRepositoryError.noteNotFound(relativePath)
         }
 
         let text = (try? String(contentsOf: textURL, encoding: .utf8)) ?? ""
@@ -201,10 +211,15 @@ actor NoteRepository {
         return NoteLoadResult(document: withId, repairWarnings: repairWarnings)
     }
 
-    func noteModifiedDate(baseName: String) throws -> Date? {
-        try Self.validateBaseName(baseName)
-        let textURL = vaultURL.appendingPathComponent("\(baseName).txt")
-        let metaURL = vaultURL.appendingPathComponent("\(baseName).meta.json")
+    /// Legacy API for tests and callers still using a single path segment.
+    func loadNote(baseName: String) throws -> NoteLoadResult {
+        try loadNote(relativePath: baseName)
+    }
+
+    func noteModifiedDate(relativePath: String) throws -> Date? {
+        try VaultPath.validateRelativePath(relativePath)
+        let textURL = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: relativePath, extension: "txt")
+        let metaURL = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: relativePath, extension: "meta.json")
         let fm = FileManager.default
 
         let textDate = (try? fm.attributesOfItem(atPath: textURL.path))?[.modificationDate] as? Date
@@ -222,10 +237,10 @@ actor NoteRepository {
         }
     }
 
-    func noteRevisionToken(baseName: String) throws -> DocumentRevisionToken? {
-        try Self.validateBaseName(baseName)
-        let textURL = vaultURL.appendingPathComponent("\(baseName).txt")
-        let metaURL = vaultURL.appendingPathComponent("\(baseName).meta.json")
+    func noteRevisionToken(relativePath: String) throws -> DocumentRevisionToken? {
+        try VaultPath.validateRelativePath(relativePath)
+        let textURL = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: relativePath, extension: "txt")
+        let metaURL = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: relativePath, extension: "meta.json")
         guard FileManager.default.fileExists(atPath: textURL.path) else {
             return nil
         }
@@ -240,23 +255,31 @@ actor NoteRepository {
         return DocumentRevisionToken(rawValue: digest)
     }
 
-    func save(_ note: NoteDocument, asBaseName baseName: String) throws {
-        try Self.validateBaseName(baseName)
+    func save(_ note: NoteDocument, asRelativePath relativePath: String, folderID: UUID = FolderCatalog.rootFolderID) throws {
+        try VaultPath.validateRelativePath(relativePath)
+        try VaultPath.ensureParentDirectories(vaultRoot: vaultURL, relativePathWithoutExtension: relativePath)
         try ensureVault()
+
         let normalized = RangeNormalizer.normalize(metadata: note.metadata, for: note.text)
         let documentToPersist = NoteDocument(
             text: note.text,
             metadata: normalized.normalizedMetadata
         )
         NoteIntegrity.logIfInvalid(document: documentToPersist)
-        let textURL = vaultURL.appendingPathComponent("\(baseName).txt")
-        let metaURL = vaultURL.appendingPathComponent("\(baseName).meta.json")
+
+        let textURL = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: relativePath, extension: "txt")
+        let metaURL = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: relativePath, extension: "meta.json")
+
         var manifest = loadManifestFromDiskOnly() ?? VaultManifest()
-        let title = baseName.replacingOccurrences(of: "-", with: " ").capitalized
-        manifest.upsert(noteID: documentToPersist.metadata.noteID, baseName: baseName, title: title)
+        manifest.schemaVersion = VaultManifest.currentSchemaVersion
+        let lastSegment = relativePath.split(separator: "/").last.map(String.init) ?? relativePath
+        let title = lastSegment.replacingOccurrences(of: "-", with: " ").capitalized
+        manifest.upsert(noteID: documentToPersist.metadata.noteID, relativePath: relativePath, title: title)
+
         var graph = try loadLinkGraph()
         let targets = documentToPersist.metadata.links.map(\.targetNoteID)
         graph.setOutgoing(from: documentToPersist.metadata.noteID, to: targets)
+
         var relationshipIndex = try loadRelationshipIndex()
         let linkRelationships = documentToPersist.metadata.links.map { link in
             LinkRelationship(
@@ -282,16 +305,353 @@ actor NoteRepository {
         var pathIndex = try loadPathIndex()
         pathIndex.upsert(
             noteID: documentToPersist.metadata.noteID,
-            folderID: FolderCatalog.rootFolderID,
-            relativePath: baseName
+            folderID: folderID,
+            relativePath: relativePath
         )
 
+        try executeNoteCommit(
+            label: "save:\(relativePath)",
+            relativePath: relativePath,
+            document: documentToPersist,
+            textURL: textURL,
+            metaURL: metaURL,
+            manifest: manifest,
+            linkGraph: graph,
+            relationshipIndex: relationshipIndex,
+            folderCatalog: folderCatalog,
+            pathIndex: pathIndex,
+            deletePathsAfterCommit: []
+        )
+    }
+
+    /// Flat save at vault root (single segment).
+    func save(_ note: NoteDocument, asBaseName baseName: String) throws {
+        try Self.validateBaseName(baseName)
+        try save(note, asRelativePath: baseName, folderID: FolderCatalog.rootFolderID)
+    }
+
+    func renameNote(from oldRelativePath: String, to newTitle: String) throws -> String {
+        try VaultPath.validateRelativePath(oldRelativePath)
+        try ensureVault()
+        let oldTxt = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: oldRelativePath, extension: "txt")
+        guard FileManager.default.fileExists(atPath: oldTxt.path) else {
+            throw NoteRepositoryError.noteNotFound(oldRelativePath)
+        }
+
+        let doc = try loadNote(relativePath: oldRelativePath).document
+        let folderID = (try loadPathIndex()).entries.first { $0.noteID == doc.metadata.noteID }?.folderID ?? FolderCatalog.rootFolderID
+
+        let parentDir = (oldRelativePath as NSString).deletingLastPathComponent
+        let stemSlug: String
+        if newTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            stemSlug = (oldRelativePath as NSString).lastPathComponent
+        } else {
+            stemSlug = slugify(newTitle)
+        }
+        if stemSlug.isEmpty {
+            throw NoteRepositoryError.invalidRelativePath(newTitle)
+        }
+
+        let newRelativePath: String = parentDir.isEmpty ? stemSlug : "\(parentDir)/\(stemSlug)"
+
+        if newRelativePath == oldRelativePath {
+            var manifest = loadManifestFromDiskOnly() ?? VaultManifest()
+            manifest.schemaVersion = VaultManifest.currentSchemaVersion
+            manifest.upsert(noteID: doc.metadata.noteID, relativePath: oldRelativePath, title: newTitle)
+            try saveManifestOnly(manifest)
+            return oldRelativePath
+        }
+
+        let uniqueNew = try uniqueAvailableRelativePath(inDirectoryPrefix: parentDir.isEmpty ? nil : parentDir, slugStem: stemSlug)
+
+        let oldMeta = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: oldRelativePath, extension: "meta.json")
+        let newTxt = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: uniqueNew, extension: "txt")
+        let newMeta = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: uniqueNew, extension: "meta.json")
+
+        try VaultPath.ensureParentDirectories(vaultRoot: vaultURL, relativePathWithoutExtension: uniqueNew)
+
+        var manifest = loadManifestFromDiskOnly() ?? VaultManifest()
+        manifest.schemaVersion = VaultManifest.currentSchemaVersion
+        manifest.upsert(noteID: doc.metadata.noteID, relativePath: uniqueNew, title: newTitle)
+
+        var graph = try loadLinkGraph()
+        graph.setOutgoing(from: doc.metadata.noteID, to: doc.metadata.links.map(\.targetNoteID))
+        var relationshipIndex = try loadRelationshipIndex()
+        let linkRelationships = doc.metadata.links.map { link in
+            LinkRelationship(
+                sourceNoteID: doc.metadata.noteID,
+                target: .note(noteID: link.targetNoteID),
+                relationshipKind: "noteLink"
+            )
+        }
+        let artifactRelationships = doc.metadata.artifacts.map { artifact in
+            LinkRelationship(
+                sourceNoteID: doc.metadata.noteID,
+                target: .artifact(noteID: doc.metadata.noteID, artifactID: artifact.id, kind: artifact.kind),
+                relationshipKind: "artifactLink"
+            )
+        }
+        relationshipIndex.replaceLinks(from: doc.metadata.noteID, with: linkRelationships + artifactRelationships)
+
+        var folderCatalog = try loadFolderCatalog()
+        folderCatalog.ensureRoot()
+        var pathIndex = try loadPathIndex()
+        pathIndex.upsert(noteID: doc.metadata.noteID, folderID: folderID, relativePath: uniqueNew)
+
+        let normalized = RangeNormalizer.normalize(metadata: doc.metadata, for: doc.text)
+        let documentToPersist = NoteDocument(text: doc.text, metadata: normalized.normalizedMetadata)
+
+        try executeNoteCommit(
+            label: "rename:\(oldRelativePath)->\(uniqueNew)",
+            relativePath: uniqueNew,
+            document: documentToPersist,
+            textURL: newTxt,
+            metaURL: newMeta,
+            manifest: manifest,
+            linkGraph: graph,
+            relationshipIndex: relationshipIndex,
+            folderCatalog: folderCatalog,
+            pathIndex: pathIndex,
+            deletePathsAfterCommit: [oldTxt, oldMeta].filter { FileManager.default.fileExists(atPath: $0.path) }
+        )
+
+        return uniqueNew
+    }
+
+    // MARK: - Manifest
+
+    private func manifestURL() -> URL {
+        VaultPaths.manifestURL(vaultURL: vaultURL)
+    }
+
+    private func loadOrRebuildManifest() throws -> VaultManifest {
+        let url = manifestURL()
+        if let data = try? Data(contentsOf: url),
+           let decoded = try? decoder.decode(VaultManifest.self, from: data) {
+            return try reconcileManifestWithDisk(decoded)
+        }
+        return try rebuildManifestFromDisk()
+    }
+
+    private func reconcileManifestWithDisk(_ manifest: VaultManifest) throws -> VaultManifest {
+        var next = manifest
+        if next.schemaVersion < VaultManifest.currentSchemaVersion {
+            next.schemaVersion = VaultManifest.currentSchemaVersion
+        }
+        let originalCount = next.entries.count
+        next.entries.removeAll { entry in
+            let txt = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: entry.relativePath, extension: "txt")
+            return !FileManager.default.fileExists(atPath: txt.path)
+        }
+        let removed = max(0, originalCount - next.entries.count)
+
+        let onDisk = try listRelativePathsOnDisk()
+        let known = Set(next.entries.map(\.relativePath))
+        var added = 0
+        for rel in onDisk where !known.contains(rel) {
+            let doc = try loadNote(relativePath: rel).document
+            let last = rel.split(separator: "/").last.map(String.init) ?? rel
+            let title = last.replacingOccurrences(of: "-", with: " ").capitalized
+            next.upsert(noteID: doc.metadata.noteID, relativePath: rel, title: title)
+            added += 1
+            let metaURL = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: rel, extension: "meta.json")
+            if !FileManager.default.fileExists(atPath: metaURL.path) {
+                try save(doc, asRelativePath: rel, folderID: FolderCatalog.rootFolderID)
+            }
+        }
+        VaultTelemetry.logManifestReconcile(removed: removed, added: added)
+        return next
+    }
+
+    private func rebuildManifestFromDisk() throws -> VaultManifest {
+        try ensureVault()
+        var manifest = VaultManifest()
+        manifest.schemaVersion = VaultManifest.currentSchemaVersion
+        let paths = try listRelativePathsOnDisk()
+        for rel in paths {
+            let doc = try loadNote(relativePath: rel).document
+            let metaURL = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: rel, extension: "meta.json")
+            if !FileManager.default.fileExists(atPath: metaURL.path) {
+                try save(doc, asRelativePath: rel, folderID: FolderCatalog.rootFolderID)
+            }
+            let last = rel.split(separator: "/").last.map(String.init) ?? rel
+            let title = last.replacingOccurrences(of: "-", with: " ").capitalized
+            manifest.upsert(noteID: doc.metadata.noteID, relativePath: rel, title: title)
+        }
+        try saveManifest(manifest)
+        return manifest
+    }
+
+    private func listRelativePathsOnDisk() throws -> [String] {
+        try ensureVault()
+        var results: [String] = []
+        let fm = FileManager.default
+        guard let enumerator = fm.enumerator(
+            at: vaultURL,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return []
+        }
+        for case let item as URL in enumerator {
+            var isDir: ObjCBool = false
+            guard fm.fileExists(atPath: item.path, isDirectory: &isDir), !isDir.boolValue else { continue }
+            guard item.pathExtension.lowercased() == "txt" else { continue }
+            guard let rel = relativePathFromVaultNoteTextURL(item) else { continue }
+            results.append(rel)
+        }
+        return results.sorted { $0.lowercased() < $1.lowercased() }
+    }
+
+    /// Returns `relativePath` without extension for a `.txt` file under the vault.
+    private func relativePathFromVaultNoteTextURL(_ file: URL) -> String? {
+        let vaultPath = vaultURL.standardizedFileURL.path
+        let filePath = file.standardizedFileURL.path
+        guard filePath.hasPrefix(vaultPath) else { return nil }
+        var sub = String(filePath.dropFirst(vaultPath.count))
+        if sub.hasPrefix("/") { sub.removeFirst() }
+        guard sub.lowercased().hasSuffix(".txt") else { return nil }
+        sub = String(sub.dropLast(4))
+        let parts = sub.split(separator: "/").map(String.init)
+        if parts.contains(".miran") || parts.contains("_aux") { return nil }
+        if let first = parts.first, VaultPath.reservedTopLevel.contains(first) { return nil }
+        return sub
+    }
+
+    private func saveManifest(_ manifest: VaultManifest) throws {
+        try ensureVault()
+        var m = manifest
+        m.schemaVersion = VaultManifest.currentSchemaVersion
+        let data = try encoder.encode(m)
+        try atomicWrite(data, to: manifestURL())
+    }
+
+    private func saveManifestOnly(_ manifest: VaultManifest) throws {
+        try saveManifest(manifest)
+    }
+
+    private func loadManifestFromDiskOnly() -> VaultManifest? {
+        let url = manifestURL()
+        guard let data = try? Data(contentsOf: url),
+              let decoded = try? decoder.decode(VaultManifest.self, from: data) else {
+            return nil
+        }
+        return decoded
+    }
+
+    func loadRelationshipIndex() throws -> RelationshipIndex {
+        let url = VaultPaths.relationshipIndexURL(vaultURL: vaultURL)
+        guard let data = try? Data(contentsOf: url),
+              let decoded = try? decoder.decode(RelationshipIndex.self, from: data) else {
+            return RelationshipIndex()
+        }
+        return decoded
+    }
+
+    func loadFolderCatalog() throws -> FolderCatalog {
+        try loadFolderCatalogPrivate()
+    }
+
+    private func loadFolderCatalogPrivate() throws -> FolderCatalog {
+        let url = VaultPaths.folderCatalogURL(vaultURL: vaultURL)
+        guard let data = try? Data(contentsOf: url),
+              let decoded = try? decoder.decode(FolderCatalog.self, from: data) else {
+            var fresh = FolderCatalog()
+            fresh.isDirty = true
+            return fresh
+        }
+        return decoded
+    }
+
+    private func loadPathIndex() throws -> PathIndex {
+        let url = VaultPaths.pathIndexURL(vaultURL: vaultURL)
+        guard let data = try? Data(contentsOf: url),
+              let decoded = try? decoder.decode(PathIndex.self, from: data) else {
+            return PathIndex()
+        }
+        return decoded
+    }
+
+    func createNote(named name: String, folderID: UUID) throws -> (NoteDocument, String) {
+        try ensureVault()
+        var folderCatalog = try loadFolderCatalogPrivate()
+        folderCatalog.ensureRoot()
+        guard folderID == FolderCatalog.rootFolderID || folderCatalog.folder(id: folderID) != nil else {
+            throw NoteRepositoryError.folderNotFound(folderID)
+        }
+
+        let dirPrefix = folderCatalog.relativeDirectoryPath(for: folderID)
+        var stem = slugify(name.isEmpty ? "untitled-note" : name)
+        if stem.isEmpty { stem = "untitled-note" }
+        let relativePath = try uniqueAvailableRelativePath(inDirectoryPrefix: dirPrefix.isEmpty ? nil : dirPrefix, slugStem: stem)
+
+        let text = ""
+        let noteID = UUID()
+        let metadata = NoteMetadata(
+            schemaVersion: NoteMetadata.currentSchemaVersion,
+            noteID: noteID,
+            blocks: [
+                Block(
+                    id: UUID().uuidString,
+                    type: .paragraph,
+                    range: TextRange(start: 0, length: 0),
+                    level: nil,
+                    icon: nil
+                )
+            ],
+            spans: []
+        )
+
+        let document = NoteDocument(text: text, metadata: metadata)
+        try save(document, asRelativePath: relativePath, folderID: folderID)
+        return (document, relativePath)
+    }
+
+    private func uniqueAvailableRelativePath(inDirectoryPrefix dirPrefix: String?, slugStem: String) throws -> String {
+        var collision = 0
+        var stem = slugStem
+        while true {
+            let rel: String
+            if let p = dirPrefix, !p.isEmpty {
+                rel = "\(p)/\(stem)"
+            } else {
+                rel = stem
+            }
+            try VaultPath.validateRelativePath(rel)
+            let path = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: rel, extension: "txt")
+            if !FileManager.default.fileExists(atPath: path.path) {
+                return rel
+            }
+            collision += 1
+            guard collision < 10_000 else {
+                throw NoteRepositoryError.tooManyFilenameCollisions
+            }
+            stem = collision == 1 ? "\(slugStem)-2" : "\(slugStem)-\(collision + 1)"
+        }
+    }
+
+    private func executeNoteCommit(
+        label: String,
+        relativePath: String,
+        document: NoteDocument,
+        textURL: URL,
+        metaURL: URL,
+        manifest: VaultManifest,
+        linkGraph: LinkGraph,
+        relationshipIndex: RelationshipIndex,
+        folderCatalog: FolderCatalog,
+        pathIndex: PathIndex,
+        deletePathsAfterCommit: [URL]
+    ) throws {
         let commitTempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("miran-commit-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: commitTempDir, withIntermediateDirectories: true)
+        var m = manifest
+        m.schemaVersion = VaultManifest.currentSchemaVersion
         let context = VaultCommitContext(
-            baseName: baseName,
-            document: documentToPersist,
+            relativePath: relativePath,
+            includeNoteFiles: true,
+            document: document,
             textURL: textURL,
             metaURL: metaURL,
             manifestURL: manifestURL(),
@@ -300,8 +660,8 @@ actor NoteRepository {
             folderCatalogURL: VaultPaths.folderCatalogURL(vaultURL: vaultURL),
             pathIndexURL: VaultPaths.pathIndexURL(vaultURL: vaultURL),
             encoder: encoder,
-            manifest: manifest,
-            linkGraph: graph,
+            manifest: m,
+            linkGraph: linkGraph,
             relationshipIndex: relationshipIndex,
             folderCatalog: folderCatalog,
             pathIndex: pathIndex,
@@ -325,184 +685,383 @@ actor NoteRepository {
         }
         try commitCoordinator.execute(
             VaultCommitPlan(
-                label: "save:\(baseName)",
-                operations: operations
+                label: label,
+                operations: operations,
+                deletePathsAfterCommit: deletePathsAfterCommit
             )
         )
     }
 
-    /// Renames note files from `oldBaseName` to a new slug derived from `newTitle`. Returns the new `baseName`.
-    func renameNote(from oldBaseName: String, to newTitle: String) throws -> String {
-        try Self.validateBaseName(oldBaseName)
+    func commitIndexOnly(
+        manifest: VaultManifest,
+        linkGraph: LinkGraph,
+        relationshipIndex: RelationshipIndex,
+        folderCatalog: FolderCatalog,
+        pathIndex: PathIndex,
+        deletePathsAfterCommit: [URL] = []
+    ) throws {
         try ensureVault()
-        guard FileManager.default.fileExists(atPath: vaultURL.appendingPathComponent("\(oldBaseName).txt").path) else {
-            throw NoteRepositoryError.noteNotFound(oldBaseName)
+        let commitTempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("miran-commit-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: commitTempDir, withIntermediateDirectories: true)
+        let emptyDoc = NoteDocument(text: "", metadata: NoteMetadata.empty)
+        var m = manifest
+        m.schemaVersion = VaultManifest.currentSchemaVersion
+        let dummyText = vaultURL.appendingPathComponent(".miran/.dummy.txt")
+        let dummyMeta = vaultURL.appendingPathComponent(".miran/.dummy.meta.json")
+        let context = VaultCommitContext(
+            relativePath: "indexes",
+            includeNoteFiles: false,
+            document: emptyDoc,
+            textURL: dummyText,
+            metaURL: dummyMeta,
+            manifestURL: manifestURL(),
+            linkGraphURL: VaultPaths.linkGraphURL(vaultURL: vaultURL),
+            relationshipIndexURL: VaultPaths.relationshipIndexURL(vaultURL: vaultURL),
+            folderCatalogURL: VaultPaths.folderCatalogURL(vaultURL: vaultURL),
+            pathIndexURL: VaultPaths.pathIndexURL(vaultURL: vaultURL),
+            encoder: encoder,
+            manifest: m,
+            linkGraph: linkGraph,
+            relationshipIndex: relationshipIndex,
+            folderCatalog: folderCatalog,
+            pathIndex: pathIndex,
+            atomicWrite: { data, url in
+                try self.atomicWrite(data, to: url)
+            },
+            tempDirectory: commitTempDir
+        )
+        let participants: [VaultCommitParticipant] = [
+            NoteFilesCommitParticipant(),
+            ManifestCommitParticipant(),
+            LinkGraphCommitParticipant(),
+            RelationshipIndexCommitParticipant(),
+            FolderCatalogCommitParticipant(),
+            PathIndexCommitParticipant()
+        ]
+        var operations: [VaultCommitOperation] = []
+        for participant in participants {
+            operations.append(contentsOf: try participant.operations(for: context))
+        }
+        try commitCoordinator.execute(
+            VaultCommitPlan(label: "indexes", operations: operations, deletePathsAfterCommit: deletePathsAfterCommit)
+        )
+    }
+
+    // MARK: - Vault structure (folders / moves / delete)
+
+    private func applyRelativePathPrefixRewrite(
+        from oldPrefix: String,
+        to newPrefix: String,
+        manifest: inout VaultManifest,
+        pathIndex: inout PathIndex
+    ) {
+        let oldRoot = oldPrefix.isEmpty ? "" : oldPrefix + "/"
+        for i in manifest.entries.indices {
+            let path = manifest.entries[i].relativePath
+            guard path.hasPrefix(oldRoot) || path == oldPrefix else { continue }
+            let suffix: String
+            if path.hasPrefix(oldRoot) {
+                suffix = String(path.dropFirst(oldRoot.count))
+            } else {
+                suffix = (path as NSString).lastPathComponent
+            }
+            let updated: String
+            if newPrefix.isEmpty {
+                updated = suffix
+            } else if suffix.isEmpty {
+                updated = newPrefix
+            } else {
+                updated = "\(newPrefix)/\(suffix)"
+            }
+            manifest.entries[i].relativePath = updated
+        }
+        for i in pathIndex.entries.indices {
+            let path = pathIndex.entries[i].relativePath
+            guard path.hasPrefix(oldRoot) || path == oldPrefix else { continue }
+            let suffix: String
+            if path.hasPrefix(oldRoot) {
+                suffix = String(path.dropFirst(oldRoot.count))
+            } else {
+                suffix = (path as NSString).lastPathComponent
+            }
+            let updated: String
+            if newPrefix.isEmpty {
+                updated = suffix
+            } else if suffix.isEmpty {
+                updated = newPrefix
+            } else {
+                updated = "\(newPrefix)/\(suffix)"
+            }
+            pathIndex.entries[i].relativePath = updated
+        }
+        pathIndex.isDirty = true
+    }
+
+    func createFolder(parentID: UUID, name: String) throws -> UUID {
+        try ensureVault()
+        var folderCatalog = try loadFolderCatalog()
+        folderCatalog.ensureRoot()
+        let id = try folderCatalog.addFolder(parentID: parentID, name: name)
+        let dir = folderCatalog.directoryURL(vaultRoot: vaultURL, folderID: id)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let manifest = try loadOrRebuildManifest()
+        let graph = try loadLinkGraph()
+        let rel = try loadRelationshipIndex()
+        let pathIndex = try loadPathIndex()
+        try commitIndexOnly(
+            manifest: manifest,
+            linkGraph: graph,
+            relationshipIndex: rel,
+            folderCatalog: folderCatalog,
+            pathIndex: pathIndex
+        )
+        return id
+    }
+
+    func deleteFolder(id: UUID) throws {
+        try ensureVault()
+        guard id != FolderCatalog.rootFolderID else {
+            throw NoteRepositoryError.invalidFolderMove
+        }
+        var folderCatalog = try loadFolderCatalog()
+        folderCatalog.ensureRoot()
+        let pathIndex = try loadPathIndex()
+        if !folderCatalog.childFolders(of: id).isEmpty {
+            throw NoteRepositoryError.folderNotEmpty(id)
+        }
+        if pathIndex.entries.contains(where: { $0.folderID == id }) {
+            throw NoteRepositoryError.folderNotEmpty(id)
+        }
+        let dir = folderCatalog.directoryURL(vaultRoot: vaultURL, folderID: id)
+        try folderCatalog.removeFolderEntry(id: id)
+        let manifest = try loadOrRebuildManifest()
+        let graph = try loadLinkGraph()
+        let rel = try loadRelationshipIndex()
+        var toDelete: [URL] = []
+        if FileManager.default.fileExists(atPath: dir.path) {
+            toDelete.append(dir)
+        }
+        try commitIndexOnly(
+            manifest: manifest,
+            linkGraph: graph,
+            relationshipIndex: rel,
+            folderCatalog: folderCatalog,
+            pathIndex: pathIndex,
+            deletePathsAfterCommit: toDelete
+        )
+    }
+
+    func renameFolder(id: UUID, newName: String) throws {
+        try ensureVault()
+        guard id != FolderCatalog.rootFolderID else {
+            throw NoteRepositoryError.invalidFolderName("root")
+        }
+        var folderCatalog = try loadFolderCatalog()
+        folderCatalog.ensureRoot()
+        let oldPrefix = folderCatalog.relativeDirectoryPath(for: id)
+        let oldURL = folderCatalog.directoryURL(vaultRoot: vaultURL, folderID: id)
+        try folderCatalog.renameFolder(id: id, newName: newName)
+        let newPrefix = folderCatalog.relativeDirectoryPath(for: id)
+        let newURL = folderCatalog.directoryURL(vaultRoot: vaultURL, folderID: id)
+
+        if oldPrefix != newPrefix {
+            if FileManager.default.fileExists(atPath: oldURL.path) {
+                try FileManager.default.createDirectory(at: newURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+                if FileManager.default.fileExists(atPath: newURL.path) {
+                    throw NoteRepositoryError.duplicateFolderName(newName)
+                }
+                try FileManager.default.moveItem(at: oldURL, to: newURL)
+            } else if !FileManager.default.fileExists(atPath: newURL.path) {
+                try FileManager.default.createDirectory(at: newURL, withIntermediateDirectories: true)
+            }
         }
 
-        let doc = try loadNote(baseName: oldBaseName).document
-        var slug = slugify(newTitle.isEmpty ? oldBaseName : newTitle)
-        if slug.isEmpty {
-            slug = "untitled-note"
+        var manifest = try loadOrRebuildManifest()
+        var pathIndex = try loadPathIndex()
+        if oldPrefix != newPrefix {
+            applyRelativePathPrefixRewrite(from: oldPrefix, to: newPrefix, manifest: &manifest, pathIndex: &pathIndex)
+        }
+        let graph = try loadLinkGraph()
+        let rel = try loadRelationshipIndex()
+        try commitIndexOnly(
+            manifest: manifest,
+            linkGraph: graph,
+            relationshipIndex: rel,
+            folderCatalog: folderCatalog,
+            pathIndex: pathIndex
+        )
+    }
+
+    func moveFolder(id: UUID, newParentID: UUID) throws {
+        try ensureVault()
+        guard id != FolderCatalog.rootFolderID else {
+            throw NoteRepositoryError.invalidFolderMove
+        }
+        var folderCatalog = try loadFolderCatalog()
+        folderCatalog.ensureRoot()
+        let oldPrefix = folderCatalog.relativeDirectoryPath(for: id)
+        let oldURL = folderCatalog.directoryURL(vaultRoot: vaultURL, folderID: id)
+        try folderCatalog.moveFolder(id: id, newParentID: newParentID)
+        let newPrefix = folderCatalog.relativeDirectoryPath(for: id)
+        let newURL = folderCatalog.directoryURL(vaultRoot: vaultURL, folderID: id)
+
+        if oldPrefix != newPrefix {
+            if FileManager.default.fileExists(atPath: oldURL.path) {
+                try FileManager.default.createDirectory(at: newURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+                if FileManager.default.fileExists(atPath: newURL.path) {
+                    throw NoteRepositoryError.invalidFolderMove
+                }
+                try FileManager.default.moveItem(at: oldURL, to: newURL)
+            } else if !FileManager.default.fileExists(atPath: newURL.path) {
+                try FileManager.default.createDirectory(at: newURL, withIntermediateDirectories: true)
+            }
         }
 
-        let newBaseName: String
-        if slug == oldBaseName {
-            newBaseName = oldBaseName
-        } else {
-            newBaseName = try uniqueAvailableBaseName(slug: slug)
+        var manifest = try loadOrRebuildManifest()
+        var pathIndex = try loadPathIndex()
+        if oldPrefix != newPrefix {
+            applyRelativePathPrefixRewrite(from: oldPrefix, to: newPrefix, manifest: &manifest, pathIndex: &pathIndex)
+        }
+        let graph = try loadLinkGraph()
+        let rel = try loadRelationshipIndex()
+        try commitIndexOnly(
+            manifest: manifest,
+            linkGraph: graph,
+            relationshipIndex: rel,
+            folderCatalog: folderCatalog,
+            pathIndex: pathIndex
+        )
+    }
+
+    func moveNote(noteID: UUID, toFolderID: UUID) throws {
+        try ensureVault()
+        var folderCatalog = try loadFolderCatalog()
+        folderCatalog.ensureRoot()
+        guard toFolderID == FolderCatalog.rootFolderID || folderCatalog.folder(id: toFolderID) != nil else {
+            throw NoteRepositoryError.folderNotFound(toFolderID)
         }
 
-        if newBaseName == oldBaseName {
-            var manifest = loadManifestFromDiskOnly() ?? VaultManifest()
-            manifest.upsert(noteID: doc.metadata.noteID, baseName: oldBaseName, title: newTitle)
-            try saveManifest(manifest)
-            return oldBaseName
+        let doc = try loadNote(noteID: noteID).document
+        let manifestSnapshot = try loadOrRebuildManifest()
+        guard let manifestEntry = manifestSnapshot.entry(noteID: noteID) else {
+            throw NoteRepositoryError.noteNotFoundByID(noteID)
+        }
+        let oldPath = manifestEntry.relativePath
+
+        let folderID = (try loadPathIndex()).entries.first { $0.noteID == noteID }?.folderID ?? FolderCatalog.rootFolderID
+        guard folderID != toFolderID else { return }
+
+        let dirPrefix = folderCatalog.relativeDirectoryPath(for: toFolderID)
+        let stem = (oldPath as NSString).lastPathComponent
+        let uniqueNew = try uniqueAvailableRelativePath(inDirectoryPrefix: dirPrefix.isEmpty ? nil : dirPrefix, slugStem: stem)
+
+        if uniqueNew == oldPath {
+            var pathIndex = try loadPathIndex()
+            pathIndex.upsert(noteID: noteID, folderID: toFolderID, relativePath: oldPath)
+            let manifest = try loadOrRebuildManifest()
+            let graph = try loadLinkGraph()
+            let rel = try loadRelationshipIndex()
+            try commitIndexOnly(
+                manifest: manifest,
+                linkGraph: graph,
+                relationshipIndex: rel,
+                folderCatalog: folderCatalog,
+                pathIndex: pathIndex
+            )
+            return
         }
 
-        let oldTxt = vaultURL.appendingPathComponent("\(oldBaseName).txt")
-        let oldMeta = vaultURL.appendingPathComponent("\(oldBaseName).meta.json")
-        try save(doc, asBaseName: newBaseName)
-
-        if FileManager.default.fileExists(atPath: oldTxt.path) {
-            try FileManager.default.removeItem(at: oldTxt)
-        }
-        if FileManager.default.fileExists(atPath: oldMeta.path) {
-            try FileManager.default.removeItem(at: oldMeta)
-        }
+        let oldTxt = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: oldPath, extension: "txt")
+        let oldMeta = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: oldPath, extension: "meta.json")
+        let newTxt = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: uniqueNew, extension: "txt")
+        let newMeta = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: uniqueNew, extension: "meta.json")
+        try VaultPath.ensureParentDirectories(vaultRoot: vaultURL, relativePathWithoutExtension: uniqueNew)
 
         var manifest = loadManifestFromDiskOnly() ?? VaultManifest()
-        manifest.upsert(noteID: doc.metadata.noteID, baseName: newBaseName, title: newTitle)
-        try saveManifest(manifest)
+        manifest.schemaVersion = VaultManifest.currentSchemaVersion
+        let lastSegment = uniqueNew.split(separator: "/").last.map(String.init) ?? uniqueNew
+        let title = manifestEntry.title ?? lastSegment.replacingOccurrences(of: "-", with: " ").capitalized
+        manifest.upsert(noteID: noteID, relativePath: uniqueNew, title: title)
 
-        return newBaseName
-    }
-
-    // MARK: - Manifest
-
-    private func manifestURL() -> URL {
-        VaultPaths.manifestURL(vaultURL: vaultURL)
-    }
-
-    private func loadOrRebuildManifest() throws -> VaultManifest {
-        let url = manifestURL()
-        if let data = try? Data(contentsOf: url),
-           let decoded = try? decoder.decode(VaultManifest.self, from: data) {
-            return try reconcileManifestWithDisk(decoded)
+        var graph = try loadLinkGraph()
+        graph.setOutgoing(from: noteID, to: doc.metadata.links.map(\.targetNoteID))
+        var relationshipIndex = try loadRelationshipIndex()
+        let linkRelationships = doc.metadata.links.map { link in
+            LinkRelationship(
+                sourceNoteID: noteID,
+                target: .note(noteID: link.targetNoteID),
+                relationshipKind: "noteLink"
+            )
         }
-        return try rebuildManifestFromDisk()
+        let artifactRelationships = doc.metadata.artifacts.map { artifact in
+            LinkRelationship(
+                sourceNoteID: noteID,
+                target: .artifact(noteID: noteID, artifactID: artifact.id, kind: artifact.kind),
+                relationshipKind: "artifactLink"
+            )
+        }
+        relationshipIndex.replaceLinks(from: noteID, with: linkRelationships + artifactRelationships)
+
+        var pathIndex = try loadPathIndex()
+        pathIndex.upsert(noteID: noteID, folderID: toFolderID, relativePath: uniqueNew)
+
+        let normalized = RangeNormalizer.normalize(metadata: doc.metadata, for: doc.text)
+        let documentToPersist = NoteDocument(text: doc.text, metadata: normalized.normalizedMetadata)
+
+        let oldPaths: [URL] = [oldTxt, oldMeta]
+        try executeNoteCommit(
+            label: "moveNote:\(oldPath)->\(uniqueNew)",
+            relativePath: uniqueNew,
+            document: documentToPersist,
+            textURL: newTxt,
+            metaURL: newMeta,
+            manifest: manifest,
+            linkGraph: graph,
+            relationshipIndex: relationshipIndex,
+            folderCatalog: folderCatalog,
+            pathIndex: pathIndex,
+            deletePathsAfterCommit: oldPaths.filter { FileManager.default.fileExists(atPath: $0.path) }
+        )
     }
 
-    /// Drops manifest entries whose `.txt` disappeared; adds missing notes on disk.
-    private func reconcileManifestWithDisk(_ manifest: VaultManifest) throws -> VaultManifest {
-        var next = manifest
-        let originalCount = next.entries.count
-        next.entries.removeAll { entry in
-            !FileManager.default.fileExists(atPath: vaultURL.appendingPathComponent("\(entry.baseName).txt").path)
-        }
-        let removed = max(0, originalCount - next.entries.count)
-
-        let onDisk = try listBaseNamesOnDisk()
-        let knownBases = Set(next.entries.map(\.baseName))
-        var added = 0
-        for base in onDisk where !knownBases.contains(base) {
-            let doc = try loadNote(baseName: base).document
-            let title = base.replacingOccurrences(of: "-", with: " ").capitalized
-            next.upsert(noteID: doc.metadata.noteID, baseName: base, title: title)
-            added += 1
-            let metaPath = vaultURL.appendingPathComponent("\(base).meta.json")
-            if !FileManager.default.fileExists(atPath: metaPath.path) {
-                try save(doc, asBaseName: base)
-            }
-        }
-        VaultTelemetry.logManifestReconcile(removed: removed, added: added)
-        return next
-    }
-
-    private func rebuildManifestFromDisk() throws -> VaultManifest {
+    func deleteNote(noteID: UUID) throws {
         try ensureVault()
-        var manifest = VaultManifest()
-        let bases = try listBaseNamesOnDisk()
-        for base in bases {
-            let doc = try loadNote(baseName: base).document
-            let metaPath = vaultURL.appendingPathComponent("\(base).meta.json")
-            if !FileManager.default.fileExists(atPath: metaPath.path) {
-                try save(doc, asBaseName: base)
-            }
-            let title = base.replacingOccurrences(of: "-", with: " ").capitalized
-            manifest.upsert(noteID: doc.metadata.noteID, baseName: base, title: title)
+        var manifest = try loadOrRebuildManifest()
+        guard let entry = manifest.entry(noteID: noteID) else {
+            throw NoteRepositoryError.noteNotFoundByID(noteID)
         }
-        try saveManifest(manifest)
-        return manifest
-    }
+        let relPath = entry.relativePath
+        manifest.remove(noteID: noteID)
 
-    private func listBaseNamesOnDisk() throws -> [String] {
-        let urls = try FileManager.default.contentsOfDirectory(at: vaultURL, includingPropertiesForKeys: nil)
-        return urls
-            .filter { $0.pathExtension.lowercased() == "txt" }
-            .map { $0.deletingPathExtension().lastPathComponent }
-            .sorted { $0.lowercased() < $1.lowercased() }
-    }
+        var pathIndex = try loadPathIndex()
+        pathIndex.remove(noteID: noteID)
 
-    private func saveManifest(_ manifest: VaultManifest) throws {
-        try ensureVault()
-        let data = try encoder.encode(manifest)
-        try atomicWrite(data, to: manifestURL())
-    }
+        var graph = try loadLinkGraph()
+        graph.removeNote(noteID)
 
-    private func loadManifestFromDiskOnly() -> VaultManifest? {
-        let url = manifestURL()
-        guard let data = try? Data(contentsOf: url),
-              let decoded = try? decoder.decode(VaultManifest.self, from: data) else {
-            return nil
+        var relationshipIndex = try loadRelationshipIndex()
+        relationshipIndex.removeAllInvolvingNote(noteID)
+
+        var folderCatalog = try loadFolderCatalog()
+        folderCatalog.ensureRoot()
+
+        let txt = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: relPath, extension: "txt")
+        let meta = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: relPath, extension: "meta.json")
+        let aux = VaultPaths.auxDirectory(vaultURL: vaultURL, noteID: noteID)
+        var toDelete: [URL] = [txt, meta].filter { FileManager.default.fileExists(atPath: $0.path) }
+        if FileManager.default.fileExists(atPath: aux.path) {
+            toDelete.append(aux)
         }
-        return decoded
-    }
 
-    private func loadRelationshipIndex() throws -> RelationshipIndex {
-        let url = VaultPaths.relationshipIndexURL(vaultURL: vaultURL)
-        guard let data = try? Data(contentsOf: url),
-              let decoded = try? decoder.decode(RelationshipIndex.self, from: data) else {
-            return RelationshipIndex()
-        }
-        return decoded
-    }
-
-    private func loadFolderCatalog() throws -> FolderCatalog {
-        let url = VaultPaths.folderCatalogURL(vaultURL: vaultURL)
-        guard let data = try? Data(contentsOf: url),
-              let decoded = try? decoder.decode(FolderCatalog.self, from: data) else {
-            // First write — new catalog; mark dirty so the participant persists it.
-            var fresh = FolderCatalog()
-            fresh.isDirty = true
-            return fresh
-        }
-        return decoded
-    }
-
-    private func loadPathIndex() throws -> PathIndex {
-        let url = VaultPaths.pathIndexURL(vaultURL: vaultURL)
-        guard let data = try? Data(contentsOf: url),
-              let decoded = try? decoder.decode(PathIndex.self, from: data) else {
-            return PathIndex()
-        }
-        return decoded
-    }
-
-    private func uniqueAvailableBaseName(slug: String) throws -> String {
-        var collision = 0
-        var candidate = slug
-        while true {
-            try Self.validateBaseName(candidate)
-            let path = vaultURL.appendingPathComponent("\(candidate).txt").path
-            if !FileManager.default.fileExists(atPath: path) {
-                return candidate
-            }
-            collision += 1
-            guard collision < 10_000 else {
-                throw NoteRepositoryError.tooManyFilenameCollisions
-            }
-            candidate = collision == 1 ? "\(slug)-2" : "\(slug)-\(collision + 1)"
-        }
+        try commitIndexOnly(
+            manifest: manifest,
+            linkGraph: graph,
+            relationshipIndex: relationshipIndex,
+            folderCatalog: folderCatalog,
+            pathIndex: pathIndex,
+            deletePathsAfterCommit: toDelete
+        )
     }
 
     private func atomicWrite(_ data: Data, to url: URL) throws {
@@ -528,9 +1087,7 @@ actor NoteRepository {
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .replacingOccurrences(of: "[^a-z0-9]+", with: "-", options: .regularExpression)
             .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
-        // Cap at 200 UTF-8 bytes, reserving room for numeric suffix + .meta.json extension.
-        // Truncate at a Unicode scalar boundary to avoid splitting multi-byte sequences.
-        guard slug.utf8.count > 200 else { return slug }
+        guard slug.utf8.count > 200 else { return slug.isEmpty ? "untitled-note" : slug }
         var byteCount = 0
         var truncated = ""
         for scalar in slug.unicodeScalars {
@@ -539,7 +1096,8 @@ actor NoteRepository {
             truncated.unicodeScalars.append(scalar)
             byteCount += scalarBytes
         }
-        return truncated.trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+        let t = truncated.trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+        return t.isEmpty ? "untitled-note" : t
     }
 
     private nonisolated static func documentAfterLoadRepair(text: String, metadata: NoteMetadata) -> (NoteDocument, [String]) {
@@ -595,6 +1153,7 @@ private struct NoteFilesCommitParticipant: VaultCommitParticipant {
     let participantID = "noteFiles"
 
     func operations(for context: VaultCommitContext) throws -> [VaultCommitOperation] {
+        guard context.includeNoteFiles else { return [] }
         let metadataData = try context.encoder.encode(context.document.metadata)
         let textData = context.document.text.data(using: .utf8) ?? Data()
         let tempText = context.tempDirectory.appendingPathComponent("note.txt")

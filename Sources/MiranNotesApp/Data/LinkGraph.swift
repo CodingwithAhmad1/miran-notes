@@ -39,4 +39,22 @@ struct LinkGraph: Codable, Equatable {
             targets.contains(targetNoteID) ? source : nil
         }.sorted { $0.uuidString < $1.uuidString }
     }
+
+    /// Removes a note as a link source and strips it from all outgoing target lists (e.g. when deleting the note).
+    mutating func removeNote(_ noteID: UUID) {
+        if outgoing.removeValue(forKey: noteID) != nil {
+            isDirty = true
+        }
+        for key in Array(outgoing.keys) {
+            guard let targets = outgoing[key] else { continue }
+            let filtered = targets.filter { $0 != noteID }
+            guard filtered.count != targets.count else { continue }
+            if filtered.isEmpty {
+                outgoing.removeValue(forKey: key)
+            } else {
+                outgoing[key] = filtered
+            }
+            isDirty = true
+        }
+    }
 }

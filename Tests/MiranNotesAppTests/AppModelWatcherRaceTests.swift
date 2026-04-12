@@ -22,6 +22,7 @@ final class AppModelWatcherRaceTests: XCTestCase {
         let (_, baseName) = try await repo.createNote(named: "race-note")
 
         let model = AppModel(repository: repo, autosaveDebounceMilliseconds: 100)
+        await model.refreshNotes()
         model.selectedBaseName = baseName
         await model.loadSelectedNote()
 
@@ -57,6 +58,7 @@ final class AppModelWatcherRaceTests: XCTestCase {
         let (_, baseName) = try await repo.createNote(named: "clean-reload")
 
         let model = AppModel(repository: repo, autosaveDebounceMilliseconds: 100)
+        await model.refreshNotes()
         model.selectedBaseName = baseName
         await model.loadSelectedNote()
 
@@ -80,6 +82,7 @@ final class AppModelWatcherRaceTests: XCTestCase {
         let (_, baseName) = try await repo.createNote(named: "coalesce-note")
 
         let model = AppModel(repository: repo, autosaveDebounceMilliseconds: 100)
+        await model.refreshNotes()
         model.selectedBaseName = baseName
         await model.loadSelectedNote()
 

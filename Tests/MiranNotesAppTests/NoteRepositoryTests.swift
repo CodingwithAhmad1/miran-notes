@@ -12,20 +12,20 @@ final class NoteRepositoryTests: XCTestCase {
 
     func testValidateBaseNameRejectsTraversalAndSeparators() throws {
         XCTAssertThrowsError(try NoteRepository.validateBaseName("")) { error in
-            XCTAssertEqual(error as? NoteRepositoryError, .invalidBaseName(""))
+            XCTAssertEqual(error as? NoteRepositoryError, .invalidRelativePath(""))
         }
         XCTAssertThrowsError(try NoteRepository.validateBaseName("..")) { error in
-            XCTAssertEqual(error as? NoteRepositoryError, .invalidBaseName(".."))
+            XCTAssertEqual(error as? NoteRepositoryError, .invalidRelativePath(".."))
         }
         XCTAssertThrowsError(try NoteRepository.validateBaseName(".hidden")) { error in
-            XCTAssertEqual(error as? NoteRepositoryError, .invalidBaseName(".hidden"))
+            XCTAssertEqual(error as? NoteRepositoryError, .invalidRelativePath(".hidden"))
         }
         XCTAssertThrowsError(try NoteRepository.validateBaseName("a/b")) { error in
-            XCTAssertEqual(error as? NoteRepositoryError, .invalidBaseName("a/b"))
+            XCTAssertEqual(error as? NoteRepositoryError, .invalidRelativePath("a/b"))
         }
         XCTAssertNoThrow(try NoteRepository.validateBaseName("hello-world"))
         XCTAssertThrowsError(try NoteRepository.validateBaseName("bad\u{0}name")) { error in
-            XCTAssertEqual(error as? NoteRepositoryError, .invalidBaseName("bad\u{0}name"))
+            XCTAssertEqual(error as? NoteRepositoryError, .invalidRelativePath("bad\u{0}name"))
         }
     }
 
@@ -115,13 +115,13 @@ final class NoteRepositoryTests: XCTestCase {
         )
         let original = NoteDocument(text: "hello", metadata: metadata)
         try await repo.save(original, asBaseName: base)
-        let firstToken = try await repo.noteRevisionToken(baseName: base)
+        let firstToken = try await repo.noteRevisionToken(relativePath: base)
         XCTAssertNotNil(firstToken)
 
         var changed = original
         changed.metadata.properties["tag"] = "blue"
         try await repo.save(changed, asBaseName: base)
-        let secondToken = try await repo.noteRevisionToken(baseName: base)
+        let secondToken = try await repo.noteRevisionToken(relativePath: base)
 
         XCTAssertNotNil(secondToken)
         XCTAssertNotEqual(firstToken, secondToken)
@@ -136,7 +136,7 @@ final class NoteRepositoryTests: XCTestCase {
         let repo = NoteRepository(vaultURL: vault)
         let notes = try await repo.listNotes()
         XCTAssertEqual(notes.count, 1)
-        XCTAssertEqual(notes.first?.baseName, "orphan")
+        XCTAssertEqual(notes.first?.relativePath, "orphan")
 
         let metaURL = vault.appendingPathComponent("orphan.meta.json")
         XCTAssertTrue(FileManager.default.fileExists(atPath: metaURL.path))

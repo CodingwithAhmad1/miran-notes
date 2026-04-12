@@ -1,12 +1,11 @@
-import Darwin
+import CoreServices
 import Dispatch
 import Foundation
 
-/// Watches a directory with `O_EVTONLY` + `DispatchSource` (Phase 5: replace polling).
-/// Fires `onEvent` on the main queue when the filesystem reports activity; debounce coalesces bursts.
+/// Recursive vault watching using the File System Events API (subtree changes under `vaultURL`).
+/// Debounces bursts before invoking `onEvent` on the main actor.
 final class VaultDirectoryWatcher {
-    private var source: DispatchSourceFileSystemObject?
-    private var fileDescriptor: Int32 = -1
+    private var stream: FSEventStreamRef? = nil
     private let debounceNanoseconds: UInt64
     private var debounceTask: Task<Void, Never>?
     private let onEvent: @MainActor () -> Void
@@ -19,15 +18,36 @@ final class VaultDirectoryWatcher {
     ) {
         self.debounceNanoseconds = debounceMilliseconds * 1_000_000
         self.onEvent = onEvent
+        self.stream = nil
 
-        fileDescriptor = open(vaultURL.path, O_EVTONLY)
-        guard fileDescriptor >= 0 else {
-            let code = errno
-            let message = String(cString: strerror(code))
+        var context = FSEventStreamContext(
+            version: 0,
+            info: Unmanaged.passUnretained(self).toOpaque(),
+            retain: nil,
+            release: nil,
+            copyDescription: nil
+        )
+
+        let paths = [vaultURL.path] as [String] as CFArray
+        let sinceWhen = FSEventStreamEventId(UInt64(kFSEventStreamEventIdSinceNow))
+        let latency: CFTimeInterval = 0.05
+        let flags = FSEventStreamCreateFlags(kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagNoDefer)
+
+        guard
+            let streamRef = FSEventStreamCreate(
+                kCFAllocatorDefault,
+                VaultDirectoryWatcher.fsCallback,
+                &context,
+                paths,
+                sinceWhen,
+                latency,
+                flags
+            )
+        else {
             let error = NSError(
-                domain: NSPOSIXErrorDomain,
-                code: Int(code),
-                userInfo: [NSLocalizedDescriptionKey: message]
+                domain: "VaultDirectoryWatcher",
+                code: -1,
+                userInfo: [NSLocalizedDescriptionKey: "FSEventStreamCreate returned nil"]
             )
             if let onSetupFailed {
                 Task { @MainActor in
@@ -37,37 +57,36 @@ final class VaultDirectoryWatcher {
             return
         }
 
-        let queue = DispatchQueue.main
-        let mask: DispatchSource.FileSystemEvent = [.write, .rename, .extend, .attrib, .link, .revoke, .delete]
-        let src = DispatchSource.makeFileSystemObjectSource(
-            fileDescriptor: fileDescriptor,
-            eventMask: mask,
-            queue: queue
-        )
-        src.setEventHandler { [weak self] in
-            self?.scheduleDebounced()
-        }
-        src.setCancelHandler { [weak self] in
-            guard let self else { return }
-            if self.fileDescriptor >= 0 {
-                close(self.fileDescriptor)
-                self.fileDescriptor = -1
+        FSEventStreamSetDispatchQueue(streamRef, DispatchQueue.main)
+        if !FSEventStreamStart(streamRef) {
+            FSEventStreamInvalidate(streamRef)
+            let error = NSError(
+                domain: "VaultDirectoryWatcher",
+                code: -2,
+                userInfo: [NSLocalizedDescriptionKey: "FSEventStreamStart failed"]
+            )
+            if let onSetupFailed {
+                Task { @MainActor in
+                    onSetupFailed(error)
+                }
             }
+            return
         }
-        src.resume()
-        source = src
+        stream = streamRef
     }
 
     deinit {
         cancel()
     }
 
-    /// Stops listening; the dispatch source’s cancel handler closes the `O_EVTONLY` descriptor.
     func cancel() {
         debounceTask?.cancel()
         debounceTask = nil
-        source?.cancel()
-        source = nil
+        if let s = stream {
+            FSEventStreamStop(s)
+            FSEventStreamInvalidate(s)
+            stream = nil
+        }
     }
 
     private func scheduleDebounced() {
@@ -77,5 +96,15 @@ final class VaultDirectoryWatcher {
             guard !Task.isCancelled else { return }
             onEvent()
         }
+    }
+
+    fileprivate func handleFSEvent() {
+        scheduleDebounced()
+    }
+
+    private static let fsCallback: FSEventStreamCallback = { _, clientCallBackInfo, _, _, _, _ in
+        guard let raw = clientCallBackInfo else { return }
+        let watcher = Unmanaged<VaultDirectoryWatcher>.fromOpaque(raw).takeUnretainedValue()
+        watcher.handleFSEvent()
     }
 }

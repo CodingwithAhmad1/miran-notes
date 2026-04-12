@@ -10,7 +10,7 @@ struct LinkResolver {
 
     /// Resolves a link target to the current `baseName`, if the note exists in the manifest.
     func baseName(forTargetNoteID id: UUID) -> String? {
-        manifest.entry(noteID: id)?.baseName
+        manifest.entry(noteID: id)?.relativePath
     }
 
     func noteID(forBaseName baseName: String) -> UUID? {

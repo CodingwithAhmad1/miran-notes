@@ -9,7 +9,7 @@ final class LinkResolverTests: XCTestCase {
         let id = UUID()
         let manifest = VaultManifest(
             entries: [
-                ManifestEntry(noteID: id, baseName: "my-note", title: "My Note")
+                ManifestEntry(noteID: id, relativePath: "my-note", title: "My Note")
             ]
         )
         let resolver = LinkResolver(manifest: manifest)
@@ -21,7 +21,7 @@ final class LinkResolverTests: XCTestCase {
         let id = UUID()
         let manifest = VaultManifest(
             entries: [
-                ManifestEntry(noteID: id, baseName: "alpha", title: nil)
+                ManifestEntry(noteID: id, relativePath: "alpha", title: nil)
             ]
         )
         let resolver = LinkResolver(manifest: manifest)

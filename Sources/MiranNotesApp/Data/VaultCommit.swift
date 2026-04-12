@@ -16,6 +16,14 @@ struct VaultCommitOperation {
 struct VaultCommitPlan {
     let label: String
     let operations: [VaultCommitOperation]
+    /// Files or empty directories to remove after all commit renames succeed (e.g. old note path after rename).
+    let deletePathsAfterCommit: [URL]
+
+    init(label: String, operations: [VaultCommitOperation], deletePathsAfterCommit: [URL] = []) {
+        self.label = label
+        self.operations = operations
+        self.deletePathsAfterCommit = deletePathsAfterCommit
+    }
 }
 
 protocol VaultCommitParticipant {
@@ -24,7 +32,10 @@ protocol VaultCommitParticipant {
 }
 
 struct VaultCommitContext {
-    let baseName: String
+    /// Canonical note path without extension (for logging); use `"indexes"` for index-only commits.
+    let relativePath: String
+    /// When false, note `.txt` / `.meta.json` operations are skipped (index-only commit).
+    let includeNoteFiles: Bool
     let document: NoteDocument
     let textURL: URL
     let metaURL: URL
@@ -103,5 +114,14 @@ struct VaultCommitCoordinator {
         }
 
         Logger.vault.debug("VaultCommit complete label=\(plan.label, privacy: .public)")
+
+        for url in plan.deletePathsAfterCommit {
+            do {
+                try FileManager.default.removeItem(at: url)
+                Logger.vault.debug("VaultCommit deleted \(url.path, privacy: .public)")
+            } catch {
+                Logger.vault.error("VaultCommit post-delete failed \(url.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            }
+        }
     }
 }

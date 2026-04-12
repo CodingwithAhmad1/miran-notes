@@ -64,6 +64,14 @@ struct PathIndex: Codable, Equatable {
         }
         isDirty = true
     }
+
+    mutating func remove(noteID: UUID) {
+        let before = entries.count
+        entries.removeAll { $0.noteID == noteID }
+        if entries.count != before {
+            isDirty = true
+        }
+    }
 }
 
 struct PathIndexEntry: Codable, Equatable, Hashable {
