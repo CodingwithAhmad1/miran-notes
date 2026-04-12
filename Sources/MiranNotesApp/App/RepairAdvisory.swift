@@ -76,6 +76,7 @@ enum ExternalEditConflictCopy {
     static let buttonUseSavedFile = "Use the saved file"
     static let buttonShowInFinder = "Show in Finder"
     static let buttonDetails = "Details…"
+    static let buttonCompare = "Compare…"
 
     static func detailsLines(diskDate: Date, locale: Locale = .current) -> String {
         let formatter = DateFormatter()

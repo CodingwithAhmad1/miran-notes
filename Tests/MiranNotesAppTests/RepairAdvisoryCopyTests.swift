@@ -16,6 +16,7 @@ final class RepairAdvisoryCopyTests: XCTestCase {
         XCTAssertFalse(ExternalEditConflictCopy.alertMessage.isEmpty)
         XCTAssertFalse(ExternalEditConflictCopy.buttonKeepEdits.isEmpty)
         XCTAssertFalse(ExternalEditConflictCopy.buttonUseSavedFile.isEmpty)
+        XCTAssertFalse(ExternalEditConflictCopy.buttonCompare.isEmpty)
         XCTAssertFalse(ExternalEditConflictCopy.detailsLines(diskDate: Date()).isEmpty)
     }
 

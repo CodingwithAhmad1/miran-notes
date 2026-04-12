@@ -46,6 +46,11 @@ struct MiranNotesApp: App {
             .sheet(item: $model.tableEditorPayload) { payload in
                 TableEditorSheet(jsonlURL: payload.jsonlURL, schemaURL: payload.schemaURL)
             }
+            .sheet(item: $model.externalTextCompare) { payload in
+                ExternalEditCompareSheet(payload: payload) {
+                    model.externalTextCompare = nil
+                }
+            }
             .sheet(isPresented: $conflictDetailsPresented) {
                 NavigationStack {
                     ScrollView {
@@ -103,6 +108,9 @@ struct MiranNotesApp: App {
                         conflictDetailsDiskDate = conflict.diskDate
                         conflictDetailsPresented = true
                     }
+                    Button(ExternalEditConflictCopy.buttonCompare) {
+                        model.openExternalEditCompare()
+                    }
                 },
                 message: { _ in
                     Text(ExternalEditConflictCopy.alertMessage)
@@ -138,6 +146,9 @@ private struct EditorRootView: View {
             if let current = model.activeDocument {
                 HSplitView {
                     VStack(spacing: 0) {
+                        if let diskHint = model.diskActivityBanner {
+                            DiskActivityBanner(text: diskHint, onDismiss: { model.dismissDiskActivityBanner() })
+                        }
                         if let advisory = model.repairAdvisory {
                             RepairNoticeBanner(
                                 advisory: advisory,
@@ -161,6 +172,7 @@ private struct EditorRootView: View {
                                 set: { model.activeDocument = $0 }
                             ),
                             cursorOffset: $model.editorCursorOffset,
+                            editorTextSelection: $model.editorTextSelection,
                             pendingEditorScroll: model.pendingEditorScroll,
                             onPendingEditorScrollConsumed: { model.clearPendingEditorScroll() },
                             onCommands: { commands in model.apply(commands) },
@@ -307,5 +319,70 @@ private struct RepairNoticeBanner: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(Color.orange.opacity(0.12))
+    }
+}
+
+private struct DiskActivityBanner: View {
+    let text: String
+    let onDismiss: () -> Void
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "externaldrive")
+                .foregroundStyle(.blue)
+            Text(text)
+                .font(.caption)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 8)
+            Button("Dismiss", action: onDismiss)
+                .buttonStyle(.plain)
+                .font(.caption)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Color.blue.opacity(0.1))
+    }
+}
+
+private struct ExternalEditCompareSheet: View {
+    let payload: ExternalTextComparePayload
+    let onDone: () -> Void
+
+    var body: some View {
+        NavigationStack {
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Your edits (editor)")
+                        .font(.headline)
+                    ScrollView {
+                        Text(payload.localText)
+                            .font(.system(.body, design: .monospaced))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .frame(minHeight: 200)
+                }
+                .frame(maxWidth: .infinity)
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Saved file (disk)")
+                        .font(.headline)
+                    ScrollView {
+                        Text(payload.diskText)
+                            .font(.system(.body, design: .monospaced))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .frame(minHeight: 200)
+                }
+                .frame(maxWidth: .infinity)
+            }
+            .padding()
+            .frame(minWidth: 520, minHeight: 320)
+            .navigationTitle("Compare text")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done", action: onDone)
+                }
+            }
+        }
     }
 }

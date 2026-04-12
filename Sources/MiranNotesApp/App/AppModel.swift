@@ -4,11 +4,23 @@ import MiranNotesCore
 import os.log
 import SwiftUI
 
+/// Stored undo boundary: full snapshot, or replace-text-only chain (inverse commands for hybrid undo).
+private enum UndoCheckpoint {
+    case full(NoteDocument)
+    case replaceTextOnly(forward: [EditCommand], undoCommands: [EditCommand])
+}
+
 /// Drives the “file changed on disk” alert; non-nil means a conflict is being presented.
 struct ExternalEditConflict: Identifiable, Equatable {
     let id = UUID()
     var diskDate: Date
     var revisionToken: DocumentRevisionToken?
+}
+
+struct ExternalTextComparePayload: Identifiable, Equatable {
+    let id = UUID()
+    var localText: String
+    var diskText: String
 }
 
 struct TableEditorPayload: Identifiable {
@@ -58,6 +70,10 @@ final class AppModel: ObservableObject {
     @Published var repairAdvisory: RepairAdvisory?
     /// When non-nil, shows the external-edit conflict alert (`diskDate` is the on-disk modification time that triggered it).
     @Published var externalEditConflictAlert: ExternalEditConflict?
+    /// Non-blocking hint when disk changes conflict with a dirty buffer (set together with ``externalEditConflictAlert``).
+    @Published var diskActivityBanner: String?
+    /// Side-by-side compare payload (opened from conflict flow).
+    @Published var externalTextCompare: ExternalTextComparePayload?
     /// Cached folder tree for outline UI (kept in sync with `refreshNotes()`).
     @Published var folderCatalog: FolderCatalog = FolderCatalog()
 
@@ -75,20 +91,35 @@ final class AppModel: ObservableObject {
     private var navigationGeneration = 0
     /// Current cursor offset (UTF-16) in the active editor surface, updated by the coordinator on selection change.
     @Published var editorCursorOffset: Int = 0
+    /// Full UTF-16 selection in the active editor (`length == 0` for caret-only).
+    @Published var editorTextSelection: MiranNotesCore.TextRange = MiranNotesCore.TextRange(start: 0, length: 0)
     private let undoPolicy: UndoPolicy
-    /// One checkpoint per document version: `checkpoints[0]` is the oldest retained state, `checkpoints.last` matches `activeDocument` after each recorded edit.
-    private var undoCheckpoints: [NoteDocument] = []
+    /// One checkpoint per document version: `checkpoints[0]` is the oldest retained state, `checkpoints.last` materializes to `activeDocument` after each recorded edit.
+    /// Uses ``UndoCheckpoint/replaceTextOnly`` to avoid retaining full ``NoteDocument`` copies for pure ``EditCommand/replaceText`` steps when inverses apply.
+    private var undoCheckpoints: [UndoCheckpoint] = []
     /// One name per undo step (`count == checkpoints.count - 1`).
     private var undoActionNames: [String] = []
     private var lastUndoRegistrationDate: Date?
     private var lastRecordedUndoWasSingleReplaceText = false
     /// Action names for each undo step (internal for tests; same cardinality as former `UndoStep` array).
     var undoHistory: [String] { undoActionNames }
-    /// Summed `NoteDocument.estimatedUndoMemoryBytes` for retained checkpoints (diagnostics / `swift test`).
+    /// Approximate retained undo state for diagnostics / `swift test` (materialized document sizes plus command overhead for hybrid steps).
     var undoRetentionMemoryEstimateBytes: Int {
-        NoteDocument.estimatedUndoBytes(forCheckpoints: undoCheckpoints)
+        undoCheckpoints.enumerated().reduce(0) { sum, entry in
+            let (i, cp) = entry
+            let mat = materializeCheckpoint(at: i)
+            let cmdOverhead: Int
+            if case let .replaceTextOnly(forward, undo) = cp {
+                cmdOverhead = (forward.count + undo.count) * 64
+            } else {
+                cmdOverhead = 0
+            }
+            return sum + mat.estimatedUndoMemoryBytes + cmdOverhead
+        }
     }
     private let commandPipelineContract = CommandPipelineContract()
+    /// Public registration API for typed extensions; runs before ``localCommandInterceptors`` (see `ExtensionRegistry` docs).
+    let extensionRegistry = ExtensionRegistry()
     private var localCommandInterceptors: [UUID: ([EditCommand], NoteDocument, CommandContext) -> [EditCommand]] = [:]
     /// Insertion-ordered list of interceptor keys, so interceptors fire in registration order.
     private var localCommandInterceptorOrder: [UUID] = []
@@ -99,6 +130,7 @@ final class AppModel: ObservableObject {
     private var backlinkRefreshTask: Task<Void, Never>?
     private var bodySearchIndexTask: Task<Void, Never>?
     private var bodySearchIndexGeneration = 0
+    private var activeNoteFilePresenter: ActiveNoteFilePresenter?
 
     init(
         repository: NoteRepository,
@@ -466,6 +498,7 @@ final class AppModel: ObservableObject {
 
     func loadSelectedNote() async {
         editorCursorOffset = 0
+        editorTextSelection = MiranNotesCore.TextRange(start: 0, length: 0)
         guard let path = selectedBaseName else {
             pendingEditorScroll = nil
             activeDocument = nil
@@ -475,6 +508,7 @@ final class AppModel: ObservableObject {
             repairAdvisory = nil
             backlinks = []
             clearUndoStack()
+            updateActiveNoteFilePresenter()
             return
         }
         do {
@@ -493,6 +527,7 @@ final class AppModel: ObservableObject {
         } catch {
             lastError = "Failed to load note: \(error.localizedDescription)"
         }
+        updateActiveNoteFilePresenter()
     }
 
     func dismissRepairAdvisory() {
@@ -551,8 +586,9 @@ final class AppModel: ObservableObject {
             Logger.editEngine.error("Command batch truncated from \(commands.count, privacy: .public) to \(maxBatch, privacy: .public)")
         }
         let sanitized = Array(commands.prefix(maxBatch))
-        let context = CommandContext(trigger: "appModel.apply", selectionRange: nil)
-        let intercepted = localCommandInterceptorOrder.reduce(sanitized) { partial, token in
+        let context = CommandContext(trigger: "appModel.apply", selectionRange: editorTextSelection)
+        var intercepted = extensionRegistry.applyInterceptors(to: sanitized, document: doc, context: context)
+        intercepted = localCommandInterceptorOrder.reduce(intercepted) { partial, token in
             guard let interceptor = localCommandInterceptors[token] else { return partial }
             return interceptor(partial, doc, context)
         }
@@ -569,18 +605,35 @@ final class AppModel: ObservableObject {
             let now = Date()
             let windowSeconds = Double(undoPolicy.coalesceReplaceTextWindowNanoseconds) / 1_000_000_000.0
 
+            let lastMatchesBefore =
+                !undoCheckpoints.isEmpty
+                && materializeCheckpoint(at: undoCheckpoints.count - 1) == before
+
             let canTryCoalesce =
                 undoPolicy.coalesceReplaceTextWindowNanoseconds > 0
                 && singleReplace
                 && lastRecordedUndoWasSingleReplaceText
-                && !undoCheckpoints.isEmpty
-                && undoCheckpoints.last == before
+                && lastMatchesBefore
 
             var didCoalesce = false
             if canTryCoalesce, let lastDate = lastUndoRegistrationDate {
                 let elapsed = now.timeIntervalSince(lastDate)
                 if elapsed < windowSeconds {
-                    undoCheckpoints[undoCheckpoints.count - 1] = after
+                    let lastIdx = undoCheckpoints.count - 1
+                    let beforeIdx = lastIdx - 1
+                    let docBeforeStep = materializeCheckpoint(at: beforeIdx)
+                    switch undoCheckpoints[lastIdx] {
+                    case .replaceTextOnly(let forward, _):
+                        let combined = forward + intercepted
+                        if let rebuilt = UndoInverseSupport.replaceTextChainUndoCommands(forward: combined, documentBefore: docBeforeStep),
+                           rebuilt.after == after {
+                            undoCheckpoints[lastIdx] = .replaceTextOnly(forward: combined, undoCommands: rebuilt.undoCommands)
+                        } else {
+                            undoCheckpoints[lastIdx] = .full(after)
+                        }
+                    case .full:
+                        undoCheckpoints[lastIdx] = .full(after)
+                    }
                     if !undoActionNames.isEmpty {
                         undoActionNames[undoActionNames.count - 1] = name
                     }
@@ -591,7 +644,8 @@ final class AppModel: ObservableObject {
 
             if !didCoalesce {
                 if undoCheckpoints.isEmpty {
-                    undoCheckpoints = [before, after]
+                    let second = Self.checkpointForRecordedStep(after: after, before: before, intercepted: intercepted)
+                    undoCheckpoints = [.full(before), second]
                     undoActionNames = [name]
                     let top = 1
                     undoManager?.registerUndo(withTarget: self) { model in
@@ -599,8 +653,9 @@ final class AppModel: ObservableObject {
                     }
                     undoManager?.setActionName(name)
                 } else {
-                    assert(undoCheckpoints.last == before)
-                    undoCheckpoints.append(after)
+                    assert(materializeCheckpoint(at: undoCheckpoints.count - 1) == before)
+                    let newCheckpoint = Self.checkpointForRecordedStep(after: after, before: before, intercepted: intercepted)
+                    undoCheckpoints.append(newCheckpoint)
                     undoActionNames.append(name)
                     let top = undoCheckpoints.count - 1
                     undoManager?.registerUndo(withTarget: self) { model in
@@ -623,12 +678,38 @@ final class AppModel: ObservableObject {
 
     private func applyCheckpointUndo(fromIndex: Int, toIndex: Int) {
         guard undoCheckpoints.indices.contains(toIndex) else { return }
-        activeDocument = undoCheckpoints[toIndex]
+        activeDocument = materializeCheckpoint(at: toIndex)
         scheduleAutosave()
         scheduleBacklinkRefresh()
         undoManager?.registerUndo(withTarget: self) { model in
             model.applyCheckpointUndo(fromIndex: toIndex, toIndex: fromIndex)
         }
+    }
+
+    /// Materializes the document at the given checkpoint index (index 0 is always a full snapshot).
+    private func materializeCheckpoint(at index: Int) -> NoteDocument {
+        switch undoCheckpoints[index] {
+        case .full(let d):
+            return d
+        case .replaceTextOnly(let forward, _):
+            var doc = materializeCheckpoint(at: index - 1)
+            for c in forward {
+                doc = EditCommandEngine.apply(c, to: doc)
+            }
+            return doc
+        }
+    }
+
+    private static func checkpointForRecordedStep(
+        after: NoteDocument,
+        before: NoteDocument,
+        intercepted: [EditCommand]
+    ) -> UndoCheckpoint {
+        if let chain = UndoInverseSupport.replaceTextChainUndoCommands(forward: intercepted, documentBefore: before),
+           chain.after == after {
+            return .replaceTextOnly(forward: intercepted, undoCommands: chain.undoCommands)
+        }
+        return .full(after)
     }
 
     private func reregisterAllUndoActions() {
@@ -657,7 +738,13 @@ final class AppModel: ObservableObject {
         let max = undoPolicy.maxUndoSteps
         let steps = undoCheckpoints.count - 1
         guard steps > max else { return }
-        undoCheckpoints = Array(undoCheckpoints.suffix(max + 1))
+        let dropCount = steps - max
+        // Rebasing: `suffix` would leave a `.replaceTextOnly` at index 0 without its parent. Materialize each
+        // retained checkpoint to `.full` so the timeline stays self-contained after pruning.
+        let newCheckpoints: [UndoCheckpoint] = (dropCount..<undoCheckpoints.count).map { i in
+            .full(materializeCheckpoint(at: i))
+        }
+        undoCheckpoints = newCheckpoints
         undoActionNames = Array(undoActionNames.suffix(max))
         reregisterAllUndoActions()
         Logger.vault.info("Undo stack pruned to \(max, privacy: .public) steps")
@@ -714,6 +801,8 @@ final class AppModel: ObservableObject {
 
     func changeSelection(baseName: String?) {
         externalEditConflictAlert = nil
+        diskActivityBanner = nil
+        externalTextCompare = nil
         Task { @MainActor in
             if selectedBaseName == baseName { return }
             if let p = pendingEditorScroll, let path = baseName {
@@ -732,6 +821,8 @@ final class AppModel: ObservableObject {
 
     func changeSelection(noteID: UUID?) {
         externalEditConflictAlert = nil
+        diskActivityBanner = nil
+        externalTextCompare = nil
         Task { @MainActor in
             let path: String?
             if let id = noteID {
@@ -823,6 +914,7 @@ final class AppModel: ObservableObject {
         let diskDate = externalEditConflictAlert?.diskDate
         let diskRevision = externalEditConflictAlert?.revisionToken
         externalEditConflictAlert = nil
+        diskActivityBanner = nil
         if reloadFromDisk {
             Task { @MainActor in
                 await loadSelectedNote()
@@ -920,6 +1012,42 @@ final class AppModel: ObservableObject {
         }
 
         VaultTelemetry.logConflictDetected(isDirty: isDirty, hasRevisionToken: diskRevision != nil)
+        diskActivityBanner =
+            "The saved copy of this note changed on disk while you have unsaved edits. Choose an action below or compare versions."
         externalEditConflictAlert = ExternalEditConflict(diskDate: diskDate, revisionToken: diskRevision)
+    }
+
+    func openExternalEditCompare() {
+        guard let path = selectedBaseName, let doc = activeDocument else { return }
+        Task { @MainActor in
+            let diskText: String
+            do {
+                diskText = try await repository.readRawNoteText(relativePath: path)
+            } catch {
+                lastError = "Could not load disk copy: \(error.localizedDescription)"
+                return
+            }
+            externalTextCompare = ExternalTextComparePayload(localText: doc.text, diskText: diskText)
+        }
+    }
+
+    func dismissDiskActivityBanner() {
+        diskActivityBanner = nil
+    }
+
+    private func updateActiveNoteFilePresenter() {
+        activeNoteFilePresenter?.stop()
+        activeNoteFilePresenter = nil
+        guard let path = selectedBaseName else { return }
+        let url = VaultPath.fileURL(vaultRoot: repository.vaultURL, relativePathWithoutExtension: path, extension: "txt")
+        let presenter = ActiveNoteFilePresenter(fileURL: url) { [weak self] in
+            guard let self else { return }
+            Task { @MainActor in
+                self.pendingExternalDiskCheck = true
+                await self.runPendingExternalDiskReconciliationIfNeeded()
+            }
+        }
+        presenter.start()
+        activeNoteFilePresenter = presenter
     }
 }

@@ -139,6 +139,8 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
     @Binding var document: NoteDocument
     /// Updated on every selection change so callers (e.g. insertWikiLink) know the cursor position.
     @Binding var cursorOffset: Int
+    /// Full UTF-16 selection (caret when `length == 0`) for `CommandContext` and extensions.
+    @Binding var editorTextSelection: MiranNotesCore.TextRange
     /// When set for the current document’s `noteID`, the coordinator scrolls to `range` once then calls `onPendingEditorScrollConsumed`.
     var pendingEditorScroll: PendingEditorScroll?
     var onPendingEditorScrollConsumed: (() -> Void)?
@@ -653,29 +655,34 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
                 applyPendingSelectionIfNeeded()
                 applyPendingEditorScrollIfNeeded(textView: textView)
                 refreshSlashMenuState(for: textView)
-                return
-            }
-
-            if let diff = TextEditDiff.singleUTF16Replacement(from: textView.string, to: parent.document.text) {
-                isApplyingModelUpdate = true
-                textView.textStorage?.replaceCharacters(in: diff.range, with: diff.replacement)
-                isApplyingModelUpdate = false
-                refreshVisualChrome(textView: textView, document: parent.document)
-                applyPendingSelectionIfNeeded()
-                applyPendingEditorScrollIfNeeded(textView: textView)
-                refreshSlashMenuState(for: textView)
+                EditorSyncController.sampleAndLogDriftIfNeeded(
+                    document: parent.document,
+                    textView: textView,
+                    sampleRate: EditorSyncController.driftSampleRate
+                )
                 return
             }
 
             let savedSelection = textView.selectedRange()
-            isApplyingModelUpdate = true
-            textView.string = parent.document.text
-            isApplyingModelUpdate = false
+            var applying = isApplyingModelUpdate
+            let didFullReplace = EditorSyncController.applyModelText(
+                to: textView,
+                modelText: parent.document.text,
+                isApplyingModelUpdate: &applying
+            )
+            isApplyingModelUpdate = applying
+            if didFullReplace {
+                restoreSelectionClamped(savedSelection)
+            }
             refreshVisualChrome(textView: textView, document: parent.document)
-            restoreSelectionClamped(savedSelection)
             applyPendingSelectionIfNeeded()
             applyPendingEditorScrollIfNeeded(textView: textView)
             refreshSlashMenuState(for: textView)
+            EditorSyncController.sampleAndLogDriftIfNeeded(
+                document: parent.document,
+                textView: textView,
+                sampleRate: EditorSyncController.driftSampleRate
+            )
         }
 
         private func refreshVisualChrome(textView: NSTextView, document: NoteDocument) {
@@ -765,9 +772,14 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
 
         func textViewDidChangeSelection(_ notification: Notification) {
             guard let tv = notification.object as? NSTextView else { return }
-            let loc = tv.selectedRange().location
+            let r = tv.selectedRange()
+            let loc = r.location
             if parent.cursorOffset != loc {
                 parent.cursorOffset = loc
+            }
+            let tr = MiranNotesCore.TextRange(start: r.location, length: r.length)
+            if parent.editorTextSelection != tr {
+                parent.editorTextSelection = tr
             }
             refreshSlashMenuState(for: tv)
             refreshBlockChrome()
@@ -786,17 +798,23 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
             let newDoc = parent.onCommands(commands)
 
             // Apply the canonical model text immediately so both mutation paths stay ordered.
-            isApplyingModelUpdate = true
-            if let diff = TextEditDiff.singleUTF16Replacement(from: textView.string, to: newDoc.text) {
-                textView.textStorage?.replaceCharacters(in: diff.range, with: diff.replacement)
-            } else if textView.string != newDoc.text {
-                textView.string = newDoc.text
-            }
-            isApplyingModelUpdate = false
+            // **EditorSyncController** is the only supported path for this sync (see EditorSyncController.swift).
+            var applying = isApplyingModelUpdate
+            EditorSyncController.applyCanonicalDocument(
+                to: textView,
+                newDoc: newDoc,
+                isApplyingModelUpdate: &applying
+            )
+            isApplyingModelUpdate = applying
 
             refreshVisualChrome(textView: textView, document: newDoc)
             applyPendingSelectionIfNeeded()
             refreshSlashMenuState(for: textView)
+            EditorSyncController.sampleAndLogDriftIfNeeded(
+                document: newDoc,
+                textView: textView,
+                sampleRate: EditorSyncController.driftSampleRate
+            )
             return newDoc
         }
     }

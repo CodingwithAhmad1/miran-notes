@@ -5,7 +5,7 @@ Use this directory for **planning and roadmaps that belong in version control**:
 ## Conventions
 
 - Prefer **descriptive filenames**: `topic_short_slug.md` or `YYYY-MM-topic.md`.
-- Link outward to code paths and to [Constraints.md](../../Constraints.md) when the work touches non‑negotiable rules.
+- Link outward to code paths and to [Constraints.md](../../Constraints.md) when the work touches non-negotiable rules.
 - If a plan duplicates content from an [ADR](../adr/README.md), reference the ADR instead of restating the decision.
 
 ## Relationship to IDE-generated plans
@@ -16,11 +16,19 @@ Tools such as Cursor may create plans under **`.cursor/plans/`** on a developer 
 
 | Plan | Scope | Status |
 |------|-------|--------|
-| [reliability-and-autosave-fixes.md](reliability-and-autosave-fixes.md) | Navigation race conditions, debounced-save flush before note switch/rename/create, `navigationGeneration` guard, backlink error surfacing | Implemented — all tests pass |
-| [robustness-phased-plan.md](robustness-phased-plan.md) | Four phases: `NoteLoadResult` + repair advisory banner; exhaustive `adjustBlocks`; slash command registry completion (`/list`, `/divider`, `/callout`); sync `onCommands` return + cursor binding + table save cleanup | Implemented — all 55 tests pass |
-| [foundation-hardening-plan.md](foundation-hardening-plan.md) | Four phases: trivial fixes (identity, slugify, cursor reset, dead code removal); correctness fixes (splitBlock constraints, count-bounded undo, full-buffer notice + reconcile, interceptor tokens, 1 MB cap); performance (backlink cache + debounce, dirty-flag index saves); architecture (two-phase atomic commits, open slash registry, incremental visual styling) | Implemented — all 113 tests pass |
+| [reliability-and-autosave-fixes.md](reliability-and-autosave-fixes.md) | Navigation race conditions, debounced-save flush before note switch/rename/create, `navigationGeneration` guard, backlink error surfacing | Implemented |
+| [robustness-phased-plan.md](robustness-phased-plan.md) | Phased hardening: repair advisory, `adjustBlocks`, slash registry, sync `onCommands`, cursor binding, tables | Implemented (see repo history for test counts) |
+| [hybrid-undo-appmodel-wiring.md](hybrid-undo-appmodel-wiring.md) | `UndoInverseSupport.replaceTextChainUndoCommands`, `AppModel` `UndoCheckpoint` hybrid storage, prune rebase, `Constraints` undo section | Implemented |
+
+## Active / reference plans
+
+| Plan | Role |
+|------|------|
+| [vault-write-paths-audit.md](vault-write-paths-audit.md) | Vault write path audit notes |
+| [constraints-touchpoint-map.md](constraints-touchpoint-map.md) | Constraints touchpoint mapping |
+| [editor-interaction-scenarios.md](editor-interaction-scenarios.md) | Manual QA checklist (ongoing) |
 
 ## See also
 
 - [Documentation hub](../README.md)
-- [Constraints.md](../../Constraints.md) — editor pipeline, IME, undo, storage limits
+- [Constraints.md](../../Constraints.md)

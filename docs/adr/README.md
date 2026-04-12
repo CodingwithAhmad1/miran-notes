@@ -1,6 +1,6 @@
 # Architecture Decision Records (ADRs)
 
-ADRs capture **significant, stable decisions** with context and consequences. They complement [Constraints.md](../../Constraints.md): constraints state what must not break; ADRs record *why* a particular design was chosen.
+ADRs capture **significant, stable decisions** with context and consequences. They complement [Constraints.md](../../Constraints.md): constraints state what must not break; ADRs record *why* a particular design was chosen. See the [documentation hub](../README.md) for the full doc map.
 
 ## Index
 
@@ -12,6 +12,6 @@ ADRs capture **significant, stable decisions** with context and consequences. Th
 
 ## Adding an ADR
 
-1. Use the next number: `0003-short-title.md`.
+1. Use the next number after the latest ADR (e.g. `0004-short-title.md`).
 2. Include **Status**, **Context**, **Decision**, and **Consequences** (or equivalent).
 3. Link the new file from the table above.

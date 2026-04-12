@@ -108,7 +108,7 @@ actor NoteRepository {
         let diskManifest = try? Data(contentsOf: manifestURL())
         let manifestChanged = encodedManifest != diskManifest
 
-        let pathIndex = try loadPathIndex()
+        let pathIndex = try VaultIndexSubsystem.loadPathIndex(vaultURL: vaultURL, decoder: decoder)
         let folderByNote = Dictionary(uniqueKeysWithValues: pathIndex.entries.map { ($0.noteID, $0.folderID) })
 
         if manifestChanged {
@@ -148,12 +148,7 @@ actor NoteRepository {
     }
 
     func loadLinkGraph() throws -> LinkGraph {
-        let url = VaultPaths.linkGraphURL(vaultURL: vaultURL)
-        guard let data = try? Data(contentsOf: url),
-              let graph = try? decoder.decode(LinkGraph.self, from: data) else {
-            return LinkGraph()
-        }
-        return graph
+        try VaultIndexSubsystem.loadLinkGraph(vaultURL: vaultURL, decoder: decoder)
     }
 
     func saveLinkGraph(_ graph: LinkGraph) throws {
@@ -163,7 +158,7 @@ actor NoteRepository {
         let manifest = try loadOrRebuildManifest()
         let rel = try loadRelationshipIndex()
         let folderCatalog = try loadFolderCatalog()
-        let pathIndex = try loadPathIndex()
+        let pathIndex = try VaultIndexSubsystem.loadPathIndex(vaultURL: vaultURL, decoder: decoder)
         let integrity = try commitIndexOnly(
             manifest: manifest,
             linkGraph: g,
@@ -189,7 +184,7 @@ actor NoteRepository {
         }
         let rel = try loadRelationshipIndex()
         let folderCatalog = try loadFolderCatalog()
-        let pathIndex = try loadPathIndex()
+        let pathIndex = try VaultIndexSubsystem.loadPathIndex(vaultURL: vaultURL, decoder: decoder)
         let integrity = try commitIndexOnly(
             manifest: manifest,
             linkGraph: graph,
@@ -374,7 +369,7 @@ actor NoteRepository {
 
         var folderCatalog = try loadFolderCatalog()
         folderCatalog.ensureRoot()
-        var pathIndex = try loadPathIndex()
+        var pathIndex = try VaultIndexSubsystem.loadPathIndex(vaultURL: vaultURL, decoder: decoder)
         pathIndex.upsert(
             noteID: documentToPersist.metadata.noteID,
             folderID: folderID,
@@ -412,7 +407,7 @@ actor NoteRepository {
         }
 
         let doc = try loadNote(relativePath: oldRelativePath).document
-        let folderID = (try loadPathIndex()).entries.first { $0.noteID == doc.metadata.noteID }?.folderID ?? FolderCatalog.rootFolderID
+        let folderID = (try VaultIndexSubsystem.loadPathIndex(vaultURL: vaultURL, decoder: decoder)).entries.first { $0.noteID == doc.metadata.noteID }?.folderID ?? FolderCatalog.rootFolderID
 
         let parentDir = (oldRelativePath as NSString).deletingLastPathComponent
         let stemSlug: String
@@ -434,7 +429,7 @@ actor NoteRepository {
             let graph = try loadLinkGraph()
             let relationshipIndex = try loadRelationshipIndex()
             let folderCatalog = try loadFolderCatalog()
-            let pathIndex = try loadPathIndex()
+            let pathIndex = try VaultIndexSubsystem.loadPathIndex(vaultURL: vaultURL, decoder: decoder)
             let integrity = try commitIndexOnly(
                 manifest: manifest,
                 linkGraph: graph,
@@ -479,7 +474,7 @@ actor NoteRepository {
 
         var folderCatalog = try loadFolderCatalog()
         folderCatalog.ensureRoot()
-        var pathIndex = try loadPathIndex()
+        var pathIndex = try VaultIndexSubsystem.loadPathIndex(vaultURL: vaultURL, decoder: decoder)
         pathIndex.upsert(noteID: doc.metadata.noteID, folderID: folderID, relativePath: uniqueNew)
 
         let normalized = RangeNormalizer.normalize(metadata: doc.metadata, for: doc.text)
@@ -565,7 +560,7 @@ actor NoteRepository {
         let graph = try loadLinkGraph()
         let rel = try loadRelationshipIndex()
         let folderCatalog = try loadFolderCatalog()
-        let pathIndex = try loadPathIndex()
+        let pathIndex = try VaultIndexSubsystem.loadPathIndex(vaultURL: vaultURL, decoder: decoder)
         let integrity = try commitIndexOnly(
             manifest: manifest,
             linkGraph: graph,
@@ -623,36 +618,15 @@ actor NoteRepository {
     }
 
     func loadRelationshipIndex() throws -> RelationshipIndex {
-        let url = VaultPaths.relationshipIndexURL(vaultURL: vaultURL)
-        guard let data = try? Data(contentsOf: url),
-              let decoded = try? decoder.decode(RelationshipIndex.self, from: data) else {
-            return RelationshipIndex()
-        }
-        return decoded
+        try VaultIndexSubsystem.loadRelationshipIndex(vaultURL: vaultURL, decoder: decoder)
     }
 
     func loadFolderCatalog() throws -> FolderCatalog {
-        try loadFolderCatalogPrivate()
+        try VaultIndexSubsystem.loadFolderCatalog(vaultURL: vaultURL, decoder: decoder)
     }
 
     private func loadFolderCatalogPrivate() throws -> FolderCatalog {
-        let url = VaultPaths.folderCatalogURL(vaultURL: vaultURL)
-        guard let data = try? Data(contentsOf: url),
-              let decoded = try? decoder.decode(FolderCatalog.self, from: data) else {
-            var fresh = FolderCatalog()
-            fresh.isDirty = true
-            return fresh
-        }
-        return decoded
-    }
-
-    private func loadPathIndex() throws -> PathIndex {
-        let url = VaultPaths.pathIndexURL(vaultURL: vaultURL)
-        guard let data = try? Data(contentsOf: url),
-              let decoded = try? decoder.decode(PathIndex.self, from: data) else {
-            return PathIndex()
-        }
-        return decoded
+        try VaultIndexSubsystem.loadFolderCatalog(vaultURL: vaultURL, decoder: decoder)
     }
 
     func createNote(named name: String, folderID: UUID) throws -> (NoteDocument, String) {
@@ -929,7 +903,7 @@ actor NoteRepository {
         let manifest = try loadOrRebuildManifest()
         let graph = try loadLinkGraph()
         let rel = try loadRelationshipIndex()
-        let pathIndex = try loadPathIndex()
+        let pathIndex = try VaultIndexSubsystem.loadPathIndex(vaultURL: vaultURL, decoder: decoder)
         logIfIntegrityIssues(try commitIndexOnly(
             manifest: manifest,
             linkGraph: graph,
@@ -947,7 +921,7 @@ actor NoteRepository {
         }
         var folderCatalog = try loadFolderCatalog()
         folderCatalog.ensureRoot()
-        let pathIndex = try loadPathIndex()
+        let pathIndex = try VaultIndexSubsystem.loadPathIndex(vaultURL: vaultURL, decoder: decoder)
         if !folderCatalog.childFolders(of: id).isEmpty {
             throw NoteRepositoryError.folderNotEmpty(id)
         }
@@ -999,7 +973,7 @@ actor NoteRepository {
         }
 
         var manifest = try loadOrRebuildManifest()
-        var pathIndex = try loadPathIndex()
+        var pathIndex = try VaultIndexSubsystem.loadPathIndex(vaultURL: vaultURL, decoder: decoder)
         if oldPrefix != newPrefix {
             applyRelativePathPrefixRewrite(from: oldPrefix, to: newPrefix, manifest: &manifest, pathIndex: &pathIndex)
         }
@@ -1040,7 +1014,7 @@ actor NoteRepository {
         }
 
         var manifest = try loadOrRebuildManifest()
-        var pathIndex = try loadPathIndex()
+        var pathIndex = try VaultIndexSubsystem.loadPathIndex(vaultURL: vaultURL, decoder: decoder)
         if oldPrefix != newPrefix {
             applyRelativePathPrefixRewrite(from: oldPrefix, to: newPrefix, manifest: &manifest, pathIndex: &pathIndex)
         }
@@ -1070,7 +1044,7 @@ actor NoteRepository {
         }
         let oldPath = manifestEntry.relativePath
 
-        let folderID = (try loadPathIndex()).entries.first { $0.noteID == noteID }?.folderID ?? FolderCatalog.rootFolderID
+        let folderID = (try VaultIndexSubsystem.loadPathIndex(vaultURL: vaultURL, decoder: decoder)).entries.first { $0.noteID == noteID }?.folderID ?? FolderCatalog.rootFolderID
         guard folderID != toFolderID else { return }
 
         let dirPrefix = folderCatalog.relativeDirectoryPath(for: toFolderID)
@@ -1078,7 +1052,7 @@ actor NoteRepository {
         let uniqueNew = try uniqueAvailableRelativePath(inDirectoryPrefix: dirPrefix.isEmpty ? nil : dirPrefix, slugStem: stem)
 
         if uniqueNew == oldPath {
-            var pathIndex = try loadPathIndex()
+            var pathIndex = try VaultIndexSubsystem.loadPathIndex(vaultURL: vaultURL, decoder: decoder)
             pathIndex.upsert(noteID: noteID, folderID: toFolderID, relativePath: oldPath)
             let manifest = try loadOrRebuildManifest()
             let graph = try loadLinkGraph()
@@ -1124,7 +1098,7 @@ actor NoteRepository {
         }
         relationshipIndex.replaceLinks(from: noteID, with: linkRelationships + artifactRelationships)
 
-        var pathIndex = try loadPathIndex()
+        var pathIndex = try VaultIndexSubsystem.loadPathIndex(vaultURL: vaultURL, decoder: decoder)
         pathIndex.upsert(noteID: noteID, folderID: toFolderID, relativePath: uniqueNew)
 
         let normalized = RangeNormalizer.normalize(metadata: doc.metadata, for: doc.text)
@@ -1155,7 +1129,7 @@ actor NoteRepository {
         let relPath = entry.relativePath
         manifest.remove(noteID: noteID)
 
-        var pathIndex = try loadPathIndex()
+        var pathIndex = try VaultIndexSubsystem.loadPathIndex(vaultURL: vaultURL, decoder: decoder)
         pathIndex.remove(noteID: noteID)
 
         var graph = try loadLinkGraph()
