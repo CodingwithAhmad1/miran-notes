@@ -6,7 +6,7 @@ Internal inventory of every persistence touchpoint for `note.txt`, sidecars, vau
 |----------|----------------------------|----------|
 | `note.txt` | `NoteRepository.save`, `moveNote`, `renameNote` (cross-path) via `NoteFilesCommitParticipant` → `VaultCommitCoordinator` | **Already atomic** (two-phase, vault-local staging + journal) |
 | `note.meta.json` | Same as above | **Already atomic** |
-| `manifest.json` | `VaultCommitCoordinator` (`ManifestCommitParticipant`); `listNotes` persists via `commitIndexOnly` when manifest bytes differ from disk | **Already atomic** |
+| `manifest.json` | `VaultCommitCoordinator` (`ManifestCommitParticipant`); `reconcileManifest()` / note saves / index commits when `VaultManifest.isDirty` or schema bump; **`listNotes()` does not write** | **Already atomic** |
 | `link-graph.json` | Coordinator (`LinkGraphCommitParticipant`); `saveLinkGraph` / `rebuildLinkGraphFull` / `updateLinkGraph` route through `commitIndexOnly` | **Already atomic** |
 | `relationship-index.json` | Coordinator (`RelationshipIndexCommitParticipant`) | **Already atomic** |
 | `folder-catalog.json` | Coordinator (`FolderCatalogCommitParticipant`) | **Already atomic** |

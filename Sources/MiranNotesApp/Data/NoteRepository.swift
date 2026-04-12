@@ -71,6 +71,47 @@ struct BacklinkItem: Identifiable {
 
 /// Coordinates ``NoteFileActor`` (per-note `.txt` / `.meta.json`) and ``VaultIndexActor`` (manifest + `.miran/` JSON + commits).
 actor NoteRepository {
+    private func updateRelationshipIndex(
+        _ relationshipIndex: inout RelationshipIndex,
+        for document: NoteDocument
+    ) {
+        let noteID = document.metadata.noteID
+        let linkRels = document.metadata.links.map { link in
+            LinkRelationship(
+                sourceNoteID: noteID,
+                target: .note(noteID: link.targetNoteID),
+                relationshipKind: "noteLink"
+            )
+        }
+        let artifactRels = document.metadata.artifacts.map { artifact in
+            LinkRelationship(
+                sourceNoteID: noteID,
+                target: .artifact(noteID: noteID, artifactID: artifact.id, kind: artifact.kind),
+                relationshipKind: "artifactLink"
+            )
+        }
+        relationshipIndex.replaceLinks(from: noteID, with: linkRels + artifactRels)
+    }
+
+    /// Rewrites a relative path when a folder prefix changes; returns `nil` if the path is outside `oldPrefix`.
+    private static func rewritePath(_ path: String, oldPrefix: String, newPrefix: String) -> String? {
+        let oldRoot = oldPrefix.isEmpty ? "" : oldPrefix + "/"
+        guard path.hasPrefix(oldRoot) || path == oldPrefix else { return nil }
+        let suffix: String
+        if path.hasPrefix(oldRoot) {
+            suffix = String(path.dropFirst(oldRoot.count))
+        } else {
+            suffix = (path as NSString).lastPathComponent
+        }
+        if newPrefix.isEmpty {
+            return suffix
+        }
+        if suffix.isEmpty {
+            return newPrefix
+        }
+        return "\(newPrefix)/\(suffix)"
+    }
+
     nonisolated let vaultURL: URL
     private let files: NoteFileActor
     private let index: VaultIndexActor
@@ -84,7 +125,14 @@ actor NoteRepository {
     /// Resume interrupted commits from a previous run. Call early when opening a vault.
     func performStartupRecovery() async throws -> VaultRecoverySummary {
         try await files.ensureVault()
-        return try VaultCommitCoordinator.recoverPendingCommits(vaultRoot: vaultURL)
+        let summary = try VaultCommitCoordinator.recoverPendingCommits(vaultRoot: vaultURL)
+        await index.invalidateCaches()
+        return summary
+    }
+
+    /// Drops in-memory `.miran/` index caches (e.g. after external filesystem changes).
+    func invalidateIndexCaches() async {
+        await index.invalidateCaches()
     }
 
     /// Legacy single-segment validation (flat notes only).
@@ -96,36 +144,42 @@ actor NoteRepository {
         try await files.ensureVault()
     }
 
+    /// Scans the vault, reconciles manifest entries with on-disk notes, and commits indexes if the manifest JSON would change.
+    func reconcileManifest() async throws {
+        try await files.ensureVault()
+        let manifest = try await loadOrRebuildManifest()
+        var m = manifest
+        m.ensureSchemaVersionIsCurrent()
+        let encodedManifest = try await index.encodeManifest(m)
+        let diskManifest = try? Data(contentsOf: VaultPaths.manifestURL(vaultURL: vaultURL))
+        guard encodedManifest != diskManifest else { return }
+        let graph = try await index.loadLinkGraph()
+        let rel = try await index.loadRelationshipIndex()
+        let folderCatalog = try await index.loadFolderCatalog()
+        let pathIndex = try await index.loadPathIndex()
+        let integrity = try await index.commitIndexOnly(
+            manifest: m,
+            linkGraph: graph,
+            relationshipIndex: rel,
+            folderCatalog: folderCatalog,
+            pathIndex: pathIndex
+        )
+        await index.logIfIntegrityIssues(integrity)
+    }
+
     func listNotes() async throws -> [NoteSummary] {
         try await files.ensureVault()
-        var manifest = try await loadOrRebuildManifest()
-        manifest.schemaVersion = max(manifest.schemaVersion, VaultManifest.currentSchemaVersion)
-        let encodedManifest = try await index.encodeManifest(manifest)
-        let diskManifest = try? Data(contentsOf: VaultPaths.manifestURL(vaultURL: vaultURL))
-        let manifestChanged = encodedManifest != diskManifest
+        guard let manifest = await index.loadManifestFromDiskOnly() else {
+            return []
+        }
 
         let pathIndex = try await index.loadPathIndex()
         let folderByNote = Dictionary(uniqueKeysWithValues: pathIndex.entries.map { ($0.noteID, $0.folderID) })
 
-        if manifestChanged {
-            let graph = try await index.loadLinkGraph()
-            let rel = try await index.loadRelationshipIndex()
-            let folderCatalog = try await index.loadFolderCatalog()
-            let integrity = try await index.commitIndexOnly(
-                manifest: manifest,
-                linkGraph: graph,
-                relationshipIndex: rel,
-                folderCatalog: folderCatalog,
-                pathIndex: pathIndex
-            )
-            await index.logIfIntegrityIssues(integrity)
-        }
-
         return manifest.entries
             .sorted { $0.relativePath.lowercased() < $1.relativePath.lowercased() }
             .map { entry in
-                let title = entry.title ?? entry.relativePath.split(separator: "/").last.map(String.init) ?? entry.relativePath
-                let displayTitle = title.replacingOccurrences(of: "-", with: " ").capitalized
+                let displayTitle = entry.title ?? VaultPath.displayTitle(forRelativePath: entry.relativePath)
                 return NoteSummary(
                     noteID: entry.noteID,
                     title: displayTitle,
@@ -262,9 +316,8 @@ actor NoteRepository {
         let metaURL = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: relativePath, extension: "meta.json")
 
         var manifest = await index.loadManifestFromDiskOnly() ?? VaultManifest()
-        manifest.schemaVersion = VaultManifest.currentSchemaVersion
-        let lastSegment = relativePath.split(separator: "/").last.map(String.init) ?? relativePath
-        let title = lastSegment.replacingOccurrences(of: "-", with: " ").capitalized
+        manifest.ensureSchemaVersionIsCurrent()
+        let title = VaultPath.displayTitle(forRelativePath: relativePath)
         manifest.upsert(noteID: documentToPersist.metadata.noteID, relativePath: relativePath, title: title)
 
         var graph = try await index.loadLinkGraph()
@@ -272,24 +325,7 @@ actor NoteRepository {
         graph.setOutgoing(from: documentToPersist.metadata.noteID, to: targets)
 
         var relationshipIndex = try await index.loadRelationshipIndex()
-        let linkRelationships = documentToPersist.metadata.links.map { link in
-            LinkRelationship(
-                sourceNoteID: documentToPersist.metadata.noteID,
-                target: .note(noteID: link.targetNoteID),
-                relationshipKind: "noteLink"
-            )
-        }
-        let artifactRelationships = documentToPersist.metadata.artifacts.map { artifact in
-            LinkRelationship(
-                sourceNoteID: documentToPersist.metadata.noteID,
-                target: .artifact(noteID: documentToPersist.metadata.noteID, artifactID: artifact.id, kind: artifact.kind),
-                relationshipKind: "artifactLink"
-            )
-        }
-        relationshipIndex.replaceLinks(
-            from: documentToPersist.metadata.noteID,
-            with: linkRelationships + artifactRelationships
-        )
+        updateRelationshipIndex(&relationshipIndex, for: documentToPersist)
 
         var folderCatalog = try await index.loadFolderCatalog()
         folderCatalog.ensureRoot()
@@ -348,7 +384,7 @@ actor NoteRepository {
 
         if newRelativePath == oldRelativePath {
             var manifest = await index.loadManifestFromDiskOnly() ?? VaultManifest()
-            manifest.schemaVersion = VaultManifest.currentSchemaVersion
+            manifest.ensureSchemaVersionIsCurrent()
             manifest.upsert(noteID: doc.metadata.noteID, relativePath: oldRelativePath, title: newTitle)
             let graph = try await index.loadLinkGraph()
             let relationshipIndex = try await index.loadRelationshipIndex()
@@ -374,27 +410,13 @@ actor NoteRepository {
         try VaultPath.ensureParentDirectories(vaultRoot: vaultURL, relativePathWithoutExtension: uniqueNew)
 
         var manifest = await index.loadManifestFromDiskOnly() ?? VaultManifest()
-        manifest.schemaVersion = VaultManifest.currentSchemaVersion
+        manifest.ensureSchemaVersionIsCurrent()
         manifest.upsert(noteID: doc.metadata.noteID, relativePath: uniqueNew, title: newTitle)
 
         var graph = try await index.loadLinkGraph()
         graph.setOutgoing(from: doc.metadata.noteID, to: doc.metadata.links.map(\.targetNoteID))
         var relationshipIndex = try await index.loadRelationshipIndex()
-        let linkRelationships = doc.metadata.links.map { link in
-            LinkRelationship(
-                sourceNoteID: doc.metadata.noteID,
-                target: .note(noteID: link.targetNoteID),
-                relationshipKind: "noteLink"
-            )
-        }
-        let artifactRelationships = doc.metadata.artifacts.map { artifact in
-            LinkRelationship(
-                sourceNoteID: doc.metadata.noteID,
-                target: .artifact(noteID: doc.metadata.noteID, artifactID: artifact.id, kind: artifact.kind),
-                relationshipKind: "artifactLink"
-            )
-        }
-        relationshipIndex.replaceLinks(from: doc.metadata.noteID, with: linkRelationships + artifactRelationships)
+        updateRelationshipIndex(&relationshipIndex, for: doc)
 
         var folderCatalog = try await index.loadFolderCatalog()
         folderCatalog.ensureRoot()
@@ -460,8 +482,49 @@ actor NoteRepository {
         )
 
         let document = NoteDocument(text: text, metadata: metadata)
-        try await save(document, asRelativePath: relativePath, folderID: folderID)
-        return (document, relativePath)
+
+        try VaultPath.validateRelativePath(relativePath)
+        try VaultPath.ensureParentDirectories(vaultRoot: vaultURL, relativePathWithoutExtension: relativePath)
+
+        let normalized = RangeNormalizer.normalize(metadata: document.metadata, for: document.text)
+        let documentToPersist = NoteDocument(text: document.text, metadata: normalized.normalizedMetadata)
+        NoteIntegrity.logIfInvalid(document: documentToPersist)
+
+        let textURL = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: relativePath, extension: "txt")
+        let metaURL = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: relativePath, extension: "meta.json")
+
+        var manifest = await index.loadManifestFromDiskOnly() ?? VaultManifest()
+        manifest.ensureSchemaVersionIsCurrent()
+        let title = VaultPath.displayTitle(forRelativePath: relativePath)
+        manifest.upsert(noteID: documentToPersist.metadata.noteID, relativePath: relativePath, title: title)
+
+        var graph = try await index.loadLinkGraph()
+        graph.setOutgoing(from: documentToPersist.metadata.noteID, to: [])
+
+        var relationshipIndex = try await index.loadRelationshipIndex()
+        updateRelationshipIndex(&relationshipIndex, for: documentToPersist)
+
+        var pathIndex = try await index.loadPathIndex()
+        pathIndex.upsert(
+            noteID: documentToPersist.metadata.noteID,
+            folderID: folderID,
+            relativePath: relativePath
+        )
+
+        _ = try await index.executeNoteCommit(
+            label: "create:\(relativePath)",
+            relativePath: relativePath,
+            document: documentToPersist,
+            textURL: textURL,
+            metaURL: metaURL,
+            manifest: manifest,
+            linkGraph: graph,
+            relationshipIndex: relationshipIndex,
+            folderCatalog: folderCatalog,
+            pathIndex: pathIndex,
+            deletePathsAfterCommit: []
+        )
+        return (documentToPersist, relativePath)
     }
 
     private func loadOrRebuildManifest() async throws -> VaultManifest {
@@ -473,13 +536,14 @@ actor NoteRepository {
 
     private func reconcileManifestWithDisk(_ manifest: VaultManifest) async throws -> VaultManifest {
         var next = manifest
-        if next.schemaVersion < VaultManifest.currentSchemaVersion {
-            next.schemaVersion = VaultManifest.currentSchemaVersion
-        }
+        next.ensureSchemaVersionIsCurrent()
         let originalCount = next.entries.count
         next.entries.removeAll { entry in
             let txt = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: entry.relativePath, extension: "txt")
             return !FileManager.default.fileExists(atPath: txt.path)
+        }
+        if next.entries.count != originalCount {
+            next.isDirty = true
         }
         let removed = max(0, originalCount - next.entries.count)
 
@@ -488,8 +552,7 @@ actor NoteRepository {
         var added = 0
         for rel in onDisk where !known.contains(rel) {
             let doc = try await files.loadNote(relativePath: rel).document
-            let last = rel.split(separator: "/").last.map(String.init) ?? rel
-            let title = last.replacingOccurrences(of: "-", with: " ").capitalized
+            let title = VaultPath.displayTitle(forRelativePath: rel)
             next.upsert(noteID: doc.metadata.noteID, relativePath: rel, title: title)
             added += 1
             let metaURL = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: rel, extension: "meta.json")
@@ -498,13 +561,16 @@ actor NoteRepository {
             }
         }
         VaultTelemetry.logManifestReconcile(removed: removed, added: added)
+        if next.isDirty || removed > 0 || added > 0 {
+            await index.invalidateCaches()
+        }
         return next
     }
 
     private func rebuildManifestFromDisk() async throws -> VaultManifest {
         try await files.ensureVault()
         var manifest = VaultManifest()
-        manifest.schemaVersion = VaultManifest.currentSchemaVersion
+        manifest.ensureSchemaVersionIsCurrent()
         let paths = try await files.listRelativePathsOnDisk()
         for rel in paths {
             let doc = try await files.loadNote(relativePath: rel).document
@@ -512,8 +578,7 @@ actor NoteRepository {
             if !FileManager.default.fileExists(atPath: metaURL.path) {
                 try await save(doc, asRelativePath: rel, folderID: FolderCatalog.rootFolderID)
             }
-            let last = rel.split(separator: "/").last.map(String.init) ?? rel
-            let title = last.replacingOccurrences(of: "-", with: " ").capitalized
+            let title = VaultPath.displayTitle(forRelativePath: rel)
             manifest.upsert(noteID: doc.metadata.noteID, relativePath: rel, title: title)
         }
         let graph = try await index.loadLinkGraph()
@@ -537,46 +602,28 @@ actor NoteRepository {
         manifest: inout VaultManifest,
         pathIndex: inout PathIndex
     ) {
-        let oldRoot = oldPrefix.isEmpty ? "" : oldPrefix + "/"
+        var manifestTouched = false
         for i in manifest.entries.indices {
             let path = manifest.entries[i].relativePath
-            guard path.hasPrefix(oldRoot) || path == oldPrefix else { continue }
-            let suffix: String
-            if path.hasPrefix(oldRoot) {
-                suffix = String(path.dropFirst(oldRoot.count))
-            } else {
-                suffix = (path as NSString).lastPathComponent
+            if let updated = Self.rewritePath(path, oldPrefix: oldPrefix, newPrefix: newPrefix) {
+                manifest.entries[i].relativePath = updated
+                manifestTouched = true
             }
-            let updated: String
-            if newPrefix.isEmpty {
-                updated = suffix
-            } else if suffix.isEmpty {
-                updated = newPrefix
-            } else {
-                updated = "\(newPrefix)/\(suffix)"
-            }
-            manifest.entries[i].relativePath = updated
         }
+        if manifestTouched {
+            manifest.isDirty = true
+        }
+        var pathTouched = false
         for i in pathIndex.entries.indices {
             let path = pathIndex.entries[i].relativePath
-            guard path.hasPrefix(oldRoot) || path == oldPrefix else { continue }
-            let suffix: String
-            if path.hasPrefix(oldRoot) {
-                suffix = String(path.dropFirst(oldRoot.count))
-            } else {
-                suffix = (path as NSString).lastPathComponent
+            if let updated = Self.rewritePath(path, oldPrefix: oldPrefix, newPrefix: newPrefix) {
+                pathIndex.entries[i].relativePath = updated
+                pathTouched = true
             }
-            let updated: String
-            if newPrefix.isEmpty {
-                updated = suffix
-            } else if suffix.isEmpty {
-                updated = newPrefix
-            } else {
-                updated = "\(newPrefix)/\(suffix)"
-            }
-            pathIndex.entries[i].relativePath = updated
         }
-        pathIndex.isDirty = true
+        if pathTouched {
+            pathIndex.isDirty = true
+        }
     }
 
     func createFolder(parentID: UUID, name: String) async throws -> UUID {
@@ -760,29 +807,14 @@ actor NoteRepository {
         try VaultPath.ensureParentDirectories(vaultRoot: vaultURL, relativePathWithoutExtension: uniqueNew)
 
         var manifest = await index.loadManifestFromDiskOnly() ?? VaultManifest()
-        manifest.schemaVersion = VaultManifest.currentSchemaVersion
-        let lastSegment = uniqueNew.split(separator: "/").last.map(String.init) ?? uniqueNew
-        let title = manifestEntry.title ?? lastSegment.replacingOccurrences(of: "-", with: " ").capitalized
+        manifest.ensureSchemaVersionIsCurrent()
+        let title = manifestEntry.title ?? VaultPath.displayTitle(forRelativePath: uniqueNew)
         manifest.upsert(noteID: noteID, relativePath: uniqueNew, title: title)
 
         var graph = try await index.loadLinkGraph()
         graph.setOutgoing(from: noteID, to: doc.metadata.links.map(\.targetNoteID))
         var relationshipIndex = try await index.loadRelationshipIndex()
-        let linkRelationships = doc.metadata.links.map { link in
-            LinkRelationship(
-                sourceNoteID: noteID,
-                target: .note(noteID: link.targetNoteID),
-                relationshipKind: "noteLink"
-            )
-        }
-        let artifactRelationships = doc.metadata.artifacts.map { artifact in
-            LinkRelationship(
-                sourceNoteID: noteID,
-                target: .artifact(noteID: noteID, artifactID: artifact.id, kind: artifact.kind),
-                relationshipKind: "artifactLink"
-            )
-        }
-        relationshipIndex.replaceLinks(from: noteID, with: linkRelationships + artifactRelationships)
+        updateRelationshipIndex(&relationshipIndex, for: doc)
 
         var pathIndex = try await index.loadPathIndex()
         pathIndex.upsert(noteID: noteID, folderID: toFolderID, relativePath: uniqueNew)

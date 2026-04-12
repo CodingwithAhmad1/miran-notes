@@ -61,6 +61,5 @@ Miran Notes is a **local-first** macOS notes app: canonical text in per-note `.t
 |----------|---------|
 | `undoHistory` | Action names per undo step (mirrors menu labels) |
 | `undoRetentionMemoryEstimateBytes` | Approximate retained undo state (hybrid + full checkpoints) |
-| `cachedLinkGraph` | In-memory link graph cache |
 
 For editor behavior and limits, read [Constraints.md](../Constraints.md) before changing the text pipeline or metadata rules.

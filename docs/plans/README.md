@@ -16,6 +16,7 @@ Tools such as Cursor may create plans under **`.cursor/plans/`** on a developer 
 
 | Plan | Scope | Status |
 |------|-------|--------|
+| Vault index performance & reconciliation (see [vault-data-layer.md](../architecture/vault-data-layer.md)) | `VaultIndexActor` index caching, `VaultManifest.isDirty`, optional `VaultCommitContext` note fields, `reconcileManifest()` vs read-only `listNotes()`, `invalidateIndexCaches`, deduplicated helpers | Implemented |
 | [reliability-and-autosave-fixes.md](reliability-and-autosave-fixes.md) | Navigation race conditions, debounced-save flush before note switch/rename/create, `navigationGeneration` guard, backlink error surfacing | Implemented |
 | [robustness-phased-plan.md](robustness-phased-plan.md) | Phased hardening: repair advisory, `adjustBlocks`, slash registry, sync `onCommands`, cursor binding, tables | Implemented (see repo history for test counts) |
 | [hybrid-undo-appmodel-wiring.md](hybrid-undo-appmodel-wiring.md) | `UndoInverseSupport.replaceTextChainUndoCommands`, `AppModel` `UndoCheckpoint` hybrid storage, prune rebase, `Constraints` undo section | Implemented |

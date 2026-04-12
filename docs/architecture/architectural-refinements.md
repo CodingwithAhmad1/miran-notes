@@ -16,7 +16,7 @@ This document tracks major structural work aligned with the long-term plan:
 
 ## Vault indexes
 
-- [`VaultIndexSubsystem`](../../Sources/MiranNotesApp/Data/VaultIndexSubsystem.swift) centralizes **static** load helpers for `.miran/` JSON. [`VaultIndexActor`](../../Sources/MiranNotesApp/Data/VaultIndexActor.swift) owns manifest encoding and atomic index commits; [`NoteFileActor`](../../Sources/MiranNotesApp/Data/NoteFileActor.swift) owns per-note `.txt` / `.meta.json` I/O. [`NoteRepository`](../../Sources/MiranNotesApp/Data/NoteRepository.swift) coordinates both actors and keeps the public vault API unchanged for `AppModel`.
+- [`VaultIndexSubsystem`](../../Sources/MiranNotesApp/Data/VaultIndexSubsystem.swift) centralizes **static** load helpers for `.miran/` JSON. [`VaultIndexActor`](../../Sources/MiranNotesApp/Data/VaultIndexActor.swift) owns manifest encoding, **in-memory caching** of all vault indexes after load/commit, `invalidateCaches()` for external changes, and atomic index commits; [`NoteFileActor`](../../Sources/MiranNotesApp/Data/NoteFileActor.swift) owns per-note `.txt` / `.meta.json` I/O. [`NoteRepository`](../../Sources/MiranNotesApp/Data/NoteRepository.swift) coordinates both actors, exposes **`reconcileManifest()`** (disk scan + optional `commitIndexOnly`) and read-only **`listNotes()`** over the persisted manifest. See [vault-data-layer.md](vault-data-layer.md).
 
 ## Undo (hybrid roadmap)
 

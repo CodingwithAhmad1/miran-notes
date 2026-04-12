@@ -145,7 +145,7 @@ flowchart TB
 | **SingleSurfaceNoteEditor** | TextKit bridge, incremental vs full-buffer updates, slash/menu UX, markdown bullet commit path, size limit gate, IME-safe behavior. |
 | **DocumentLayoutController** | Newline split / merge / empty list-item normalization at the text delegate layer. |
 | **SlashCommandRegistry** | Built-ins + **open** `register(_:)` for additional commands. |
-| **NoteRepository** | Vault lifecycle, manifest load/rebuild/reconcile, atomic writes, `NoteLoadResult` with repair warnings, **startup recovery**, **rebuildLinkGraphFull**, folder and note path operations per ADR 0003. |
+| **NoteRepository** | Vault lifecycle, **`reconcileManifest()`** (scan/repair vs disk), read-only **`listNotes()`**, manifest load/rebuild internals, atomic writes, `NoteLoadResult` with repair warnings, **startup recovery**, index cache invalidation, **rebuildLinkGraphFull**, folder and note path operations per ADR 0003. |
 | **VaultCommitCoordinator** | Two-phase **prepare → journal-backed rename** under `.miran/pending-commits/`; resumable on crash. |
 | **Indexes** | `LinkGraph`, `RelationshipIndex`, `FolderCatalog`, `PathIndex` — each with **`isDirty`** to skip unnecessary writes. |
 | **VaultIntegrityChecker** | Post-commit consistency checks (manifest vs disk, graph referential integrity, saved note shape). |

@@ -126,7 +126,7 @@ The app uses **document-level undo** via the window `UndoManager`: each user edi
 
 **Post-commit integrity:** After coordinated saves, a lightweight check (`VaultIntegrityChecker`) validates manifest paths, index referential consistency, and on-disk note shape when applicable; mismatches surface a dismissible advisory rather than silent repair of ambiguous semantics (see **Semantic reconciliation**).
 
-**Dirty flags on indexes:** `LinkGraph`, `RelationshipIndex`, `FolderCatalog`, and `PathIndex` each carry an `isDirty: Bool` flag (excluded from `Codable`). Their mutating methods (`setOutgoing`, `replaceLinks`, `ensureRoot`, `upsert`) set `isDirty = true` only when content actually changes. Each `VaultCommitParticipant` checks the flag and produces no `VaultCommitOperation` — skipping both serialization and the temp-file write — when unchanged. This eliminates spurious `mtime` updates on index files during saves that did not touch them.
+**Dirty flags on indexes:** `VaultManifest`, `LinkGraph`, `RelationshipIndex`, `FolderCatalog`, and `PathIndex` each carry an `isDirty: Bool` flag (excluded from `Codable`). Mutating methods (`upsert` / `remove` on the manifest; `setOutgoing`, `replaceLinks`, `ensureRoot`, `upsert` on the others) set `isDirty = true` only when content actually changes. `ensureSchemaVersionIsCurrent()` marks the manifest dirty when the on-disk schema lags. Each `VaultCommitParticipant` checks the flag and produces no `VaultCommitOperation` — skipping both serialization and the temp-file write — when unchanged. This eliminates spurious `mtime` updates on index files during saves that did not touch them.
 
 **`NoteDocument` identity:** `NoteDocument.id` is a **computed** property delegating to `metadata.noteID`. There is no stored `id` field. `metadata.noteID` is the single source of truth for note identity across the entire codebase.
 
@@ -136,7 +136,7 @@ The app uses **document-level undo** via the window `UndoManager`: each user edi
 
 **Batch size guard:** `AppModel.apply(_:recordUndo:)` asserts at `assertionFailure` level and logs an error (category `EditEngine`) when a command batch exceeds `maxBatch` before truncation, making runaway batch growth visible during development.
 
-**Backlink refresh debounce:** `AppModel` debounces backlink refreshes by **1 500 ms** via a cancellable `Task`. An in-memory `cachedLinkGraph: LinkGraph?` is returned on cache-hit; it is invalidated on successful vault save or vault reload. This eliminates O(n) full-vault re-scans on every keystroke.
+**Backlink refresh debounce:** `AppModel` debounces backlink refreshes by **1 500 ms** via a cancellable `Task`. **`VaultIndexActor`** keeps in-memory caches for `LinkGraph` and the other `.miran/` indexes after load and refreshes them after successful commits; `NoteRepository.invalidateIndexCaches()` clears those caches (e.g. after startup recovery, manifest reconciliation that changed entries, or vault filesystem watch events). This avoids re-reading every index JSON on each autosave while keeping external edits coherent.
 
 ## Future model and sync hooks (Phase 6)
 
@@ -172,8 +172,8 @@ The fifteen additional gaps identified in the **Foundation Hardening** audit (se
 - `SingleSurfaceNoteEditor` enforces a 1 MB note size cap and emits user-visible notices on size or full-replace events.
 - Command interceptors carry `UUID` tokens and can be deregistered.
 - `VaultCommitCoordinator` uses vault-local staging, a persisted commit journal, and startup recovery so multi-file updates are resumable after a crash; single-file writes remain atomic per rename.
-- All four index types (`LinkGraph`, `RelationshipIndex`, `FolderCatalog`, `PathIndex`) carry `isDirty` flags; participants skip disk writes when content is unchanged.
-- Backlink refreshes are debounced with an in-memory cache, eliminating per-keystroke vault scans.
+- All five persisted vault indexes (`VaultManifest`, `LinkGraph`, `RelationshipIndex`, `FolderCatalog`, `PathIndex`) carry `isDirty` flags; participants skip disk writes when content is unchanged.
+- Backlink refreshes are debounced; link graph reads use `VaultIndexActor` caching instead of per-keystroke disk re-reads of `link-graph.json`.
 - `SlashCommandRegistry` is open for external registration; builtins are registered at startup via `registerBuiltins()`.
 - `EditorVisualStyle.apply` is guarded by a document-ID and text-hash cache so styling passes only re-run when content changes.
 - `TextKit2BlockEditor` and `BlockListView` (unused code paths) have been removed.

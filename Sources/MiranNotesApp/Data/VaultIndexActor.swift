@@ -4,10 +4,26 @@ import os.log
 
 /// Manifest + `.miran/` JSON indexes and atomic commits. Used by ``NoteRepository``.
 actor VaultIndexActor {
+    private static let commitParticipants: [VaultCommitParticipant] = [
+        NoteFilesCommitParticipant(),
+        ManifestCommitParticipant(),
+        LinkGraphCommitParticipant(),
+        RelationshipIndexCommitParticipant(),
+        FolderCatalogCommitParticipant(),
+        PathIndexCommitParticipant()
+    ]
+
     nonisolated let vaultURL: URL
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
     private let commitCoordinator: VaultCommitCoordinator
+
+    private var vaultEnsured = false
+    private var cachedManifest: VaultManifest?
+    private var cachedLinkGraph: LinkGraph?
+    private var cachedRelationshipIndex: RelationshipIndex?
+    private var cachedFolderCatalog: FolderCatalog?
+    private var cachedPathIndex: PathIndex?
 
     init(vaultURL: URL, commitCoordinator: VaultCommitCoordinator = VaultCommitCoordinator()) {
         self.vaultURL = vaultURL
@@ -18,8 +34,43 @@ actor VaultIndexActor {
     }
 
     private func ensureVault() throws {
+        guard !vaultEnsured else { return }
         try FileManager.default.createDirectory(at: vaultURL, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: VaultPaths.miranDirectory(vaultURL: vaultURL), withIntermediateDirectories: true)
+        vaultEnsured = true
+    }
+
+    /// Clears in-memory index caches (e.g. after external vault changes or manifest reconciliation).
+    func invalidateCaches() {
+        cachedManifest = nil
+        cachedLinkGraph = nil
+        cachedRelationshipIndex = nil
+        cachedFolderCatalog = nil
+        cachedPathIndex = nil
+    }
+
+    private func storeCommittedState(
+        manifest: VaultManifest,
+        linkGraph: LinkGraph,
+        relationshipIndex: RelationshipIndex,
+        folderCatalog: FolderCatalog,
+        pathIndex: PathIndex
+    ) {
+        var m = manifest
+        m.isDirty = false
+        cachedManifest = m
+        var lg = linkGraph
+        lg.isDirty = false
+        cachedLinkGraph = lg
+        var ri = relationshipIndex
+        ri.isDirty = false
+        cachedRelationshipIndex = ri
+        var fc = folderCatalog
+        fc.isDirty = false
+        cachedFolderCatalog = fc
+        var pi = pathIndex
+        pi.isDirty = false
+        cachedPathIndex = pi
     }
 
     private func manifestURL() -> URL {
@@ -27,11 +78,15 @@ actor VaultIndexActor {
     }
 
     func loadManifestFromDiskOnly() -> VaultManifest? {
+        if let cached = cachedManifest {
+            return cached
+        }
         let url = manifestURL()
         guard let data = try? Data(contentsOf: url),
               let decoded = try? decoder.decode(VaultManifest.self, from: data) else {
             return nil
         }
+        cachedManifest = decoded
         return decoded
     }
 
@@ -40,19 +95,39 @@ actor VaultIndexActor {
     }
 
     func loadLinkGraph() throws -> LinkGraph {
-        try VaultIndexSubsystem.loadLinkGraph(vaultURL: vaultURL, decoder: decoder)
+        if let cached = cachedLinkGraph {
+            return cached
+        }
+        let loaded = try VaultIndexSubsystem.loadLinkGraph(vaultURL: vaultURL, decoder: decoder)
+        cachedLinkGraph = loaded
+        return loaded
     }
 
     func loadRelationshipIndex() throws -> RelationshipIndex {
-        try VaultIndexSubsystem.loadRelationshipIndex(vaultURL: vaultURL, decoder: decoder)
+        if let cached = cachedRelationshipIndex {
+            return cached
+        }
+        let loaded = try VaultIndexSubsystem.loadRelationshipIndex(vaultURL: vaultURL, decoder: decoder)
+        cachedRelationshipIndex = loaded
+        return loaded
     }
 
     func loadFolderCatalog() throws -> FolderCatalog {
-        try VaultIndexSubsystem.loadFolderCatalog(vaultURL: vaultURL, decoder: decoder)
+        if let cached = cachedFolderCatalog {
+            return cached
+        }
+        let loaded = try VaultIndexSubsystem.loadFolderCatalog(vaultURL: vaultURL, decoder: decoder)
+        cachedFolderCatalog = loaded
+        return loaded
     }
 
     func loadPathIndex() throws -> PathIndex {
-        try VaultIndexSubsystem.loadPathIndex(vaultURL: vaultURL, decoder: decoder)
+        if let cached = cachedPathIndex {
+            return cached
+        }
+        let loaded = try VaultIndexSubsystem.loadPathIndex(vaultURL: vaultURL, decoder: decoder)
+        cachedPathIndex = loaded
+        return loaded
     }
 
     func logIfIntegrityIssues(_ result: VaultIntegrityResult) {
@@ -98,7 +173,7 @@ actor VaultIndexActor {
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: commitTempDir, withIntermediateDirectories: true)
         var m = manifest
-        m.schemaVersion = VaultManifest.currentSchemaVersion
+        m.ensureSchemaVersionIsCurrent()
         let context = VaultCommitContext(
             relativePath: relativePath,
             includeNoteFiles: true,
@@ -119,16 +194,8 @@ actor VaultIndexActor {
             tempDirectory: commitTempDir
         )
 
-        let participants: [VaultCommitParticipant] = [
-            NoteFilesCommitParticipant(),
-            ManifestCommitParticipant(),
-            LinkGraphCommitParticipant(),
-            RelationshipIndexCommitParticipant(),
-            FolderCatalogCommitParticipant(),
-            PathIndexCommitParticipant()
-        ]
         var operations: [VaultCommitOperation] = []
-        for participant in participants {
+        for participant in Self.commitParticipants {
             operations.append(contentsOf: try participant.operations(for: context))
         }
         try commitCoordinator.execute(
@@ -139,6 +206,13 @@ actor VaultIndexActor {
             ),
             vaultRoot: vaultURL,
             stagingDirectory: commitTempDir
+        )
+        storeCommittedState(
+            manifest: m,
+            linkGraph: linkGraph,
+            relationshipIndex: relationshipIndex,
+            folderCatalog: folderCatalog,
+            pathIndex: pathIndex
         )
         return runIntegrityAfterCommit(
             relativePath: relativePath,
@@ -162,17 +236,14 @@ actor VaultIndexActor {
         let commitTempDir = VaultPaths.pendingCommitsDirectory(vaultURL: vaultURL)
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: commitTempDir, withIntermediateDirectories: true)
-        let emptyDoc = NoteDocument(text: "", metadata: NoteMetadata.empty)
         var m = manifest
-        m.schemaVersion = VaultManifest.currentSchemaVersion
-        let dummyText = vaultURL.appendingPathComponent(".miran/.dummy.txt")
-        let dummyMeta = vaultURL.appendingPathComponent(".miran/.dummy.meta.json")
+        m.ensureSchemaVersionIsCurrent()
         let context = VaultCommitContext(
             relativePath: "indexes",
             includeNoteFiles: false,
-            document: emptyDoc,
-            textURL: dummyText,
-            metaURL: dummyMeta,
+            document: nil,
+            textURL: nil,
+            metaURL: nil,
             manifestURL: manifestURL(),
             linkGraphURL: VaultPaths.linkGraphURL(vaultURL: vaultURL),
             relationshipIndexURL: VaultPaths.relationshipIndexURL(vaultURL: vaultURL),
@@ -186,22 +257,21 @@ actor VaultIndexActor {
             pathIndex: pathIndex,
             tempDirectory: commitTempDir
         )
-        let participants: [VaultCommitParticipant] = [
-            NoteFilesCommitParticipant(),
-            ManifestCommitParticipant(),
-            LinkGraphCommitParticipant(),
-            RelationshipIndexCommitParticipant(),
-            FolderCatalogCommitParticipant(),
-            PathIndexCommitParticipant()
-        ]
         var operations: [VaultCommitOperation] = []
-        for participant in participants {
+        for participant in Self.commitParticipants {
             operations.append(contentsOf: try participant.operations(for: context))
         }
         try commitCoordinator.execute(
             VaultCommitPlan(label: "indexes", operations: operations, deletePathsAfterCommit: deletePathsAfterCommit),
             vaultRoot: vaultURL,
             stagingDirectory: commitTempDir
+        )
+        storeCommittedState(
+            manifest: m,
+            linkGraph: linkGraph,
+            relationshipIndex: relationshipIndex,
+            folderCatalog: folderCatalog,
+            pathIndex: pathIndex
         )
         return runIntegrityAfterCommit(
             relativePath: nil,
@@ -219,19 +289,23 @@ private struct NoteFilesCommitParticipant: VaultCommitParticipant {
     let participantID = "noteFiles"
 
     func operations(for context: VaultCommitContext) throws -> [VaultCommitOperation] {
-        guard context.includeNoteFiles else { return [] }
-        let metadataData = try context.encoder.encode(context.document.metadata)
-        let textData = context.document.text.data(using: .utf8) ?? Data()
+        guard context.includeNoteFiles,
+              let document = context.document,
+              let textURL = context.textURL,
+              let metaURL = context.metaURL
+        else { return [] }
+        let metadataData = try context.encoder.encode(document.metadata)
+        let textData = document.text.data(using: .utf8) ?? Data()
         let tempText = context.tempDirectory.appendingPathComponent("note.txt")
         let tempMeta = context.tempDirectory.appendingPathComponent("note.meta.json")
         return [
             VaultCommitOperation(participantID: participantID, operationID: "text") {
                 try textData.write(to: tempText, options: .atomic)
-                return (tempText, context.textURL)
+                return (tempText, textURL)
             },
             VaultCommitOperation(participantID: participantID, operationID: "metadata") {
                 try metadataData.write(to: tempMeta, options: .atomic)
-                return (tempMeta, context.metaURL)
+                return (tempMeta, metaURL)
             }
         ]
     }
@@ -241,6 +315,7 @@ private struct ManifestCommitParticipant: VaultCommitParticipant {
     let participantID = "manifest"
 
     func operations(for context: VaultCommitContext) throws -> [VaultCommitOperation] {
+        guard context.manifest.isDirty else { return [] }
         let data = try context.encoder.encode(context.manifest)
         let tempURL = context.tempDirectory.appendingPathComponent("manifest.json")
         return [

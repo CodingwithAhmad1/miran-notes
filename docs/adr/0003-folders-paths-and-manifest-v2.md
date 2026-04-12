@@ -53,7 +53,7 @@ The product requires **arbitrary-depth folders**, **stable `noteID`-based links*
 
 ## Consequences
 
-- External tools may place `.txt` files in subfolders; `reconcileManifestWithDisk` recursively discovers notes.
+- External tools may place `.txt` files in subfolders; reconciliation (`loadOrRebuildManifest` / `reconcileManifestWithDisk`) discovers them; the app persists updates via `NoteRepository.reconcileManifest()` (not during `listNotes()`).
 - Vault filesystem watching should cover the **entire subtree** (FSEventStream).
 - Rename/move operations should prefer **one commit plan** plus **post-commit deletion** of replaced paths to avoid duplicate note files during migration.
 

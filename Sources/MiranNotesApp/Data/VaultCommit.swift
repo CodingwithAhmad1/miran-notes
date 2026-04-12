@@ -36,9 +36,10 @@ struct VaultCommitContext {
     let relativePath: String
     /// When false, note `.txt` / `.meta.json` operations are skipped (index-only commit).
     let includeNoteFiles: Bool
-    let document: NoteDocument
-    let textURL: URL
-    let metaURL: URL
+    /// Present only when ``includeNoteFiles`` is true.
+    let document: NoteDocument?
+    let textURL: URL?
+    let metaURL: URL?
     let manifestURL: URL
     let linkGraphURL: URL
     let relationshipIndexURL: URL

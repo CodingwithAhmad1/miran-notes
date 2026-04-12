@@ -127,8 +127,6 @@ final class AppModel: ObservableObject {
     private var localCommandInterceptorOrder: [UUID] = []
 
     private let autosaveDebounceMilliseconds: UInt64
-    /// In-memory cache to avoid repeated disk reads during rapid edits. Invalidated after successful save and vault rebuild.
-    private var cachedLinkGraph: LinkGraph?
     private var backlinkRefreshTask: Task<Void, Never>?
     private var bodySearchIndexTask: Task<Void, Never>?
     private var bodySearchIndexGeneration = 0
@@ -158,11 +156,15 @@ final class AppModel: ObservableObject {
             } catch {
                 lastError = "Vault recovery failed: \(error.localizedDescription)"
             }
+            do {
+                try await repository.reconcileManifest()
+            } catch {
+                lastError = "Manifest reconciliation failed: \(error.localizedDescription)"
+            }
             await refreshNotes()
             do {
                 let integrity = try await repository.rebuildLinkGraphFull()
                 applyVaultIntegrityAfterLoadIfNeeded(integrity)
-                cachedLinkGraph = nil
             } catch {
                 lastError = "Link index rebuild failed: \(error.localizedDescription)"
             }
@@ -342,14 +344,7 @@ final class AppModel: ObservableObject {
         }
         let targetNoteID = doc.metadata.noteID
         do {
-            let graph: LinkGraph
-            if let cached = cachedLinkGraph {
-                graph = cached
-            } else {
-                let loaded = try await repository.loadLinkGraph()
-                cachedLinkGraph = loaded
-                graph = loaded
-            }
+            let graph = try await repository.loadLinkGraph()
             let resolver = try await repository.linkResolver()
             let sourceIDs = graph.backlinks(to: targetNoteID)
             var result: [BacklinkItem] = []
@@ -861,7 +856,6 @@ final class AppModel: ObservableObject {
             applyVaultIntegrityAfterSave(integrity)
             await refreshOnDiskFingerprints(for: path)
             lastPersistedDocument = doc
-            cachedLinkGraph = nil
             await refreshBacklinks()
         } catch {
             lastError = "Autosave failed: \(error.localizedDescription)"
@@ -891,7 +885,6 @@ final class AppModel: ObservableObject {
                 applyVaultIntegrityAfterSave(integrity)
                 await refreshOnDiskFingerprints(for: expectedPath)
                 lastPersistedDocument = latest
-                cachedLinkGraph = nil
                 let latencyMs = Int(Date().timeIntervalSince(startedAt) * 1000)
                 VaultTelemetry.logAutosave(latencyMs: max(0, latencyMs))
                 await self.refreshBacklinks()
@@ -943,8 +936,15 @@ final class AppModel: ObservableObject {
             onEvent: { [weak self] in
                 guard let self else { return }
                 Task { @MainActor [weak self] in
-                    self?.pendingExternalDiskCheck = true
-                    await self?.runPendingExternalDiskReconciliationIfNeeded()
+                    guard let self else { return }
+                    await self.repository.invalidateIndexCaches()
+                    do {
+                        try await self.repository.reconcileManifest()
+                    } catch {
+                        self.lastError = "Manifest reconciliation failed: \(error.localizedDescription)"
+                    }
+                    self.pendingExternalDiskCheck = true
+                    await self.runPendingExternalDiskReconciliationIfNeeded()
                 }
             }
         )

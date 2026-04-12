@@ -4,6 +4,12 @@ import Foundation
 enum VaultPath {
     static let reservedTopLevel = Set([".miran", "_aux", ".git", ".DS_Store"])
 
+    /// Human-readable title from a note relative path (last segment, dashes to spaces, capitalized).
+    static func displayTitle(forRelativePath relativePath: String) -> String {
+        let last = relativePath.split(separator: "/").last.map(String.init) ?? relativePath
+        return last.replacingOccurrences(of: "-", with: " ").capitalized
+    }
+
     /// Slug for a single path segment (folder display name or note title stem).
     static func slugifySegment(_ value: String) -> String {
         let slug = value

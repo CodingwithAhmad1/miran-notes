@@ -7,6 +7,7 @@ import os.log
 actor NoteFileActor {
     nonisolated let vaultURL: URL
     private let decoder: JSONDecoder
+    private var vaultEnsured = false
 
     init(vaultURL: URL) {
         self.vaultURL = vaultURL
@@ -14,8 +15,10 @@ actor NoteFileActor {
     }
 
     func ensureVault() throws {
+        guard !vaultEnsured else { return }
         try FileManager.default.createDirectory(at: vaultURL, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: VaultPaths.miranDirectory(vaultURL: vaultURL), withIntermediateDirectories: true)
+        vaultEnsured = true
     }
 
     func loadNote(relativePath: String) throws -> NoteLoadResult {

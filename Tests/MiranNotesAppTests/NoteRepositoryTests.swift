@@ -147,12 +147,41 @@ final class NoteRepositoryTests: XCTestCase {
         try "orphan".write(to: textURL, atomically: true, encoding: .utf8)
 
         let repo = NoteRepository(vaultURL: vault)
+        try await repo.reconcileManifest()
         let notes = try await repo.listNotes()
         XCTAssertEqual(notes.count, 1)
         XCTAssertEqual(notes.first?.relativePath, "orphan")
 
         let metaURL = vault.appendingPathComponent("orphan.meta.json")
         XCTAssertTrue(FileManager.default.fileExists(atPath: metaURL.path))
+    }
+
+    func testListNotesWithoutReconcileDoesNotPickUpLooseTextFiles() async throws {
+        let vault = try tempVaultURL()
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        try "solo".write(to: vault.appendingPathComponent("solo.txt"), atomically: true, encoding: .utf8)
+        let repo = NoteRepository(vaultURL: vault)
+        let notes = try await repo.listNotes()
+        XCTAssertEqual(notes.count, 0)
+        try await repo.reconcileManifest()
+        let after = try await repo.listNotes()
+        XCTAssertEqual(after.count, 1)
+        XCTAssertEqual(after.first?.relativePath, "solo")
+    }
+
+    func testSaveLinkGraphDoesNotRewriteManifestWhenOnlyGraphChanges() async throws {
+        let vault = try tempVaultURL()
+        let repo = NoteRepository(vaultURL: vault)
+        try await repo.ensureVault()
+        _ = try await repo.createNote(named: "manifest-stable")
+        let manifestURL = VaultPaths.manifestURL(vaultURL: vault)
+        let before = try Data(contentsOf: manifestURL)
+        try await Task.sleep(for: .milliseconds(50))
+        var graph = try await repo.loadLinkGraph()
+        graph.setOutgoing(from: UUID(), to: [UUID()])
+        try await repo.saveLinkGraph(graph)
+        let after = try Data(contentsOf: manifestURL)
+        XCTAssertEqual(before, after, "manifest.json must not be rewritten when VaultManifest has no changes")
     }
 
     func testSaveUpdatesRelationshipAndPathIndexes() async throws {

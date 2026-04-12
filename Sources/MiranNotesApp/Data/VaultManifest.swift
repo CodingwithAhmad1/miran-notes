@@ -7,10 +7,20 @@ struct VaultManifest: Codable, Equatable {
 
     var schemaVersion: Int
     var entries: [ManifestEntry]
+    /// True when in-memory state has been modified since the last disk write. Not persisted.
+    var isDirty: Bool = false
+
+    enum CodingKeys: String, CodingKey {
+        case schemaVersion, entries
+    }
 
     init(schemaVersion: Int = currentSchemaVersion, entries: [ManifestEntry] = []) {
         self.schemaVersion = schemaVersion
         self.entries = entries
+    }
+
+    static func == (lhs: VaultManifest, rhs: VaultManifest) -> Bool {
+        lhs.schemaVersion == rhs.schemaVersion && lhs.entries == rhs.entries
     }
 
     func entry(noteID: UUID) -> ManifestEntry? {
@@ -28,15 +38,32 @@ struct VaultManifest: Codable, Equatable {
 
     mutating func upsert(noteID: UUID, relativePath: String, title: String?) {
         if let i = entries.firstIndex(where: { $0.noteID == noteID }) {
-            entries[i].relativePath = relativePath
-            entries[i].title = title
+            let old = entries[i]
+            if old.relativePath != relativePath || old.title != title {
+                entries[i].relativePath = relativePath
+                entries[i].title = title
+                isDirty = true
+            }
         } else {
             entries.append(ManifestEntry(noteID: noteID, relativePath: relativePath, title: title))
+            isDirty = true
         }
     }
 
     mutating func remove(noteID: UUID) {
+        let before = entries.count
         entries.removeAll { $0.noteID == noteID }
+        if entries.count != before {
+            isDirty = true
+        }
+    }
+
+    /// Bumps `schemaVersion` to ``currentSchemaVersion`` when lower, marking the manifest dirty if changed.
+    mutating func ensureSchemaVersionIsCurrent() {
+        if schemaVersion != VaultManifest.currentSchemaVersion {
+            schemaVersion = VaultManifest.currentSchemaVersion
+            isDirty = true
+        }
     }
 }
 
