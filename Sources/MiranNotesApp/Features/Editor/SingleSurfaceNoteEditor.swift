@@ -15,6 +15,8 @@ private final class WikiLinkTextView: NSTextView {
     var linkHitHandler: ((UUID) -> Void)?
     var formattingCommandHandler: ((SpanStyle) -> Void)?
     var slashMenuCommandHandler: ((SlashMenuCommand) -> Bool)?
+    /// When non-nil, invoked on right-click; return `true` if the event was handled (default menu suppressed).
+    var blockContextMenuHandler: ((NSEvent) -> Bool)?
 
     override func mouseDown(with event: NSEvent) {
         NSApp.activate(ignoringOtherApps: true)
@@ -71,6 +73,23 @@ private final class WikiLinkTextView: NSTextView {
             return true
         }
         return super.performKeyEquivalent(with: event)
+    }
+
+    override func rightMouseDown(with event: NSEvent) {
+        if blockContextMenuHandler?(event) == true { return }
+        super.rightMouseDown(with: event)
+    }
+}
+
+private final class BlockTypeMenuRep: NSObject {
+    let blockID: String
+    let type: BlockType
+    let headingLevel: Int?
+
+    init(blockID: String, type: BlockType, headingLevel: Int?) {
+        self.blockID = blockID
+        self.type = type
+        self.headingLevel = headingLevel
     }
 }
 
@@ -167,8 +186,16 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
         textView.slashMenuCommandHandler = { [weak coordinator] command in
             coordinator?.handleSlashMenuCommand(command) ?? false
         }
+        textView.blockContextMenuHandler = { [weak coordinator] event in
+            coordinator?.handleBlockContextMenu(event) ?? false
+        }
+        coordinator.setupChrome(scrollView: scrollView, textView: textView)
         coordinator.applyDocumentText()
         return scrollView
+    }
+
+    static func dismantleNSView(_ nsView: NSScrollView, coordinator: Coordinator) {
+        coordinator.teardownChrome()
     }
 
     func updateNSView(_ nsView: NSScrollView, context: Context) {
@@ -183,6 +210,9 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
             }
             tv.slashMenuCommandHandler = { [weak coordinator] command in
                 coordinator?.handleSlashMenuCommand(command) ?? false
+            }
+            tv.blockContextMenuHandler = { [weak coordinator] event in
+                coordinator?.handleBlockContextMenu(event) ?? false
             }
         }
         context.coordinator.applyDocumentText()
@@ -201,8 +231,167 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
         /// Last document snapshot for which `EditorVisualStyle.apply` ran (full equality skips redraw when text and metadata match).
         private var lastStyledDocument: NoteDocument?
 
+        private weak var chromeOverlay: BlockChromeOverlayView?
+        private var hoveredBlockID: String?
+        private var mouseMonitor: Any?
+        private var textViewFrameObserver: NSObjectProtocol?
+        private var clipBoundsObserver: NSObjectProtocol?
+
         init(_ parent: SingleSurfaceNoteEditor) {
             self.parent = parent
+        }
+
+        func setupChrome(scrollView: NSScrollView, textView: NSTextView) {
+            guard let clipView = scrollView.contentView as? NSClipView else { return }
+            clipView.postsBoundsChangedNotifications = true
+
+            let chrome = BlockChromeOverlayView()
+            chrome.textView = textView
+            chrome.autoresizingMask = [.width, .height]
+            clipView.addSubview(chrome, positioned: .above, relativeTo: textView)
+            chrome.frame = textView.frame
+            chromeOverlay = chrome
+
+            textViewFrameObserver = NotificationCenter.default.addObserver(
+                forName: NSView.frameDidChangeNotification,
+                object: textView,
+                queue: .main
+            ) { [weak self] _ in
+                self?.syncChromeFrame()
+                self?.refreshBlockChrome()
+            }
+
+            clipBoundsObserver = NotificationCenter.default.addObserver(
+                forName: NSView.boundsDidChangeNotification,
+                object: clipView,
+                queue: .main
+            ) { [weak self] _ in
+                self?.syncChromeFrame()
+                self?.refreshBlockChrome()
+            }
+
+            mouseMonitor = NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved, .scrollWheel]) { [weak self] event in
+                self?.handleMouseMovedForChrome(event)
+                return event
+            }
+        }
+
+        func teardownChrome() {
+            if let monitor = mouseMonitor {
+                NSEvent.removeMonitor(monitor)
+                mouseMonitor = nil
+            }
+            if let o = textViewFrameObserver {
+                NotificationCenter.default.removeObserver(o)
+                textViewFrameObserver = nil
+            }
+            if let o = clipBoundsObserver {
+                NotificationCenter.default.removeObserver(o)
+                clipBoundsObserver = nil
+            }
+            hoveredBlockID = nil
+            chromeOverlay?.removeFromSuperview()
+            chromeOverlay = nil
+        }
+
+        private func syncChromeFrame() {
+            guard let textView, let chrome = chromeOverlay else { return }
+            chrome.frame = textView.frame
+        }
+
+        private func handleMouseMovedForChrome(_ event: NSEvent) {
+            guard let textView, let window = textView.window, window == event.window else { return }
+            let local = textView.convert(event.locationInWindow, from: nil)
+            guard textView.bounds.contains(local) else {
+                if hoveredBlockID != nil {
+                    hoveredBlockID = nil
+                    refreshBlockChrome()
+                }
+                return
+            }
+            let idx = textView.characterIndex(for: local)
+            guard idx != NSNotFound else { return }
+            let blocks = parent.document.metadata.blocks
+            let newHover = DocumentLayoutController.blockIndex(at: idx, blocks: blocks).map { blocks[$0].id }
+            if newHover != hoveredBlockID {
+                hoveredBlockID = newHover
+                refreshBlockChrome()
+            }
+        }
+
+        private func refreshBlockChrome() {
+            guard let textView, let overlay = chromeOverlay else { return }
+            let blocks = parent.document.metadata.blocks
+            let loc = textView.selectedRange().location
+            let focused = DocumentLayoutController.blockIndex(at: loc, blocks: blocks).map { blocks[$0].id }
+            overlay.blocks = blocks
+            overlay.focusedBlockID = focused
+            overlay.hoveredBlockID = hoveredBlockID
+            overlay.invalidateGeometry()
+        }
+
+        @objc private func blockTypeMenuClicked(_ sender: NSMenuItem) {
+            guard let rep = sender.representedObject as? BlockTypeMenuRep, let textView else { return }
+            _ = runCommandSession(
+                textView: textView,
+                commands: [.changeBlockType(blockID: rep.blockID, type: rep.type, headingLevel: rep.headingLevel)]
+            )
+        }
+
+        @objc private func blockMenuDuplicate(_ sender: NSMenuItem) {
+            guard let id = sender.representedObject as? String, let textView else { return }
+            _ = runCommandSession(textView: textView, commands: [.duplicateBlock(blockID: id)])
+        }
+
+        @objc private func blockMenuDelete(_ sender: NSMenuItem) {
+            guard let id = sender.representedObject as? String, let textView else { return }
+            _ = runCommandSession(textView: textView, commands: [.deleteBlock(blockID: id)])
+        }
+
+        fileprivate func handleBlockContextMenu(_ event: NSEvent) -> Bool {
+            guard let textView else { return false }
+            let local = textView.convert(event.locationInWindow, from: nil)
+            let idx = textView.characterIndex(for: local)
+            guard idx != NSNotFound else { return false }
+            let blocks = parent.document.metadata.blocks
+            guard let bIndex = DocumentLayoutController.blockIndex(at: idx, blocks: blocks) else { return false }
+            let block = blocks[bIndex]
+
+            let menu = NSMenu(title: "Block")
+            let typeMenu = NSMenu(title: "Change Block Type")
+            func addTypeItem(_ title: String, type: BlockType, headingLevel: Int?) {
+                let item = NSMenuItem(title: title, action: #selector(blockTypeMenuClicked(_:)), keyEquivalent: "")
+                item.target = self
+                item.representedObject = BlockTypeMenuRep(blockID: block.id, type: type, headingLevel: headingLevel)
+                typeMenu.addItem(item)
+            }
+            addTypeItem("Paragraph", type: .paragraph, headingLevel: nil)
+            addTypeItem("Heading 1", type: .heading, headingLevel: 1)
+            addTypeItem("Heading 2", type: .heading, headingLevel: 2)
+            addTypeItem("Heading 3", type: .heading, headingLevel: 3)
+            addTypeItem("List Item", type: .listItem, headingLevel: nil)
+            addTypeItem("Callout", type: .callout, headingLevel: nil)
+            addTypeItem("Code", type: .code, headingLevel: nil)
+            addTypeItem("Divider", type: .divider, headingLevel: nil)
+
+            let typeItem = NSMenuItem(title: "Change Block Type", action: nil, keyEquivalent: "")
+            typeItem.submenu = typeMenu
+
+            let dup = NSMenuItem(title: "Duplicate Block", action: #selector(blockMenuDuplicate(_:)), keyEquivalent: "")
+            dup.target = self
+            dup.representedObject = block.id
+
+            let del = NSMenuItem(title: "Delete Block", action: #selector(blockMenuDelete(_:)), keyEquivalent: "")
+            del.target = self
+            del.representedObject = block.id
+
+            menu.addItem(typeItem)
+            menu.addItem(.separator())
+            menu.addItem(dup)
+            menu.addItem(del)
+
+            NSMenu.popUpContextMenu(menu, with: event, for: textView)
+            return true
         }
 
         func toggleSpanStyle(_ style: SpanStyle) {
@@ -454,6 +643,7 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
         }
 
         func applyDocumentText() {
+            defer { refreshBlockChrome() }
             guard let textView else { return }
             // Avoid clobbering an in-flight IME composition when the model updates (e.g. external reload).
             if textView.hasMarkedText() { return }
@@ -580,6 +770,7 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
                 parent.cursorOffset = loc
             }
             refreshSlashMenuState(for: tv)
+            refreshBlockChrome()
         }
 
         @discardableResult
@@ -588,6 +779,7 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
             commands: [EditCommand],
             pendingSelection: NSRange? = nil
         ) -> NoteDocument {
+            defer { refreshBlockChrome() }
             if let pendingSelection {
                 self.pendingSelection = pendingSelection
             }

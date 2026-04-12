@@ -29,6 +29,18 @@ Plain `note.txt` cannot losslessly encode every conceivable future feature in is
 
 Aligning visual block affordances (callouts, gutters, handles) with TextKit layout is **ongoing work**: resize, fonts, RTL, and layout invalidation all require disciplined invalidation. Cost can be **managed** (e.g. a single chrome controller), not reduced to zero.
 
+### TextKit 1 layout APIs vs TextKit 2 (typing migration stance)
+
+Apple ships two related layout stacks. **Classic TextKit** centers on **`NSLayoutManager`**, **`NSTextContainer`**, and **`NSTextStorage`**; **`NSTextView`** exposes this path (for example `layoutManager`, `boundingRect(forGlyphRange:in:)`), and Miran Notes uses it today for **gutter geometry**, **slash menu anchoring**, and similar “where is this UTF-16 range on screen?” questions.
+
+**TextKit 2** centers on **`NSTextLayoutManager`**, **`NSTextContentStorage`**, and layout expressed in terms of **text layout fragments**. It is better suited to some advanced scenarios (for example non-contiguous layout and very large buffers), but adopting it **for typing** means re-validating **IME**, **selection**, **undo interaction with the buffer**, and all custom editor behavior — a **large regression surface** for a notes app whose canonical model is already **`EditCommandEngine` + plain text**.
+
+**Constraint / engineering stance:**
+
+- **Do not** treat “migrate the entire `NSTextView` typing pipeline to TextKit 2” as a default or prerequisite for product work. It is a **major project** justified only by a **concrete** need (a TextKit 2–only API, measured performance/layout requirements beyond the **1 MB UTF-16** note cap, or future platform direction for supported OS versions).
+- **Do** keep a **small boundary** for layout measurement (UTF-16 range → CGRect in view coordinates) so chrome and anchors can move to **`NSTextLayoutManager`**-based measurement **later** without rewriting domain editing.
+- **Chrome and overlays** may continue to use **`NSLayoutManager`** until that boundary is implemented and tested; misalignment under resize/theme is managed by **disciplined invalidation**, not by assuming a single layout stack will eliminate all cost.
+
 ## Editor representation
 
 The canonical note model and `NSTextView` are two representations of text. Engineering discipline and tests keep them aligned; **formal proof** of impossible desync is not assumed.
@@ -106,8 +118,12 @@ The app uses **document-level undo** via the window `UndoManager`: each user edi
 
 `VaultCommitCoordinator` executes commits in a **two-phase** protocol:
 
-1. **Prepare phase** — every `VaultCommitParticipant` writes its payload to a temporary file inside a per-commit temp directory and returns `(tempURL, finalURL)`. If any participant throws during preparation, **all** created temp files are cleaned up and no vault file is touched.
-2. **Commit phase** — each `(tempURL, finalURL)` pair is atomically renamed using `FileManager.replaceItemAt` (or `moveItem` where the destination does not yet exist). If a rename fails mid-phase, already-renamed files remain at their final paths; outstanding temp files are cleaned up. The result is bounded inconsistency (never a partial write to a single file) rather than the old sequential-overwrite risk.
+1. **Prepare phase** — every `VaultCommitParticipant` writes its payload to a temporary file inside a **per-commit directory under `vault/.miran/pending-commits/`** (same volume as the vault) and returns `(tempURL, finalURL)`. If any participant throws during preparation, the **entire** staging directory is removed and no vault file is touched.
+2. **Commit phase** — a `vault-commit.json` journal lists ordered rename operations and is updated after each successful rename. Each `(tempURL, finalURL)` pair is atomically applied using `FileManager.replaceItemAt` (or `moveItem` where the destination does not yet exist). **Single-file atomicity** is preserved: each file is either fully replaced or unchanged. If a rename fails **after** the journal exists, the staging directory is **left in place** on disk so the next launch can run `recoverPendingCommits` and finish or discard incomplete work. On success, post-commit deletes run and the staging directory is removed.
+
+**Startup recovery:** `NoteRepository.performStartupRecovery()` (invoked early from `AppModel.loadVault`) scans `pending-commits`, resumes any remaining renames from the journal, applies deferred deletes, and removes finished staging. Corrupt or incomplete prepare staging (missing or invalid journal / temps) is **discarded** so last-known-good finals remain. A non-technical **repair banner** may be shown when recovery runs.
+
+**Post-commit integrity:** After coordinated saves, a lightweight check (`VaultIntegrityChecker`) validates manifest paths, index referential consistency, and on-disk note shape when applicable; mismatches surface a dismissible advisory rather than silent repair of ambiguous semantics (see **Semantic reconciliation**).
 
 **Dirty flags on indexes:** `LinkGraph`, `RelationshipIndex`, `FolderCatalog`, and `PathIndex` each carry an `isDirty: Bool` flag (excluded from `Codable`). Their mutating methods (`setOutgoing`, `replaceLinks`, `ensureRoot`, `upsert`) set `isDirty = true` only when content actually changes. Each `VaultCommitParticipant` checks the flag and produces no `VaultCommitOperation` — skipping both serialization and the temp-file write — when unchanged. This eliminates spurious `mtime` updates on index files during saves that did not touch them.
 
@@ -154,7 +170,7 @@ The fifteen additional gaps identified in the **Foundation Hardening** audit (se
 - Undo stack is count-bounded (200 steps) with graceful pruning that preserves recent history.
 - `SingleSurfaceNoteEditor` enforces a 1 MB note size cap and emits user-visible notices on size or full-replace events.
 - Command interceptors carry `UUID` tokens and can be deregistered.
-- `VaultCommitCoordinator` uses a two-phase prepare/commit protocol eliminating partial-write risk.
+- `VaultCommitCoordinator` uses vault-local staging, a persisted commit journal, and startup recovery so multi-file updates are resumable after a crash; single-file writes remain atomic per rename.
 - All four index types (`LinkGraph`, `RelationshipIndex`, `FolderCatalog`, `PathIndex`) carry `isDirty` flags; participants skip disk writes when content is unchanged.
 - Backlink refreshes are debounced with an in-memory cache, eliminating per-keystroke vault scans.
 - `SlashCommandRegistry` is open for external registration; builtins are registered at startup via `registerBuiltins()`.

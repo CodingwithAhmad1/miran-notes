@@ -15,6 +15,10 @@ public enum EditCommand {
     case repairMetadata
     /// Replaces `metadata.blocks` after a full-buffer text sync, reconstraining spans and links. Text must already match `document.text`.
     case replaceMetadataBlocks(blocks: [Block])
+    /// Inserts a copy of the block’s UTF-16 text immediately after the block, then splits so the duplicate becomes its own block (same type/level).
+    case duplicateBlock(blockID: String)
+    /// Removes the block’s text range via `replaceText`; metadata follows `adjustBlocks` (merge/split) rules.
+    case deleteBlock(blockID: String)
 }
 
 public struct EditCommandEngine {
@@ -40,6 +44,10 @@ public struct EditCommandEngine {
             next = repair(document: next)
         case let .replaceMetadataBlocks(blocks):
             next = replaceMetadataBlocks(document: next, blocks: blocks)
+        case let .duplicateBlock(blockID):
+            next = duplicateBlock(document: next, blockID: blockID)
+        case let .deleteBlock(blockID):
+            next = deleteBlock(document: next, blockID: blockID)
         }
 
         return next
@@ -227,6 +235,37 @@ public struct EditCommandEngine {
         let normalized = RangeNormalizer.normalize(metadata: next.metadata, for: next.text)
         next.metadata = normalized.normalizedMetadata
         return next
+    }
+
+    private static func duplicateBlock(document: NoteDocument, blockID: String) -> NoteDocument {
+        guard let block = document.metadata.blocks.first(where: { $0.id == blockID }) else {
+            return document
+        }
+        let r = block.range
+        let slice = utf16Slice(text: document.text, range: r)
+        guard !slice.isEmpty else { return document }
+
+        let afterInsert = applyTextReplacement(
+            document: document,
+            range: TextRange(start: r.end, length: 0),
+            replacement: slice
+        )
+        return splitBlock(document: afterInsert, blockID: blockID, atOffset: r.end)
+    }
+
+    private static func deleteBlock(document: NoteDocument, blockID: String) -> NoteDocument {
+        guard let block = document.metadata.blocks.first(where: { $0.id == blockID }) else {
+            return document
+        }
+        return applyTextReplacement(document: document, range: block.range, replacement: "")
+    }
+
+    private static func utf16Slice(text: String, range: TextRange) -> String {
+        let ns = text as NSString
+        let len = ns.length
+        let safe = range.clamped(to: len)
+        guard safe.length > 0 else { return "" }
+        return ns.substring(with: NSRange(location: safe.start, length: safe.length))
     }
 
     /// Best-effort recovery after a full-buffer replacement. Walks the new text and attempts to re-assign

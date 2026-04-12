@@ -37,6 +37,46 @@ final class EditorInteractionEngineTests: XCTestCase {
         XCTAssertEqual(doc.text, "a\nb")
     }
 
+    func testDuplicateBlockInsertsCopyAndKeepsIntegrity() {
+        let noteID = UUID()
+        var doc = NoteDocument(
+            text: "a\nb",
+            metadata: NoteMetadata(
+                schemaVersion: NoteMetadata.currentSchemaVersion,
+                noteID: noteID,
+                blocks: [
+                    Block(id: "b0", type: .paragraph, range: TextRange(start: 0, length: 2), level: nil, icon: nil),
+                    Block(id: "b1", type: .paragraph, range: TextRange(start: 2, length: 1), level: nil, icon: nil)
+                ],
+                spans: []
+            )
+        )
+        doc = EditCommandEngine.apply(.duplicateBlock(blockID: "b0"), to: doc)
+        XCTAssertEqual(doc.text, "a\na\nb")
+        XCTAssertEqual(doc.metadata.blocks.count, 3)
+        XCTAssertTrue(NoteIntegrity.check(document: doc).isValid)
+    }
+
+    func testDeleteBlockRemovesRangeAndMergesMetadata() {
+        let noteID = UUID()
+        var doc = NoteDocument(
+            text: "a\nb",
+            metadata: NoteMetadata(
+                schemaVersion: NoteMetadata.currentSchemaVersion,
+                noteID: noteID,
+                blocks: [
+                    Block(id: "b0", type: .paragraph, range: TextRange(start: 0, length: 2), level: nil, icon: nil),
+                    Block(id: "b1", type: .paragraph, range: TextRange(start: 2, length: 1), level: nil, icon: nil)
+                ],
+                spans: []
+            )
+        )
+        doc = EditCommandEngine.apply(.deleteBlock(blockID: "b0"), to: doc)
+        XCTAssertEqual(doc.text, "b")
+        XCTAssertEqual(doc.metadata.blocks.count, 1)
+        XCTAssertTrue(NoteIntegrity.check(document: doc).isValid)
+    }
+
     func testMergeAtBlockStartDeletesNewlineAndMergesBlocks() {
         let noteID = UUID()
         var doc = NoteDocument(

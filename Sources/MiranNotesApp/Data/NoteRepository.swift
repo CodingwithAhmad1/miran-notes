@@ -74,13 +74,20 @@ actor NoteRepository {
     nonisolated let vaultURL: URL
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
-    private let commitCoordinator = VaultCommitCoordinator()
+    private let commitCoordinator: VaultCommitCoordinator
 
-    init(vaultURL: URL) {
+    init(vaultURL: URL, commitCoordinator: VaultCommitCoordinator = VaultCommitCoordinator()) {
         self.vaultURL = vaultURL
+        self.commitCoordinator = commitCoordinator
         self.encoder = JSONEncoder()
         self.encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         self.decoder = JSONDecoder()
+    }
+
+    /// Resume interrupted commits from a previous run. Call early when opening a vault.
+    func performStartupRecovery() throws -> VaultRecoverySummary {
+        try ensureVault()
+        return try VaultCommitCoordinator.recoverPendingCommits(vaultRoot: vaultURL)
     }
 
     /// Legacy single-segment validation (flat notes only).
@@ -97,10 +104,27 @@ actor NoteRepository {
         try ensureVault()
         var manifest = try loadOrRebuildManifest()
         manifest.schemaVersion = max(manifest.schemaVersion, VaultManifest.currentSchemaVersion)
-        try saveManifest(manifest)
+        let encodedManifest = try encoder.encode(manifest)
+        let diskManifest = try? Data(contentsOf: manifestURL())
+        let manifestChanged = encodedManifest != diskManifest
 
         let pathIndex = try loadPathIndex()
         let folderByNote = Dictionary(uniqueKeysWithValues: pathIndex.entries.map { ($0.noteID, $0.folderID) })
+
+        if manifestChanged {
+            let graph = try loadLinkGraph()
+            let rel = try loadRelationshipIndex()
+            let folderCatalog = try loadFolderCatalog()
+            let integrity = try commitIndexOnly(
+                manifest: manifest,
+                linkGraph: graph,
+                relationshipIndex: rel,
+                folderCatalog: folderCatalog,
+                pathIndex: pathIndex
+            )
+            logIfIntegrityIssues(integrity)
+        }
+
         return manifest.entries
             .sorted { $0.relativePath.lowercased() < $1.relativePath.lowercased() }
             .map { entry in
@@ -134,9 +158,20 @@ actor NoteRepository {
 
     func saveLinkGraph(_ graph: LinkGraph) throws {
         try ensureVault()
-        let url = VaultPaths.linkGraphURL(vaultURL: vaultURL)
-        let data = try encoder.encode(graph)
-        try atomicWrite(data, to: url)
+        var g = graph
+        g.isDirty = true
+        let manifest = try loadOrRebuildManifest()
+        let rel = try loadRelationshipIndex()
+        let folderCatalog = try loadFolderCatalog()
+        let pathIndex = try loadPathIndex()
+        let integrity = try commitIndexOnly(
+            manifest: manifest,
+            linkGraph: g,
+            relationshipIndex: rel,
+            folderCatalog: folderCatalog,
+            pathIndex: pathIndex
+        )
+        logIfIntegrityIssues(integrity)
     }
 
     func updateLinkGraph(sourceNoteID: UUID, targets: [UUID]) throws {
@@ -145,16 +180,25 @@ actor NoteRepository {
         try saveLinkGraph(graph)
     }
 
-    func rebuildLinkGraphFull() throws {
+    func rebuildLinkGraphFull() throws -> VaultIntegrityResult {
         let manifest = try loadOrRebuildManifest()
-        try saveManifest(manifest)
         var graph = LinkGraph()
         for entry in manifest.entries {
             let doc = try loadNote(relativePath: entry.relativePath).document
             graph.setOutgoing(from: entry.noteID, to: doc.metadata.links.map(\.targetNoteID))
         }
-        try saveLinkGraph(graph)
+        let rel = try loadRelationshipIndex()
+        let folderCatalog = try loadFolderCatalog()
+        let pathIndex = try loadPathIndex()
+        let integrity = try commitIndexOnly(
+            manifest: manifest,
+            linkGraph: graph,
+            relationshipIndex: rel,
+            folderCatalog: folderCatalog,
+            pathIndex: pathIndex
+        )
         Logger.vault.info("Rebuilt link graph for \(manifest.entries.count, privacy: .public) notes")
+        return integrity
     }
 
     /// Creates a note at vault root (folder = root).
@@ -216,6 +260,33 @@ actor NoteRepository {
         try loadNote(relativePath: baseName)
     }
 
+    /// Raw UTF-8 text from the note `.txt` file only (no metadata load or structural repair). Used for search indexing.
+    func readRawNoteText(relativePath: String) throws -> String {
+        try VaultPath.validateRelativePath(relativePath)
+        let textURL = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: relativePath, extension: "txt")
+        guard FileManager.default.fileExists(atPath: textURL.path) else {
+            throw NoteRepositoryError.noteNotFound(relativePath)
+        }
+        return (try? String(contentsOf: textURL, encoding: .utf8)) ?? ""
+    }
+
+    /// In-memory search index: `noteID` → raw body text (UTF-8) for every manifest entry. Match with `text.lowercased().contains(query)`.
+    func buildBodySearchIndex() throws -> [UUID: String] {
+        let manifest = try loadOrRebuildManifest()
+        var result: [UUID: String] = [:]
+        result.reserveCapacity(manifest.entries.count)
+        for entry in manifest.entries {
+            let raw: String
+            do {
+                raw = try readRawNoteText(relativePath: entry.relativePath)
+            } catch {
+                continue
+            }
+            result[entry.noteID] = raw
+        }
+        return result
+    }
+
     func noteModifiedDate(relativePath: String) throws -> Date? {
         try VaultPath.validateRelativePath(relativePath)
         let textURL = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: relativePath, extension: "txt")
@@ -255,7 +326,8 @@ actor NoteRepository {
         return DocumentRevisionToken(rawValue: digest)
     }
 
-    func save(_ note: NoteDocument, asRelativePath relativePath: String, folderID: UUID = FolderCatalog.rootFolderID) throws {
+    @discardableResult
+    func save(_ note: NoteDocument, asRelativePath relativePath: String, folderID: UUID = FolderCatalog.rootFolderID) throws -> VaultIntegrityResult {
         try VaultPath.validateRelativePath(relativePath)
         try VaultPath.ensureParentDirectories(vaultRoot: vaultURL, relativePathWithoutExtension: relativePath)
         try ensureVault()
@@ -309,7 +381,7 @@ actor NoteRepository {
             relativePath: relativePath
         )
 
-        try executeNoteCommit(
+        return try executeNoteCommit(
             label: "save:\(relativePath)",
             relativePath: relativePath,
             document: documentToPersist,
@@ -325,9 +397,10 @@ actor NoteRepository {
     }
 
     /// Flat save at vault root (single segment).
-    func save(_ note: NoteDocument, asBaseName baseName: String) throws {
+    @discardableResult
+    func save(_ note: NoteDocument, asBaseName baseName: String) throws -> VaultIntegrityResult {
         try Self.validateBaseName(baseName)
-        try save(note, asRelativePath: baseName, folderID: FolderCatalog.rootFolderID)
+        return try save(note, asRelativePath: baseName, folderID: FolderCatalog.rootFolderID)
     }
 
     func renameNote(from oldRelativePath: String, to newTitle: String) throws -> String {
@@ -358,7 +431,18 @@ actor NoteRepository {
             var manifest = loadManifestFromDiskOnly() ?? VaultManifest()
             manifest.schemaVersion = VaultManifest.currentSchemaVersion
             manifest.upsert(noteID: doc.metadata.noteID, relativePath: oldRelativePath, title: newTitle)
-            try saveManifestOnly(manifest)
+            let graph = try loadLinkGraph()
+            let relationshipIndex = try loadRelationshipIndex()
+            let folderCatalog = try loadFolderCatalog()
+            let pathIndex = try loadPathIndex()
+            let integrity = try commitIndexOnly(
+                manifest: manifest,
+                linkGraph: graph,
+                relationshipIndex: relationshipIndex,
+                folderCatalog: folderCatalog,
+                pathIndex: pathIndex
+            )
+            logIfIntegrityIssues(integrity)
             return oldRelativePath
         }
 
@@ -401,7 +485,7 @@ actor NoteRepository {
         let normalized = RangeNormalizer.normalize(metadata: doc.metadata, for: doc.text)
         let documentToPersist = NoteDocument(text: doc.text, metadata: normalized.normalizedMetadata)
 
-        try executeNoteCommit(
+        logIfIntegrityIssues(try executeNoteCommit(
             label: "rename:\(oldRelativePath)->\(uniqueNew)",
             relativePath: uniqueNew,
             document: documentToPersist,
@@ -413,7 +497,7 @@ actor NoteRepository {
             folderCatalog: folderCatalog,
             pathIndex: pathIndex,
             deletePathsAfterCommit: [oldTxt, oldMeta].filter { FileManager.default.fileExists(atPath: $0.path) }
-        )
+        ))
 
         return uniqueNew
     }
@@ -478,7 +562,18 @@ actor NoteRepository {
             let title = last.replacingOccurrences(of: "-", with: " ").capitalized
             manifest.upsert(noteID: doc.metadata.noteID, relativePath: rel, title: title)
         }
-        try saveManifest(manifest)
+        let graph = try loadLinkGraph()
+        let rel = try loadRelationshipIndex()
+        let folderCatalog = try loadFolderCatalog()
+        let pathIndex = try loadPathIndex()
+        let integrity = try commitIndexOnly(
+            manifest: manifest,
+            linkGraph: graph,
+            relationshipIndex: rel,
+            folderCatalog: folderCatalog,
+            pathIndex: pathIndex
+        )
+        logIfIntegrityIssues(integrity)
         return manifest
     }
 
@@ -516,18 +611,6 @@ actor NoteRepository {
         if parts.contains(".miran") || parts.contains("_aux") { return nil }
         if let first = parts.first, VaultPath.reservedTopLevel.contains(first) { return nil }
         return sub
-    }
-
-    private func saveManifest(_ manifest: VaultManifest) throws {
-        try ensureVault()
-        var m = manifest
-        m.schemaVersion = VaultManifest.currentSchemaVersion
-        let data = try encoder.encode(m)
-        try atomicWrite(data, to: manifestURL())
-    }
-
-    private func saveManifestOnly(_ manifest: VaultManifest) throws {
-        try saveManifest(manifest)
     }
 
     private func loadManifestFromDiskOnly() -> VaultManifest? {
@@ -607,6 +690,30 @@ actor NoteRepository {
         return (document, relativePath)
     }
 
+    private func logIfIntegrityIssues(_ result: VaultIntegrityResult) {
+        guard !result.isClean else { return }
+        for issue in result.issues {
+            Logger.vault.error("Vault integrity: \(issue, privacy: .public)")
+        }
+    }
+
+    private func runIntegrityAfterCommit(
+        relativePath: String?,
+        includeNoteFiles: Bool,
+        manifest: VaultManifest,
+        linkGraph: LinkGraph,
+        relationshipIndex: RelationshipIndex
+    ) -> VaultIntegrityResult {
+        VaultIntegrityChecker.check(
+            vaultURL: vaultURL,
+            manifest: manifest,
+            linkGraph: linkGraph,
+            relationshipIndex: relationshipIndex,
+            savedNoteRelativePath: includeNoteFiles ? relativePath : nil,
+            decoder: decoder
+        )
+    }
+
     private func uniqueAvailableRelativePath(inDirectoryPrefix dirPrefix: String?, slugStem: String) throws -> String {
         var collision = 0
         var stem = slugStem
@@ -642,9 +749,10 @@ actor NoteRepository {
         folderCatalog: FolderCatalog,
         pathIndex: PathIndex,
         deletePathsAfterCommit: [URL]
-    ) throws {
-        let commitTempDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("miran-commit-\(UUID().uuidString)", isDirectory: true)
+    ) throws -> VaultIntegrityResult {
+        try FileManager.default.createDirectory(at: VaultPaths.pendingCommitsDirectory(vaultURL: vaultURL), withIntermediateDirectories: true)
+        let commitTempDir = VaultPaths.pendingCommitsDirectory(vaultURL: vaultURL)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: commitTempDir, withIntermediateDirectories: true)
         var m = manifest
         m.schemaVersion = VaultManifest.currentSchemaVersion
@@ -665,9 +773,6 @@ actor NoteRepository {
             relationshipIndex: relationshipIndex,
             folderCatalog: folderCatalog,
             pathIndex: pathIndex,
-            atomicWrite: { data, url in
-                try self.atomicWrite(data, to: url)
-            },
             tempDirectory: commitTempDir
         )
 
@@ -688,7 +793,16 @@ actor NoteRepository {
                 label: label,
                 operations: operations,
                 deletePathsAfterCommit: deletePathsAfterCommit
-            )
+            ),
+            vaultRoot: vaultURL,
+            stagingDirectory: commitTempDir
+        )
+        return runIntegrityAfterCommit(
+            relativePath: relativePath,
+            includeNoteFiles: true,
+            manifest: m,
+            linkGraph: linkGraph,
+            relationshipIndex: relationshipIndex
         )
     }
 
@@ -699,10 +813,11 @@ actor NoteRepository {
         folderCatalog: FolderCatalog,
         pathIndex: PathIndex,
         deletePathsAfterCommit: [URL] = []
-    ) throws {
+    ) throws -> VaultIntegrityResult {
         try ensureVault()
-        let commitTempDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("miran-commit-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: VaultPaths.pendingCommitsDirectory(vaultURL: vaultURL), withIntermediateDirectories: true)
+        let commitTempDir = VaultPaths.pendingCommitsDirectory(vaultURL: vaultURL)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: commitTempDir, withIntermediateDirectories: true)
         let emptyDoc = NoteDocument(text: "", metadata: NoteMetadata.empty)
         var m = manifest
@@ -726,9 +841,6 @@ actor NoteRepository {
             relationshipIndex: relationshipIndex,
             folderCatalog: folderCatalog,
             pathIndex: pathIndex,
-            atomicWrite: { data, url in
-                try self.atomicWrite(data, to: url)
-            },
             tempDirectory: commitTempDir
         )
         let participants: [VaultCommitParticipant] = [
@@ -744,7 +856,16 @@ actor NoteRepository {
             operations.append(contentsOf: try participant.operations(for: context))
         }
         try commitCoordinator.execute(
-            VaultCommitPlan(label: "indexes", operations: operations, deletePathsAfterCommit: deletePathsAfterCommit)
+            VaultCommitPlan(label: "indexes", operations: operations, deletePathsAfterCommit: deletePathsAfterCommit),
+            vaultRoot: vaultURL,
+            stagingDirectory: commitTempDir
+        )
+        return runIntegrityAfterCommit(
+            relativePath: nil,
+            includeNoteFiles: false,
+            manifest: m,
+            linkGraph: linkGraph,
+            relationshipIndex: relationshipIndex
         )
     }
 
@@ -809,13 +930,13 @@ actor NoteRepository {
         let graph = try loadLinkGraph()
         let rel = try loadRelationshipIndex()
         let pathIndex = try loadPathIndex()
-        try commitIndexOnly(
+        logIfIntegrityIssues(try commitIndexOnly(
             manifest: manifest,
             linkGraph: graph,
             relationshipIndex: rel,
             folderCatalog: folderCatalog,
             pathIndex: pathIndex
-        )
+        ))
         return id
     }
 
@@ -842,14 +963,14 @@ actor NoteRepository {
         if FileManager.default.fileExists(atPath: dir.path) {
             toDelete.append(dir)
         }
-        try commitIndexOnly(
+        logIfIntegrityIssues(try commitIndexOnly(
             manifest: manifest,
             linkGraph: graph,
             relationshipIndex: rel,
             folderCatalog: folderCatalog,
             pathIndex: pathIndex,
             deletePathsAfterCommit: toDelete
-        )
+        ))
     }
 
     func renameFolder(id: UUID, newName: String) throws {
@@ -884,13 +1005,13 @@ actor NoteRepository {
         }
         let graph = try loadLinkGraph()
         let rel = try loadRelationshipIndex()
-        try commitIndexOnly(
+        logIfIntegrityIssues(try commitIndexOnly(
             manifest: manifest,
             linkGraph: graph,
             relationshipIndex: rel,
             folderCatalog: folderCatalog,
             pathIndex: pathIndex
-        )
+        ))
     }
 
     func moveFolder(id: UUID, newParentID: UUID) throws {
@@ -925,13 +1046,13 @@ actor NoteRepository {
         }
         let graph = try loadLinkGraph()
         let rel = try loadRelationshipIndex()
-        try commitIndexOnly(
+        logIfIntegrityIssues(try commitIndexOnly(
             manifest: manifest,
             linkGraph: graph,
             relationshipIndex: rel,
             folderCatalog: folderCatalog,
             pathIndex: pathIndex
-        )
+        ))
     }
 
     func moveNote(noteID: UUID, toFolderID: UUID) throws {
@@ -962,13 +1083,13 @@ actor NoteRepository {
             let manifest = try loadOrRebuildManifest()
             let graph = try loadLinkGraph()
             let rel = try loadRelationshipIndex()
-            try commitIndexOnly(
+            logIfIntegrityIssues(try commitIndexOnly(
                 manifest: manifest,
                 linkGraph: graph,
                 relationshipIndex: rel,
                 folderCatalog: folderCatalog,
                 pathIndex: pathIndex
-            )
+            ))
             return
         }
 
@@ -1010,7 +1131,7 @@ actor NoteRepository {
         let documentToPersist = NoteDocument(text: doc.text, metadata: normalized.normalizedMetadata)
 
         let oldPaths: [URL] = [oldTxt, oldMeta]
-        try executeNoteCommit(
+        logIfIntegrityIssues(try executeNoteCommit(
             label: "moveNote:\(oldPath)->\(uniqueNew)",
             relativePath: uniqueNew,
             document: documentToPersist,
@@ -1022,7 +1143,7 @@ actor NoteRepository {
             folderCatalog: folderCatalog,
             pathIndex: pathIndex,
             deletePathsAfterCommit: oldPaths.filter { FileManager.default.fileExists(atPath: $0.path) }
-        )
+        ))
     }
 
     func deleteNote(noteID: UUID) throws {
@@ -1054,31 +1175,14 @@ actor NoteRepository {
             toDelete.append(aux)
         }
 
-        try commitIndexOnly(
+        logIfIntegrityIssues(try commitIndexOnly(
             manifest: manifest,
             linkGraph: graph,
             relationshipIndex: relationshipIndex,
             folderCatalog: folderCatalog,
             pathIndex: pathIndex,
             deletePathsAfterCommit: toDelete
-        )
-    }
-
-    private func atomicWrite(_ data: Data, to url: URL) throws {
-        let tmpURL = url.appendingPathExtension("tmp")
-        var committed = false
-        defer {
-            if !committed {
-                try? FileManager.default.removeItem(at: tmpURL)
-            }
-        }
-        try data.write(to: tmpURL, options: .atomic)
-        if FileManager.default.fileExists(atPath: url.path) {
-            _ = try FileManager.default.replaceItemAt(url, withItemAt: tmpURL)
-        } else {
-            try FileManager.default.moveItem(at: tmpURL, to: url)
-        }
-        committed = true
+        ))
     }
 
     private func slugify(_ value: String) -> String {

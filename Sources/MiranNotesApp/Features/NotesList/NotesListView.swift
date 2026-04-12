@@ -22,9 +22,18 @@ private struct SidebarOutlineRows: View {
                         model.deleteFolder(id: folder.id)
                     }
                 }
-            case let .note(note):
-                Text(note.title)
-                    .tag(Optional(note.relativePath))
+            case let .note(note, searchSnippet):
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(note.title)
+                    if let searchSnippet, !searchSnippet.isEmpty {
+                        Text(searchSnippet)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                            .multilineTextAlignment(.leading)
+                    }
+                }
+                .tag(Optional(note.relativePath))
             }
         }
     }
@@ -33,14 +42,31 @@ private struct SidebarOutlineRows: View {
 struct NotesListView: View {
     @ObservedObject var model: AppModel
 
+    private var emptyListMessage: String {
+        if model.noteSummaries.isEmpty {
+            return "No notes yet"
+        }
+        if !model.noteQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return "No matching notes"
+        }
+        return "No notes yet"
+    }
+
+    private var selectionBinding: Binding<String?> {
+        Binding(
+            get: { model.selectedBaseName },
+            set: { model.changeSelection(baseName: $0) }
+        )
+    }
+
     var body: some View {
-        List(selection: $model.selectedBaseName) {
+        List(selection: selectionBinding) {
             SidebarOutlineRows(entries: model.sidebarOutline, model: model)
         }
         .searchable(text: $model.noteQuery, prompt: Text("Search notes"))
         .overlay {
             if model.filteredNoteSummaries.isEmpty && !model.isLoading {
-                Text("No notes yet")
+                Text(emptyListMessage)
                     .foregroundStyle(.secondary)
             }
         }

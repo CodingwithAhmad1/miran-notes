@@ -26,13 +26,13 @@ struct PendingEditorScroll: Equatable {
 /// One row in the sidebar outline (folder tree + notes).
 enum SidebarOutlineEntry: Identifiable {
     case folder(FolderEntry, [SidebarOutlineEntry])
-    case note(NoteSummary)
+    case note(NoteSummary, searchSnippet: String?)
 
     var id: String {
         switch self {
         case .folder(let f, _):
             return "f:\(f.id.uuidString)"
-        case .note(let n):
+        case .note(let n, _):
             return "n:\(n.noteID.uuidString)"
         }
     }
@@ -48,6 +48,8 @@ final class AppModel: ObservableObject {
     /// When set, the editor scrolls to this range once that note is loaded.
     @Published var pendingEditorScroll: PendingEditorScroll?
     @Published var noteQuery: String = ""
+    /// Raw note body text per `noteID`, built asynchronously after `refreshNotes()` for substring search.
+    @Published private(set) var bodySearchIndex: [UUID: String] = [:]
     @Published var tableEditorPayload: TableEditorPayload?
     @Published var isLoading = false
     @Published var lastError: String?
@@ -95,6 +97,8 @@ final class AppModel: ObservableObject {
     /// In-memory cache to avoid repeated disk reads during rapid edits. Invalidated after successful save and vault rebuild.
     private var cachedLinkGraph: LinkGraph?
     private var backlinkRefreshTask: Task<Void, Never>?
+    private var bodySearchIndexTask: Task<Void, Never>?
+    private var bodySearchIndexGeneration = 0
 
     init(
         repository: NoteRepository,
@@ -112,9 +116,18 @@ final class AppModel: ObservableObject {
 
     func loadVault() {
         Task { @MainActor in
+            do {
+                let recovery = try await repository.performStartupRecovery()
+                if recovery.resumedAndCompletedCount > 0 || recovery.discardedStagingCount > 0 {
+                    repairAdvisory = RepairAdvisory.vaultRecoveryNotice(recovery)
+                }
+            } catch {
+                lastError = "Vault recovery failed: \(error.localizedDescription)"
+            }
             await refreshNotes()
             do {
-                try await repository.rebuildLinkGraphFull()
+                let integrity = try await repository.rebuildLinkGraphFull()
+                applyVaultIntegrityAfterLoadIfNeeded(integrity)
                 cachedLinkGraph = nil
             } catch {
                 lastError = "Link index rebuild failed: \(error.localizedDescription)"
@@ -128,14 +141,45 @@ final class AppModel: ObservableObject {
         }
     }
 
+    private func applyVaultIntegrityAfterLoadIfNeeded(_ result: VaultIntegrityResult) {
+        guard !result.isClean, repairAdvisory == nil else { return }
+        repairAdvisory = RepairAdvisory.vaultIntegrityNotice(result)
+    }
+
+    private func applyVaultIntegrityAfterSave(_ result: VaultIntegrityResult) {
+        guard !result.isClean else { return }
+        repairAdvisory = RepairAdvisory.vaultIntegrityNotice(result)
+    }
+
     func refreshNotes() async {
         isLoading = true
         defer { isLoading = false }
         do {
             noteSummaries = try await repository.listNotes()
             folderCatalog = try await repository.loadFolderCatalog()
+            scheduleBodySearchIndexRebuild()
         } catch {
             lastError = "Failed to list notes: \(error.localizedDescription)"
+        }
+    }
+
+    private func scheduleBodySearchIndexRebuild() {
+        bodySearchIndexTask?.cancel()
+        bodySearchIndexGeneration += 1
+        let generation = bodySearchIndexGeneration
+        let repo = repository
+        bodySearchIndexTask = Task { [weak self] in
+            let index: [UUID: String]
+            do {
+                index = try await repo.buildBodySearchIndex()
+            } catch {
+                return
+            }
+            await MainActor.run {
+                guard let self else { return }
+                guard generation == self.bodySearchIndexGeneration else { return }
+                self.bodySearchIndex = index
+            }
         }
     }
 
@@ -144,14 +188,16 @@ final class AppModel: ObservableObject {
         Self.buildSidebarOutline(
             folderCatalog: folderCatalog,
             notes: filteredNoteSummaries,
-            parentID: FolderCatalog.rootFolderID
+            parentID: FolderCatalog.rootFolderID,
+            searchSnippet: { self.searchSnippet(for: $0) }
         )
     }
 
     private static func buildSidebarOutline(
         folderCatalog: FolderCatalog,
         notes: [NoteSummary],
-        parentID: UUID
+        parentID: UUID,
+        searchSnippet: (NoteSummary) -> String?
     ) -> [SidebarOutlineEntry] {
         let folders = folderCatalog.childFolders(of: parentID).sorted {
             $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
@@ -161,13 +207,49 @@ final class AppModel: ObservableObject {
         }
         var rows: [SidebarOutlineEntry] = []
         for f in folders {
-            let children = buildSidebarOutline(folderCatalog: folderCatalog, notes: notes, parentID: f.id)
+            let children = buildSidebarOutline(
+                folderCatalog: folderCatalog,
+                notes: notes,
+                parentID: f.id,
+                searchSnippet: searchSnippet
+            )
             rows.append(.folder(f, children))
         }
         for n in noteList {
-            rows.append(.note(n))
+            rows.append(.note(n, searchSnippet: searchSnippet(n)))
         }
         return rows
+    }
+
+    /// Optional body snippet when the search query matches note text (see `SearchSnippetBuilder`).
+    func searchSnippet(for summary: NoteSummary) -> String? {
+        let q = noteQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { return nil }
+        let ql = q.lowercased()
+        let body: String
+        if let doc = activeDocument, doc.metadata.noteID == summary.noteID {
+            body = doc.text
+        } else if let cached = bodySearchIndex[summary.noteID] {
+            body = cached
+        } else {
+            return nil
+        }
+        guard body.lowercased().contains(ql) else { return nil }
+        return SearchSnippetBuilder.snippet(for: q, in: body)
+    }
+
+    private func noteMatchesSearchQuery(_ summary: NoteSummary, queryLowercased q: String) -> Bool {
+        if summary.relativePath.lowercased().contains(q) { return true }
+        if summary.title.lowercased().contains(q) { return true }
+        let body: String
+        if let doc = activeDocument, doc.metadata.noteID == summary.noteID {
+            body = doc.text
+        } else if let cached = bodySearchIndex[summary.noteID] {
+            body = cached
+        } else {
+            return false
+        }
+        return body.lowercased().contains(q)
     }
 
     func createFolder(parentID: UUID = FolderCatalog.rootFolderID, name: String = "New Folder") {
@@ -212,14 +294,11 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// Filtered list for search / query UI (title and baseName). Richer queries over `NoteMetadata.properties` can use a dedicated index later.
+    /// Filtered list for search / query UI (title, path, and indexed body text).
     var filteredNoteSummaries: [NoteSummary] {
         let q = noteQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !q.isEmpty else { return noteSummaries }
-        return noteSummaries.filter { summary in
-            summary.relativePath.lowercased().contains(q)
-                || summary.title.lowercased().contains(q)
-        }
+        return noteSummaries.filter { noteMatchesSearchQuery($0, queryLowercased: q) }
     }
 
     func refreshBacklinks() async {
@@ -623,6 +702,8 @@ final class AppModel: ObservableObject {
             case .registerTableArtifact: return "Add Table"
             case .repairMetadata: return "Repair Note"
             case .replaceMetadataBlocks: return "Recover Blocks"
+            case .duplicateBlock: return "Duplicate Block"
+            case .deleteBlock: return "Delete Block"
             }
         })
         if kinds.count == 1, let only = kinds.first {
@@ -681,7 +762,8 @@ final class AppModel: ObservableObject {
         guard let doc = activeDocument, let path = selectedBaseName else { return }
         guard doc != lastPersistedDocument else { return }
         do {
-            try await repository.save(doc, asBaseName: path)
+            let integrity = try await repository.save(doc, asBaseName: path)
+            applyVaultIntegrityAfterSave(integrity)
             let modified = try await repository.noteModifiedDate(relativePath: path)
             let revision = try await repository.noteRevisionToken(relativePath: path)
             lastKnownDiskDate = modified
@@ -712,10 +794,11 @@ final class AppModel: ObservableObject {
             guard selectedBaseName == expectedPath else { return }
             guard let latest = activeDocument else { return }
             do {
-                try await repository.save(latest, asBaseName: expectedPath)
+                let integrity = try await repository.save(latest, asBaseName: expectedPath)
                 let modified = try await repository.noteModifiedDate(relativePath: expectedPath)
                 let revision = try await repository.noteRevisionToken(relativePath: expectedPath)
                 guard gen == navigationGeneration, selectedBaseName == expectedPath else { return }
+                applyVaultIntegrityAfterSave(integrity)
                 lastKnownDiskDate = modified
                 lastKnownDiskRevision = revision
                 lastPersistedDocument = latest

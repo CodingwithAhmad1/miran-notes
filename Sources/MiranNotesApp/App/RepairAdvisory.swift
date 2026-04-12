@@ -10,6 +10,10 @@ enum RepairAdvisoryKind: String, Equatable, Sendable {
     case loadStructuralWithWikiLinks
     case fullBufferFallback
     case sizeLimitExceeded
+    /// Interrupted multi-file commit was finished or rolled back at startup.
+    case vaultRecoveryCompleted
+    /// Post-save or post-rebuild consistency check found index / manifest drift.
+    case vaultDataConsistency
 }
 
 struct RepairAdvisory: Equatable, Sendable {
@@ -18,6 +22,39 @@ struct RepairAdvisory: Equatable, Sendable {
     var explanation: String
     /// Plain-text summary for the Details sheet (no internal type names).
     var detailsPlainText: String?
+
+    static func vaultRecoveryNotice(_ summary: VaultRecoverySummary) -> RepairAdvisory {
+        var lines: [String] = []
+        if summary.resumedAndCompletedCount > 0 {
+            lines.append(
+                "A previous save was interrupted before it finished. We completed that update safely from temporary files."
+            )
+        }
+        if summary.discardedStagingCount > 0 {
+            lines.append(
+                "We removed leftover temporary files from an incomplete save. Your last successful save was not changed."
+            )
+        }
+        let explanation = lines.isEmpty
+            ? "The library was checked after the last session ended unexpectedly."
+            : lines.joined(separator: " ")
+        return RepairAdvisory(
+            kind: .vaultRecoveryCompleted,
+            title: "Your notes library was verified",
+            explanation: explanation,
+            detailsPlainText: nil
+        )
+    }
+
+    static func vaultIntegrityNotice(_ result: VaultIntegrityResult) -> RepairAdvisory {
+        RepairAdvisory(
+            kind: .vaultDataConsistency,
+            title: "We noticed a data check warning",
+            explanation:
+                "After saving, something in the saved index or file list did not match expectations. You can keep editing; use Details if you want technical notes for support.",
+            detailsPlainText: result.issues.joined(separator: "\n")
+        )
+    }
 
     static let fullBufferDetails =
         "The editor replaced the whole note in one step (for example after a complex paste or undo). Section headings were matched back to the text where possible."

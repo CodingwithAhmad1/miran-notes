@@ -210,4 +210,24 @@ final class NoteRepositoryTests: XCTestCase {
         // Result should be valid UTF-8 (no split multi-byte sequences)
         XCTAssertNotNil(String(baseName.utf8), "baseName must be valid UTF-8 after truncation")
     }
+
+    func testReadRawNoteTextAndBuildBodySearchIndex() async throws {
+        let vault = try tempVaultURL()
+        let repo = NoteRepository(vaultURL: vault)
+        try await repo.ensureVault()
+        let (_, base) = try await repo.createNote(named: "index-body")
+        let emptyRaw = try await repo.readRawNoteText(relativePath: base)
+        XCTAssertEqual(emptyRaw, "")
+
+        let textURL = vault.appendingPathComponent("\(base).txt")
+        try "indexed-body-text".write(to: textURL, atomically: true, encoding: .utf8)
+
+        let raw = try await repo.readRawNoteText(relativePath: base)
+        XCTAssertEqual(raw, "indexed-body-text")
+
+        let index = try await repo.buildBodySearchIndex()
+        let manifest = try await repo.loadManifest()
+        let id = try XCTUnwrap(manifest.entry(relativePath: base)?.noteID)
+        XCTAssertEqual(index[id], "indexed-body-text")
+    }
 }

@@ -15,6 +15,11 @@ enum VaultPaths {
         vaultURL.appendingPathComponent(miranDirName, isDirectory: true)
     }
 
+    /// In-flight vault commits (temp payloads + `vault-commit.json`). Same volume as the vault for atomic renames.
+    static func pendingCommitsDirectory(vaultURL: URL) -> URL {
+        miranDirectory(vaultURL: vaultURL).appendingPathComponent("pending-commits", isDirectory: true)
+    }
+
     static func manifestURL(vaultURL: URL) -> URL {
         miranDirectory(vaultURL: vaultURL).appendingPathComponent(manifestFileName, isDirectory: false)
     }
