@@ -128,10 +128,12 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
             guard !textView.hasMarkedText() else { return }
             let r = textView.selectedRange()
             guard r.length > 0 else { return }
-            let newDoc = parent.onCommands([
+            _ = runCommandSession(
+                textView: textView,
+                commands: [
                 .toggleSpanStyle(range: TextRange(start: r.location, length: r.length), style: style)
-            ])
-            refreshVisualChrome(textView: textView, document: newDoc)
+                ]
+            )
         }
 
         func textStorage(
@@ -164,28 +166,31 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
                     ) {
                     let blockID = parent.document.metadata.blocks[blockIndex].id
                     if let slashCommands = SlashCommandRegistry.editCommands(for: slashMatch, blockID: blockID) {
-                        let newDoc = parent.onCommands(slashCommands)
-                        refreshVisualChrome(textView: textView, document: newDoc)
+                        _ = runCommandSession(textView: textView, commands: slashCommands)
                         return
                     }
                 }
 
-                let newDoc = parent.onCommands([
+                _ = runCommandSession(
+                    textView: textView,
+                    commands: [
                     .replaceText(
                         range: TextRange(start: diff.range.location, length: diff.range.length),
                         replacement: diff.replacement
                     )
-                ])
-                refreshVisualChrome(textView: textView, document: newDoc)
+                    ]
+                )
             } else {
                 let previous = parent.document.text
-                let newDoc = parent.onCommands([
+                _ = runCommandSession(
+                    textView: textView,
+                    commands: [
                     .replaceText(
                         range: TextRange(start: 0, length: previous.utf16.count),
                         replacement: storageString
                     )
-                ])
-                refreshVisualChrome(textView: textView, document: newDoc)
+                    ]
+                )
             }
         }
 
@@ -259,18 +264,12 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
                 replacement: replacement,
                 selectedLocation: selectedLocation
             ) {
-                pendingSelection = NSRange(location: affectedCharRange.location + replacement.utf16.count, length: 0)
-                let newDoc = parent.onCommands(structural)
-                // Apply the new text from the model immediately (avoids the full-replace path in applyDocumentText).
-                isApplyingModelUpdate = true
-                if let diff = TextEditDiff.singleUTF16Replacement(from: textView.string, to: newDoc.text) {
-                    textView.textStorage?.replaceCharacters(in: diff.range, with: diff.replacement)
-                } else {
-                    textView.string = newDoc.text
-                }
-                isApplyingModelUpdate = false
-                refreshVisualChrome(textView: textView, document: newDoc)
-                applyPendingSelectionIfNeeded()
+                let targetSelection = NSRange(location: affectedCharRange.location + replacement.utf16.count, length: 0)
+                _ = runCommandSession(
+                    textView: textView,
+                    commands: structural,
+                    pendingSelection: targetSelection
+                )
                 return false
             }
 
@@ -283,6 +282,31 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
             if parent.cursorOffset != loc {
                 parent.cursorOffset = loc
             }
+        }
+
+        @discardableResult
+        private func runCommandSession(
+            textView: NSTextView,
+            commands: [EditCommand],
+            pendingSelection: NSRange? = nil
+        ) -> NoteDocument {
+            if let pendingSelection {
+                self.pendingSelection = pendingSelection
+            }
+            let newDoc = parent.onCommands(commands)
+
+            // Apply the canonical model text immediately so both mutation paths stay ordered.
+            isApplyingModelUpdate = true
+            if let diff = TextEditDiff.singleUTF16Replacement(from: textView.string, to: newDoc.text) {
+                textView.textStorage?.replaceCharacters(in: diff.range, with: diff.replacement)
+            } else if textView.string != newDoc.text {
+                textView.string = newDoc.text
+            }
+            isApplyingModelUpdate = false
+
+            refreshVisualChrome(textView: textView, document: newDoc)
+            applyPendingSelectionIfNeeded()
+            return newDoc
         }
     }
 }

@@ -1,11 +1,13 @@
 import Foundation
 import MiranNotesCore
+import os.log
 import SwiftUI
 
 /// Drives the “file changed on disk” alert; non-nil means a conflict is being presented.
 struct ExternalEditConflict: Identifiable, Equatable {
     let id = UUID()
     var diskDate: Date
+    var revisionToken: DocumentRevisionToken?
 }
 
 struct TableEditorPayload: Identifiable {
@@ -38,11 +40,14 @@ final class AppModel: ObservableObject {
     /// Last snapshot known to match on-disk files (after load or successful save). Used with `activeDocument` to detect dirty state.
     private var lastPersistedDocument: NoteDocument?
     private var lastKnownDiskDate: Date?
+    private var lastKnownDiskRevision: DocumentRevisionToken?
     private var undoManager: UndoManager?
     /// Bumped when the selected note identity changes so debounced autosave completions cannot apply stale persistence state.
     private var navigationGeneration = 0
     /// Current cursor offset (UTF-16) in the active editor surface, updated by the coordinator on selection change.
     @Published var editorCursorOffset: Int = 0
+    private let undoPolicy = UndoPolicy.defaultPolicy
+    private var approxUndoSnapshotBytes = 0
 
     init(repository: NoteRepository) {
         self.repository = repository
@@ -192,6 +197,7 @@ final class AppModel: ObservableObject {
                 lastPersistedDocument = document
                 do {
                     lastKnownDiskDate = try await repository.noteModifiedDate(baseName: baseName)
+                    lastKnownDiskRevision = try await repository.noteRevisionToken(baseName: baseName)
                 } catch {
                     lastError = "Failed to read note timestamps: \(error.localizedDescription)"
                 }
@@ -207,6 +213,7 @@ final class AppModel: ObservableObject {
             activeDocument = nil
             lastPersistedDocument = nil
             lastKnownDiskDate = nil
+            lastKnownDiskRevision = nil
             repairNotice = nil
             backlinks = []
             clearUndoStack()
@@ -219,6 +226,7 @@ final class AppModel: ObservableObject {
             repairNotice = Self.buildRepairNotice(result: result)
             do {
                 lastKnownDiskDate = try await repository.noteModifiedDate(baseName: selectedBaseName)
+                lastKnownDiskRevision = try await repository.noteRevisionToken(baseName: selectedBaseName)
             } catch {
                 lastError = "Failed to read note timestamps: \(error.localizedDescription)"
             }
@@ -262,10 +270,14 @@ final class AppModel: ObservableObject {
 
         if recordUndo, let undo = undoManager {
             let after = doc
+            let beforeCost = before.text.utf16.count + before.metadata.blocks.count * 64 + before.metadata.spans.count * 48
+            let afterCost = after.text.utf16.count + after.metadata.blocks.count * 64 + after.metadata.spans.count * 48
             undo.registerUndo(withTarget: self) { model in
                 model.applyUndoSnapshot(from: after, to: before)
             }
             undo.setActionName(Self.undoActionName(for: commands))
+            approxUndoSnapshotBytes += beforeCost + afterCost
+            enforceUndoPolicyIfNeeded()
         }
 
         activeDocument = doc
@@ -284,6 +296,13 @@ final class AppModel: ObservableObject {
 
     private func clearUndoStack() {
         undoManager?.removeAllActions(withTarget: self)
+        approxUndoSnapshotBytes = 0
+    }
+
+    private func enforceUndoPolicyIfNeeded() {
+        guard approxUndoSnapshotBytes > undoPolicy.maxApproxBytes else { return }
+        clearUndoStack()
+        Logger.vault.info("Undo stack pruned due to policy cap=\(self.undoPolicy.maxApproxBytes, privacy: .public)")
     }
 
     private static func undoActionName(for commands: [EditCommand]) -> String {
@@ -345,7 +364,9 @@ final class AppModel: ObservableObject {
         do {
             try await repository.save(doc, asBaseName: baseName)
             let modified = try await repository.noteModifiedDate(baseName: baseName)
+            let revision = try await repository.noteRevisionToken(baseName: baseName)
             lastKnownDiskDate = modified
+            lastKnownDiskRevision = revision
             lastPersistedDocument = doc
             await refreshBacklinks()
         } catch {
@@ -357,6 +378,7 @@ final class AppModel: ObservableObject {
         saveTask?.cancel()
         guard let expectedBaseName = selectedBaseName, activeDocument != nil else { return }
         let gen = navigationGeneration
+        let startedAt = Date()
         saveTask = Task { @MainActor in
             defer {
                 Task { @MainActor in
@@ -372,9 +394,13 @@ final class AppModel: ObservableObject {
             do {
                 try await repository.save(latest, asBaseName: expectedBaseName)
                 let modified = try await repository.noteModifiedDate(baseName: expectedBaseName)
+                let revision = try await repository.noteRevisionToken(baseName: expectedBaseName)
                 guard gen == navigationGeneration, selectedBaseName == expectedBaseName else { return }
                 lastKnownDiskDate = modified
+                lastKnownDiskRevision = revision
                 lastPersistedDocument = latest
+                let latencyMs = Int(Date().timeIntervalSince(startedAt) * 1000)
+                VaultTelemetry.logAutosave(latencyMs: max(0, latencyMs))
                 Task { await self.refreshBacklinks() }
             } catch {
                 lastError = "Autosave failed: \(error.localizedDescription)"
@@ -391,6 +417,7 @@ final class AppModel: ObservableObject {
     /// Dismisses the conflict alert. If `reloadFromDisk` is true, loads the note from the vault (discarding local edits). Otherwise keeps the buffer and records the external file time so the same change does not re-alert until the file changes again.
     func resolveExternalEditConflict(reloadFromDisk: Bool) {
         let diskDate = externalEditConflictAlert?.diskDate
+        let diskRevision = externalEditConflictAlert?.revisionToken
         externalEditConflictAlert = nil
         if reloadFromDisk {
             Task { @MainActor in
@@ -398,6 +425,7 @@ final class AppModel: ObservableObject {
             }
         } else if let diskDate {
             lastKnownDiskDate = diskDate
+            lastKnownDiskRevision = diskRevision
         }
     }
 
@@ -431,13 +459,19 @@ final class AppModel: ObservableObject {
         guard let selectedBaseName, activeDocument != nil else { return }
 
         let diskDate: Date?
+        let diskRevision: DocumentRevisionToken?
         do {
             diskDate = try await repository.noteModifiedDate(baseName: selectedBaseName)
+            diskRevision = try await repository.noteRevisionToken(baseName: selectedBaseName)
         } catch {
             lastError = "Failed to read note timestamps: \(error.localizedDescription)"
             return
         }
         guard let diskDate else { return }
+        if let diskRevision, diskRevision == lastKnownDiskRevision {
+            lastKnownDiskDate = diskDate
+            return
+        }
         if let lastKnown = lastKnownDiskDate, diskDate <= lastKnown {
             return
         }
@@ -456,12 +490,14 @@ final class AppModel: ObservableObject {
         if !isDirty {
             if loadedFromDisk == activeDocument {
                 lastKnownDiskDate = diskDate
+                lastKnownDiskRevision = diskRevision
                 return
             }
             clearUndoStack()
             activeDocument = loadedFromDisk
             lastPersistedDocument = loadedFromDisk
             lastKnownDiskDate = diskDate
+            lastKnownDiskRevision = diskRevision
             Task { await refreshBacklinks() }
             return
         }
@@ -469,9 +505,11 @@ final class AppModel: ObservableObject {
         if loadedFromDisk == activeDocument {
             lastPersistedDocument = loadedFromDisk
             lastKnownDiskDate = diskDate
+            lastKnownDiskRevision = diskRevision
             return
         }
 
-        externalEditConflictAlert = ExternalEditConflict(diskDate: diskDate)
+        VaultTelemetry.logConflictDetected(isDirty: isDirty, hasRevisionToken: diskRevision != nil)
+        externalEditConflictAlert = ExternalEditConflict(diskDate: diskDate, revisionToken: diskRevision)
     }
 }

@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import MiranNotesCore
 import os.log
@@ -42,6 +43,7 @@ actor NoteRepository {
     nonisolated let vaultURL: URL
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
+    private let commitCoordinator = VaultCommitCoordinator()
 
     init(vaultURL: URL) {
         self.vaultURL = vaultURL
@@ -192,6 +194,9 @@ actor NoteRepository {
 
         let (repaired, repairWarnings) = Self.documentAfterLoadRepair(text: text, metadata: metadata)
         let withId = NoteDocument(id: repaired.metadata.noteID, text: repaired.text, metadata: repaired.metadata)
+        if !repairWarnings.isEmpty {
+            VaultTelemetry.logRepairWarnings(count: repairWarnings.count)
+        }
         NoteIntegrity.logIfInvalid(document: withId)
         return NoteLoadResult(document: withId, repairWarnings: repairWarnings)
     }
@@ -217,6 +222,24 @@ actor NoteRepository {
         }
     }
 
+    func noteRevisionToken(baseName: String) throws -> DocumentRevisionToken? {
+        try Self.validateBaseName(baseName)
+        let textURL = vaultURL.appendingPathComponent("\(baseName).txt")
+        let metaURL = vaultURL.appendingPathComponent("\(baseName).meta.json")
+        guard FileManager.default.fileExists(atPath: textURL.path) else {
+            return nil
+        }
+
+        let textData = (try? Data(contentsOf: textURL)) ?? Data()
+        let metaData = (try? Data(contentsOf: metaURL)) ?? Data()
+        var hasher = SHA256()
+        hasher.update(data: textData)
+        hasher.update(data: Data([0]))
+        hasher.update(data: metaData)
+        let digest = hasher.finalize().hexString
+        return DocumentRevisionToken(rawValue: digest)
+    }
+
     func save(_ note: NoteDocument, asBaseName baseName: String) throws {
         try Self.validateBaseName(baseName)
         try ensureVault()
@@ -229,18 +252,43 @@ actor NoteRepository {
         NoteIntegrity.logIfInvalid(document: documentToPersist)
         let textURL = vaultURL.appendingPathComponent("\(baseName).txt")
         let metaURL = vaultURL.appendingPathComponent("\(baseName).meta.json")
-
-        try atomicWrite(note.text.data(using: .utf8) ?? Data(), to: textURL)
-        let metadataData = try encoder.encode(normalized.normalizedMetadata)
-        try atomicWrite(metadataData, to: metaURL)
-
         var manifest = loadManifestFromDiskOnly() ?? VaultManifest()
         let title = baseName.replacingOccurrences(of: "-", with: " ").capitalized
         manifest.upsert(noteID: documentToPersist.metadata.noteID, baseName: baseName, title: title)
-        try saveManifest(manifest)
-
+        var graph = try loadLinkGraph()
         let targets = documentToPersist.metadata.links.map(\.targetNoteID)
-        try updateLinkGraph(sourceNoteID: documentToPersist.metadata.noteID, targets: targets)
+        graph.setOutgoing(from: documentToPersist.metadata.noteID, to: targets)
+
+        let context = VaultCommitContext(
+            baseName: baseName,
+            document: documentToPersist,
+            textURL: textURL,
+            metaURL: metaURL,
+            manifestURL: manifestURL(),
+            linkGraphURL: VaultPaths.linkGraphURL(vaultURL: vaultURL),
+            encoder: encoder,
+            manifest: manifest,
+            linkGraph: graph,
+            atomicWrite: { data, url in
+                try self.atomicWrite(data, to: url)
+            }
+        )
+
+        let participants: [VaultCommitParticipant] = [
+            NoteFilesCommitParticipant(),
+            ManifestCommitParticipant(),
+            LinkGraphCommitParticipant()
+        ]
+        var operations: [VaultCommitOperation] = []
+        for participant in participants {
+            operations.append(contentsOf: try participant.operations(for: context))
+        }
+        try commitCoordinator.execute(
+            VaultCommitPlan(
+                label: "save:\(baseName)",
+                operations: operations
+            )
+        )
     }
 
     /// Renames note files from `oldBaseName` to a new slug derived from `newTitle`. Returns the new `baseName`.
@@ -307,21 +355,26 @@ actor NoteRepository {
     /// Drops manifest entries whose `.txt` disappeared; adds missing notes on disk.
     private func reconcileManifestWithDisk(_ manifest: VaultManifest) throws -> VaultManifest {
         var next = manifest
+        let originalCount = next.entries.count
         next.entries.removeAll { entry in
             !FileManager.default.fileExists(atPath: vaultURL.appendingPathComponent("\(entry.baseName).txt").path)
         }
+        let removed = max(0, originalCount - next.entries.count)
 
         let onDisk = try listBaseNamesOnDisk()
         let knownBases = Set(next.entries.map(\.baseName))
+        var added = 0
         for base in onDisk where !knownBases.contains(base) {
             let doc = try loadNote(baseName: base).document
             let title = base.replacingOccurrences(of: "-", with: " ").capitalized
             next.upsert(noteID: doc.metadata.noteID, baseName: base, title: title)
+            added += 1
             let metaPath = vaultURL.appendingPathComponent("\(base).meta.json")
             if !FileManager.default.fileExists(atPath: metaPath.path) {
                 try save(doc, asBaseName: base)
             }
         }
+        VaultTelemetry.logManifestReconcile(removed: removed, added: added)
         return next
     }
 
@@ -448,5 +501,70 @@ actor NoteRepository {
         }
 
         return (document, allWarnings)
+    }
+}
+
+private extension SHA256.Digest {
+    var hexString: String {
+        map { String(format: "%02x", $0) }.joined()
+    }
+}
+
+private struct NoteFilesCommitParticipant: VaultCommitParticipant {
+    let participantID = "noteFiles"
+
+    func operations(for context: VaultCommitContext) throws -> [VaultCommitOperation] {
+        let metadataData = try context.encoder.encode(context.document.metadata)
+        let textData = context.document.text.data(using: .utf8) ?? Data()
+        return [
+            VaultCommitOperation(
+                participantID: participantID,
+                operationID: "text",
+                execute: {
+                    try context.atomicWrite(textData, context.textURL)
+                }
+            ),
+            VaultCommitOperation(
+                participantID: participantID,
+                operationID: "metadata",
+                execute: {
+                    try context.atomicWrite(metadataData, context.metaURL)
+                }
+            )
+        ]
+    }
+}
+
+private struct ManifestCommitParticipant: VaultCommitParticipant {
+    let participantID = "manifest"
+
+    func operations(for context: VaultCommitContext) throws -> [VaultCommitOperation] {
+        let data = try context.encoder.encode(context.manifest)
+        return [
+            VaultCommitOperation(
+                participantID: participantID,
+                operationID: "manifest",
+                execute: {
+                    try context.atomicWrite(data, context.manifestURL)
+                }
+            )
+        ]
+    }
+}
+
+private struct LinkGraphCommitParticipant: VaultCommitParticipant {
+    let participantID = "linkGraph"
+
+    func operations(for context: VaultCommitContext) throws -> [VaultCommitOperation] {
+        let data = try context.encoder.encode(context.linkGraph)
+        return [
+            VaultCommitOperation(
+                participantID: participantID,
+                operationID: "linkGraph",
+                execute: {
+                    try context.atomicWrite(data, context.linkGraphURL)
+                }
+            )
+        ]
     }
 }

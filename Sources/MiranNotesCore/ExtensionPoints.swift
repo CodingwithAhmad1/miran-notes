@@ -1,6 +1,6 @@
 import Foundation
 
-// MARK: - Phase 6 — documented extension hooks (not wired into runtime behavior)
+// MARK: - Phase 6 — documented extension hooks
 
 /// Placeholder for a future **rich inline** model (beyond plain UTF-16 + sidecar spans). Implementations would define a canonical serialization independent of `NSTextView` quirks.
 public protocol RichInlineCanonicalRepresentable: Sendable {
@@ -25,3 +25,5 @@ public enum SyncTransportRoadmap: Sendable {
     case localVaultOnly
     case futureNetworkTransport
 }
+
+/// Runtime wiring lives in `ExtensionRegistry`; these placeholders remain as durable roadmap anchors used in docs.

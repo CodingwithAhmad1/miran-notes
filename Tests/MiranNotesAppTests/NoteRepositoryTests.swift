@@ -98,4 +98,47 @@ final class NoteRepositoryTests: XCTestCase {
         XCTAssertEqual(result.document.text, "hello")
         XCTAssertTrue(NoteIntegrity.check(document: result.document).isValid)
     }
+
+    func testRevisionTokenChangesAfterMetadataMutation() async throws {
+        let vault = try tempVaultURL()
+        let repo = NoteRepository(vaultURL: vault)
+        try await repo.ensureVault()
+        let noteID = UUID()
+        let base = "revision-token"
+        let metadata = NoteMetadata(
+            schemaVersion: NoteMetadata.currentSchemaVersion,
+            noteID: noteID,
+            blocks: [
+                Block(id: "b1", type: .paragraph, range: TextRange(start: 0, length: 5), level: nil, icon: nil)
+            ],
+            spans: []
+        )
+        let original = NoteDocument(id: noteID, text: "hello", metadata: metadata)
+        try await repo.save(original, asBaseName: base)
+        let firstToken = try await repo.noteRevisionToken(baseName: base)
+        XCTAssertNotNil(firstToken)
+
+        var changed = original
+        changed.metadata.properties["tag"] = "blue"
+        try await repo.save(changed, asBaseName: base)
+        let secondToken = try await repo.noteRevisionToken(baseName: base)
+
+        XCTAssertNotNil(secondToken)
+        XCTAssertNotEqual(firstToken, secondToken)
+    }
+
+    func testListNotesRepairsMissingMetadataSidecar() async throws {
+        let vault = try tempVaultURL()
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        let textURL = vault.appendingPathComponent("orphan.txt")
+        try "orphan".write(to: textURL, atomically: true, encoding: .utf8)
+
+        let repo = NoteRepository(vaultURL: vault)
+        let notes = try await repo.listNotes()
+        XCTAssertEqual(notes.count, 1)
+        XCTAssertEqual(notes.first?.baseName, "orphan")
+
+        let metaURL = vault.appendingPathComponent("orphan.meta.json")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: metaURL.path))
+    }
 }

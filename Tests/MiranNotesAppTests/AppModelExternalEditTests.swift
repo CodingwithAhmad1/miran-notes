@@ -76,4 +76,26 @@ final class AppModelExternalEditTests: XCTestCase {
         }
         XCTAssertEqual(model.activeDocument?.text, "DISK")
     }
+
+    func testMetadataOnlyExternalChangeWhileDirtySetsConflictAlert() async throws {
+        let vault = try tempVaultURL()
+        let repo = NoteRepository(vaultURL: vault)
+        try await repo.ensureVault()
+        let (_, baseName) = try await repo.createNote(named: "meta-conflict")
+        let model = AppModel(repository: repo)
+        model.selectedBaseName = baseName
+        await model.loadSelectedNote()
+        model.apply(EditCommand.replaceText(range: TextRange(start: 0, length: 0), replacement: "local"))
+
+        let metaURL = vault.appendingPathComponent("\(baseName).meta.json")
+        let loaded = try await repo.loadNote(baseName: baseName).document
+        var changedMeta = loaded.metadata
+        changedMeta.properties["source"] = "external"
+        let encoded = try JSONEncoder().encode(changedMeta)
+        try encoded.write(to: metaURL, options: .atomic)
+
+        await model.processExternalDiskActivity()
+        XCTAssertNotNil(model.externalEditConflictAlert)
+        XCTAssertNotNil(model.externalEditConflictAlert?.revisionToken)
+    }
 }
