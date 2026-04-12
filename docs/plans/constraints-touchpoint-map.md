@@ -21,7 +21,7 @@ This map links binding constraints in `Constraints.md` to current implementation
 ## 3) Editor/model dual representation and sync
 - **Touchpoints**
   - `Sources/MiranNotesApp/Features/Editor/SingleSurfaceNoteEditor.swift`
-  - `Sources/MiranNotesApp/Features/Editor/TextEditDiff.swift`
+  - `Sources/MiranNotesCore/TextEditDiff.swift`
   - `Sources/MiranNotesApp/Features/Editor/DocumentLayoutController.swift`
 - **Risk class**
   - **Robustness**: desync risk when multiple ingress paths mutate text and structure. Full-buffer fallback now triggers `reconcileBlocksFromText` for heading recovery and surfaces `onFullReplaceWarning` to the user.

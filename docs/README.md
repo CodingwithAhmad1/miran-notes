@@ -15,6 +15,7 @@ Miran Notes is a **local-first** macOS notes app: canonical text in `note.txt`, 
 | [docs/architecture/slash-command-framework.md](architecture/slash-command-framework.md) | Slash command contracts, discovery UX behavior, and extension pattern |
 | [docs/adr/](adr/README.md) | Architecture Decision Records (ADRs) — durable decisions with context |
 | [docs/plans/](plans/README.md) | Planning notes and roadmaps that should live **in the repo** |
+| [docs/plans/editor-interaction-scenarios.md](plans/editor-interaction-scenarios.md) | Manual QA checklist for typing, blocks, spans, IME, large notes |
 
 ## How to use this folder
 
@@ -24,7 +25,7 @@ Miran Notes is a **local-first** macOS notes app: canonical text in `note.txt`, 
 
 ## Code pointers (quick orientation)
 
-- **Core model and edits:** `Sources/MiranNotesCore/` — `NoteDocument` (identity via `metadata.noteID`), `EditCommandEngine` (includes `splitBlock` with `constrainToBlocks`, `reconcileBlocksFromText`), `NoteIntegrity`, `RangeNormalizer`, `SpanAdjuster`, `ExtensionPoints`.
+- **Core model and edits:** `Sources/MiranNotesCore/` — `NoteDocument` (identity via `metadata.noteID`), `EditCommandEngine` (includes `splitBlock` with `constrainToBlocks`, `reconcileBlocksFromText`, `replaceMetadataBlocks`), `TextEditDiff` (UTF-16 incremental sync helper), `NoteIntegrity`, `RangeNormalizer`, `SpanAdjuster`, `ExtensionPoints`.
 - **App and editor:** `Sources/MiranNotesApp/` — `SingleSurfaceNoteEditor` (1 MB cap, full-buffer warning, incremental styling), `EditorVisualStyle`, `SlashCommandRegistry` (open via `register(_:)`, built-ins via `registerBuiltins()`), `SlashQueryDetector`, `SlashCommandMatcher`.
 - **Data layer:** `NoteRepository` (returns `NoteLoadResult`, two-phase `VaultCommitCoordinator`, dirty-flag participants); `LinkGraph`, `RelationshipIndex`, `FolderCatalog`, `PathIndex` (each with `isDirty` flag).
 - **App state:** `AppModel` — `repairNotice`, `editorCursorOffset`, `undoHistory` (count-bounded, 200 steps), `cachedLinkGraph` (debounced refresh), `apply(_:) -> NoteDocument`, `removeCommandInterceptor(_:)`.

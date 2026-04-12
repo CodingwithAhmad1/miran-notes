@@ -8,6 +8,7 @@ ADRs capture **significant, stable decisions** with context and consequences. Th
 |-----|--------|
 | [0001-wiki-links-and-identity.md](0001-wiki-links-and-identity.md) | Wiki links, `noteID`, and resolution |
 | [0002-auxiliary-storage-jsonl.md](0002-auxiliary-storage-jsonl.md) | Auxiliary storage for tables / JSONL under `_aux/` |
+| [0003-folders-paths-and-manifest-v2.md](0003-folders-paths-and-manifest-v2.md) | Nested folders, `relativePath`, manifest v2 |
 
 ## Adding an ADR
 
