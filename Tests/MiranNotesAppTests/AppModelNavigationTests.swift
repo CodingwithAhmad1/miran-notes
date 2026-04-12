@@ -26,6 +26,7 @@ final class AppModelNavigationTests: XCTestCase {
         let (_, baseB) = try await repo.createNote(named: "note-beta")
 
         let model = AppModel(repository: repo)
+        await model.refreshNotes()
         model.selectedBaseName = baseA
         await model.loadSelectedNote()
         model.apply(EditCommand.replaceText(range: TextRange(start: 0, length: 0), replacement: "from-a"))
@@ -45,6 +46,7 @@ final class AppModelNavigationTests: XCTestCase {
         let (_, baseA) = try await repo.createNote(named: "prior-note")
 
         let model = AppModel(repository: repo)
+        await model.refreshNotes()
         model.selectedBaseName = baseA
         await model.loadSelectedNote()
         model.apply(EditCommand.replaceText(range: TextRange(start: 0, length: 0), replacement: "saved-before-new"))
@@ -64,6 +66,7 @@ final class AppModelNavigationTests: XCTestCase {
         let (_, oldBase) = try await repo.createNote(named: "rename-src")
 
         let model = AppModel(repository: repo)
+        await model.refreshNotes()
         model.selectedBaseName = oldBase
         await model.loadSelectedNote()
         model.apply(EditCommand.replaceText(range: TextRange(start: 0, length: 0), replacement: "buffer-text"))
@@ -88,6 +91,7 @@ final class AppModelNavigationTests: XCTestCase {
         let (_, baseB) = try await repo.createNote(named: "rapid-b")
 
         let model = AppModel(repository: repo)
+        await model.refreshNotes()
         model.selectedBaseName = baseA
         await model.loadSelectedNote()
         model.apply(EditCommand.replaceText(range: TextRange(start: 0, length: 0), replacement: "x"))
@@ -110,6 +114,7 @@ final class AppModelNavigationTests: XCTestCase {
         let (_, baseB) = try await repo.createNote(named: "cursor-note-b")
 
         let model = AppModel(repository: repo)
+        await model.refreshNotes()
         model.selectedBaseName = baseA
         await model.loadSelectedNote()
         model.editorCursorOffset = 42

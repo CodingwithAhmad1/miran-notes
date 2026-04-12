@@ -13,6 +13,8 @@ private final class MiranNotesAppDelegate: NSObject, NSApplicationDelegate {
 struct MiranNotesApp: App {
     @NSApplicationDelegateAdaptor(MiranNotesAppDelegate.self) private var appDelegate
     @StateObject private var model: AppModel
+    @State private var conflictDetailsPresented = false
+    @State private var conflictDetailsDiskDate: Date?
 
     init() {
         SlashCommandRegistry.registerBuiltins()
@@ -44,6 +46,25 @@ struct MiranNotesApp: App {
             .sheet(item: $model.tableEditorPayload) { payload in
                 TableEditorSheet(jsonlURL: payload.jsonlURL, schemaURL: payload.schemaURL)
             }
+            .sheet(isPresented: $conflictDetailsPresented) {
+                NavigationStack {
+                    ScrollView {
+                        Text(ExternalEditConflictCopy.detailsLines(diskDate: conflictDetailsDiskDate ?? Date()))
+                            .font(.body)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding()
+                    }
+                    .frame(minWidth: 360, minHeight: 200)
+                    .navigationTitle("Details")
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Done") {
+                                conflictDetailsPresented = false
+                            }
+                        }
+                    }
+                }
+            }
             .alert(
                 "Error",
                 isPresented: Binding(
@@ -58,7 +79,7 @@ struct MiranNotesApp: App {
                 Text(model.lastError ?? "")
             }
             .alert(
-                "File changed on disk",
+                ExternalEditConflictCopy.alertTitle,
                 isPresented: Binding(
                     get: { model.externalEditConflictAlert != nil },
                     set: { newValue in
@@ -68,18 +89,23 @@ struct MiranNotesApp: App {
                     }
                 ),
                 presenting: model.externalEditConflictAlert,
-                actions: { _ in
-                    Button("Reload from disk", role: .destructive) {
+                actions: { conflict in
+                    Button(ExternalEditConflictCopy.buttonKeepEdits, role: .cancel) {
+                        model.resolveExternalEditConflict(reloadFromDisk: false)
+                    }
+                    Button(ExternalEditConflictCopy.buttonUseSavedFile, role: .destructive) {
                         model.resolveExternalEditConflict(reloadFromDisk: true)
                     }
-                    Button("Keep local edits", role: .cancel) {
-                        model.resolveExternalEditConflict(reloadFromDisk: false)
+                    Button(ExternalEditConflictCopy.buttonShowInFinder) {
+                        model.revealSelectedNoteFileInFinder()
+                    }
+                    Button(ExternalEditConflictCopy.buttonDetails) {
+                        conflictDetailsDiskDate = conflict.diskDate
+                        conflictDetailsPresented = true
                     }
                 },
                 message: { _ in
-                    Text(
-                        "This note was modified outside the app while you have unsaved edits. Reload replaces your buffer with the files on disk; keeping edits leaves your text in memory and the next save may overwrite external changes."
-                    )
+                    Text(ExternalEditConflictCopy.alertMessage)
                 }
             )
         }
@@ -105,14 +131,28 @@ struct MiranNotesApp: App {
 private struct EditorRootView: View {
     @ObservedObject var model: AppModel
     @Environment(\.undoManager) private var undoManager
+    @State private var repairDetailsPresented = false
+
     var body: some View {
         Group {
             if let current = model.activeDocument {
                 HSplitView {
                     VStack(spacing: 0) {
-                        if let notice = model.repairNotice {
-                            RepairNoticeBanner(message: notice) {
-                                model.repairNotice = nil
+                        if let advisory = model.repairAdvisory {
+                            RepairNoticeBanner(
+                                advisory: advisory,
+                                onDismiss: { model.dismissRepairAdvisory() },
+                                onShowInFinder: { model.revealSelectedNoteFileInFinder() },
+                                onDetails: {
+                                    repairDetailsPresented = true
+                                },
+                                showDetailsButton: advisory.detailsPlainText != nil
+                            )
+                            .sheet(isPresented: $repairDetailsPresented) {
+                                RepairAdvisoryDetailsSheet(
+                                    detailsText: advisory.detailsPlainText ?? "",
+                                    onDone: { repairDetailsPresented = false }
+                                )
                             }
                         }
                         SingleSurfaceNoteEditor(
@@ -121,15 +161,17 @@ private struct EditorRootView: View {
                                 set: { model.activeDocument = $0 }
                             ),
                             cursorOffset: $model.editorCursorOffset,
+                            pendingEditorScroll: model.pendingEditorScroll,
+                            onPendingEditorScrollConsumed: { model.clearPendingEditorScroll() },
                             onCommands: { commands in model.apply(commands) },
                             onWikiLinkClick: { targetID in
                                 model.openNote(noteID: targetID)
                             },
                             onFullReplaceWarning: {
-                                model.repairNotice = "Block structure may have been partially lost due to a complex paste or undo operation."
+                                model.presentFullBufferAdvisory()
                             },
                             onSizeLimitExceeded: {
-                                model.repairNotice = "Note is at the 1 MB size limit. Content was not added."
+                                model.presentSizeLimitAdvisory()
                             }
                         )
                     }
@@ -140,13 +182,27 @@ private struct EditorRootView: View {
                         Text("Backlinks")
                             .font(.headline)
                         if model.backlinks.isEmpty {
-                            Text("No incoming links")
+                            Text("No notes link here yet")
                                 .foregroundStyle(.secondary)
                                 .font(.caption)
                         } else {
-                            List(model.backlinks, id: \.baseName) { note in
-                                Button(note.title) {
-                                    model.openNote(noteID: note.noteID)
+                            List(model.backlinks, id: \.sourceNoteID) { item in
+                                Button {
+                                    model.openBacklinkSource(item)
+                                } label: {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(item.title)
+                                            .font(.body)
+                                            .multilineTextAlignment(.leading)
+                                        if !item.snippet.isEmpty {
+                                            Text(item.snippet)
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                                .lineLimit(3)
+                                                .multilineTextAlignment(.leading)
+                                        }
+                                    }
+                                    .frame(maxWidth: .infinity, alignment: .leading)
                                 }
                                 .buttonStyle(.plain)
                             }
@@ -159,7 +215,7 @@ private struct EditorRootView: View {
                 .toolbar {
                     ToolbarItemGroup {
                         Menu("Link") {
-                            ForEach(model.noteSummaries.filter { $0.noteID != current.metadata.noteID }, id: \.baseName) { note in
+                            ForEach(model.noteSummaries.filter { $0.noteID != current.metadata.noteID }, id: \.relativePath) { note in
                                 Button(note.title) {
                                     model.insertWikiLink(to: note.noteID, displayText: note.title)
                                 }
@@ -185,23 +241,68 @@ private struct EditorRootView: View {
     }
 }
 
-private struct RepairNoticeBanner: View {
-    let message: String
-    let onDismiss: () -> Void
+private struct RepairAdvisoryDetailsSheet: View {
+    let detailsText: String
+    let onDone: () -> Void
 
     var body: some View {
-        HStack(alignment: .top, spacing: 8) {
-            Image(systemName: "exclamationmark.triangle")
-                .foregroundStyle(.orange)
-            Text(message)
-                .font(.caption)
-                .foregroundStyle(.primary)
-                .fixedSize(horizontal: false, vertical: true)
-            Spacer()
-            Button("Dismiss", action: onDismiss)
-                .buttonStyle(.plain)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+        NavigationStack {
+            ScrollView {
+                Text(verbatim: detailsText)
+                    .font(.body)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding()
+            }
+            .frame(minWidth: 360, minHeight: 220)
+            .navigationTitle("Details")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done", action: onDone)
+                }
+            }
+        }
+    }
+}
+
+private struct RepairNoticeBanner: View {
+    let advisory: RepairAdvisory
+    let onDismiss: () -> Void
+    let onShowInFinder: () -> Void
+    let onDetails: () -> Void
+    let showDetailsButton: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "exclamationmark.triangle")
+                    .foregroundStyle(.orange)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(advisory.title)
+                        .font(.subheadline)
+                        .fontWeight(.semibold)
+                    Text(advisory.explanation)
+                        .font(.caption)
+                        .foregroundStyle(.primary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 8)
+                Button("Got it", action: onDismiss)
+                    .buttonStyle(.plain)
+                    .font(.caption)
+                    .fontWeight(.medium)
+            }
+            HStack(spacing: 12) {
+                Button("Show in Finder", action: onShowInFinder)
+                    .buttonStyle(.plain)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if showDetailsButton {
+                    Button("Details", action: onDetails)
+                        .buttonStyle(.plain)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)

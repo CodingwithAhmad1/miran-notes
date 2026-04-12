@@ -120,6 +120,9 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
     @Binding var document: NoteDocument
     /// Updated on every selection change so callers (e.g. insertWikiLink) know the cursor position.
     @Binding var cursorOffset: Int
+    /// When set for the current document’s `noteID`, the coordinator scrolls to `range` once then calls `onPendingEditorScrollConsumed`.
+    var pendingEditorScroll: PendingEditorScroll?
+    var onPendingEditorScrollConsumed: (() -> Void)?
     /// Returns the resulting NoteDocument synchronously so the coordinator can apply styling immediately,
     /// eliminating the brief lag between command dispatch and the next SwiftUI render cycle.
     var onCommands: ([EditCommand]) -> NoteDocument
@@ -195,9 +198,8 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
         private var highlightedSlashIndex = 0
         private var slashMenuPopover: NSPopover?
         private var slashMenuHost: NSHostingController<SlashCommandMenuView>?
-        /// Last document identity for which `EditorVisualStyle.apply` ran, used to skip unchanged redraws.
-        private var lastStyledDocumentID: UUID?
-        private var lastStyledDocumentText: String?
+        /// Last document snapshot for which `EditorVisualStyle.apply` ran (full equality skips redraw when text and metadata match).
+        private var lastStyledDocument: NoteDocument?
 
         init(_ parent: SingleSurfaceNoteEditor) {
             self.parent = parent
@@ -274,22 +276,20 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
                 )
             } else {
                 // Full-buffer fallback: diff could not be reduced to a single region.
-                // Block structure may be partially collapsed, so attempt best-effort recovery.
+                // Block structure may be partially collapsed; reconcile heading types, then apply via the command pipeline.
                 let previous = parent.document.text
                 let oldBlocks = parent.document.metadata.blocks
-                let afterReplace = runCommandSession(
-                    textView: textView,
-                    commands: [
-                    .replaceText(
-                        range: TextRange(start: 0, length: previous.utf16.count),
-                        replacement: storageString
-                    )
-                    ]
+                let replaceCmd = EditCommand.replaceText(
+                    range: TextRange(start: 0, length: previous.utf16.count),
+                    replacement: storageString
                 )
+                let afterReplace = EditCommandEngine.apply(replaceCmd, to: parent.document)
                 let reconciled = EditCommandEngine.reconcileBlocksFromText(document: afterReplace, oldBlocks: oldBlocks)
-                if reconciled != afterReplace {
-                    _ = parent.onCommands([.repairMetadata])
+                var commands: [EditCommand] = [replaceCmd]
+                if reconciled.metadata.blocks != afterReplace.metadata.blocks {
+                    commands.append(.replaceMetadataBlocks(blocks: reconciled.metadata.blocks))
                 }
+                _ = runCommandSession(textView: textView, commands: commands)
                 parent.onFullReplaceWarning?()
             }
         }
@@ -461,6 +461,7 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
             if textView.string == parent.document.text {
                 refreshVisualChrome(textView: textView, document: parent.document)
                 applyPendingSelectionIfNeeded()
+                applyPendingEditorScrollIfNeeded(textView: textView)
                 refreshSlashMenuState(for: textView)
                 return
             }
@@ -471,6 +472,7 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
                 isApplyingModelUpdate = false
                 refreshVisualChrome(textView: textView, document: parent.document)
                 applyPendingSelectionIfNeeded()
+                applyPendingEditorScrollIfNeeded(textView: textView)
                 refreshSlashMenuState(for: textView)
                 return
             }
@@ -482,17 +484,19 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
             refreshVisualChrome(textView: textView, document: parent.document)
             restoreSelectionClamped(savedSelection)
             applyPendingSelectionIfNeeded()
+            applyPendingEditorScrollIfNeeded(textView: textView)
             refreshSlashMenuState(for: textView)
         }
 
         private func refreshVisualChrome(textView: NSTextView, document: NoteDocument) {
-            // Skip full redraw if the document identity and text are unchanged since last apply.
-            if lastStyledDocumentID == document.id, lastStyledDocumentText == document.text {
+            if lastStyledDocument == document {
+                if let w = textView as? WikiLinkTextView {
+                    w.wikiLinks = document.metadata.links
+                }
                 return
             }
             EditorVisualStyle.apply(to: textView, document: document)
-            lastStyledDocumentID = document.id
-            lastStyledDocumentText = document.text
+            lastStyledDocument = document
             if let w = textView as? WikiLinkTextView {
                 w.wikiLinks = document.metadata.links
             }
@@ -512,6 +516,23 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
             let clampedLocation = min(max(0, pendingSelection.location), maxOffset)
             textView.setSelectedRange(NSRange(location: clampedLocation, length: 0))
             self.pendingSelection = nil
+        }
+
+        private func applyPendingEditorScrollIfNeeded(textView: NSTextView) {
+            guard let p = parent.pendingEditorScroll,
+                  p.noteID == parent.document.metadata.noteID,
+                  !p.range.isEmpty
+            else { return }
+            let maxLen = (textView.string as NSString).length
+            let clamped = p.range.clamped(to: maxLen)
+            guard clamped.length > 0 else {
+                parent.onPendingEditorScrollConsumed?()
+                return
+            }
+            let nsr = NSRange(location: clamped.start, length: clamped.length)
+            textView.setSelectedRange(nsr)
+            textView.scrollRangeToVisible(nsr)
+            parent.onPendingEditorScrollConsumed?()
         }
 
         func textView(

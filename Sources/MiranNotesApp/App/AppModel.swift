@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import MiranNotesCore
 import os.log
@@ -16,21 +17,47 @@ struct TableEditorPayload: Identifiable {
     let schemaURL: URL
 }
 
+/// Pending scroll to a wiki-link range after navigating to `noteID` (e.g. from the backlink panel).
+struct PendingEditorScroll: Equatable {
+    var noteID: UUID
+    var range: MiranNotesCore.TextRange
+}
+
+/// One row in the sidebar outline (folder tree + notes).
+enum SidebarOutlineEntry: Identifiable {
+    case folder(FolderEntry, [SidebarOutlineEntry])
+    case note(NoteSummary)
+
+    var id: String {
+        switch self {
+        case .folder(let f, _):
+            return "f:\(f.id.uuidString)"
+        case .note(let n):
+            return "n:\(n.noteID.uuidString)"
+        }
+    }
+}
+
 @MainActor
 final class AppModel: ObservableObject {
     @Published var noteSummaries: [NoteSummary] = []
+    /// Manifest `relativePath` for the open note (stable selection for tests and shell).
     @Published var selectedBaseName: String?
     @Published var activeDocument: NoteDocument?
-    @Published var backlinks: [NoteSummary] = []
+    @Published var backlinks: [BacklinkItem] = []
+    /// When set, the editor scrolls to this range once that note is loaded.
+    @Published var pendingEditorScroll: PendingEditorScroll?
     @Published var noteQuery: String = ""
     @Published var tableEditorPayload: TableEditorPayload?
     @Published var isLoading = false
     @Published var lastError: String?
-    /// Non-nil when load-time structural repair ran or wiki-link metadata is missing.
+    /// Non-nil when load-time adjustment ran, editor fallback fired, or size limit was hit.
     /// Shown as a dismissible advisory banner — the editor is always open.
-    @Published var repairNotice: String?
+    @Published var repairAdvisory: RepairAdvisory?
     /// When non-nil, shows the external-edit conflict alert (`diskDate` is the on-disk modification time that triggered it).
     @Published var externalEditConflictAlert: ExternalEditConflict?
+    /// Cached folder tree for outline UI (kept in sync with `refreshNotes()`).
+    @Published var folderCatalog: FolderCatalog = FolderCatalog()
 
     private let repository: NoteRepository
     private var saveTask: Task<Void, Never>?
@@ -46,10 +73,19 @@ final class AppModel: ObservableObject {
     private var navigationGeneration = 0
     /// Current cursor offset (UTF-16) in the active editor surface, updated by the coordinator on selection change.
     @Published var editorCursorOffset: Int = 0
-    private let undoPolicy = UndoPolicy.defaultPolicy
-    typealias UndoStep = (before: NoteDocument, after: NoteDocument, actionName: String)
-    /// Parallel history deque for count-based pruning. Oldest entry is index 0. Internal for tests.
-    var undoHistory: [UndoStep] = []
+    private let undoPolicy: UndoPolicy
+    /// One checkpoint per document version: `checkpoints[0]` is the oldest retained state, `checkpoints.last` matches `activeDocument` after each recorded edit.
+    private var undoCheckpoints: [NoteDocument] = []
+    /// One name per undo step (`count == checkpoints.count - 1`).
+    private var undoActionNames: [String] = []
+    private var lastUndoRegistrationDate: Date?
+    private var lastRecordedUndoWasSingleReplaceText = false
+    /// Action names for each undo step (internal for tests; same cardinality as former `UndoStep` array).
+    var undoHistory: [String] { undoActionNames }
+    /// Summed `NoteDocument.estimatedUndoMemoryBytes` for retained checkpoints (diagnostics / `swift test`).
+    var undoRetentionMemoryEstimateBytes: Int {
+        NoteDocument.estimatedUndoBytes(forCheckpoints: undoCheckpoints)
+    }
     private let commandPipelineContract = CommandPipelineContract()
     private var localCommandInterceptors: [UUID: ([EditCommand], NoteDocument, CommandContext) -> [EditCommand]] = [:]
     /// Insertion-ordered list of interceptor keys, so interceptors fire in registration order.
@@ -60,9 +96,14 @@ final class AppModel: ObservableObject {
     private var cachedLinkGraph: LinkGraph?
     private var backlinkRefreshTask: Task<Void, Never>?
 
-    init(repository: NoteRepository, autosaveDebounceMilliseconds: UInt64 = 400) {
+    init(
+        repository: NoteRepository,
+        autosaveDebounceMilliseconds: UInt64 = 400,
+        undoPolicy: UndoPolicy = .defaultPolicy
+    ) {
         self.repository = repository
         self.autosaveDebounceMilliseconds = autosaveDebounceMilliseconds
+        self.undoPolicy = undoPolicy
     }
 
     func setUndoManager(_ manager: UndoManager?) {
@@ -79,7 +120,7 @@ final class AppModel: ObservableObject {
                 lastError = "Link index rebuild failed: \(error.localizedDescription)"
             }
             if selectedBaseName == nil {
-                selectedBaseName = noteSummaries.first?.baseName
+                selectedBaseName = noteSummaries.first?.relativePath
             }
             await loadSelectedNote()
             await refreshBacklinks()
@@ -92,8 +133,82 @@ final class AppModel: ObservableObject {
         defer { isLoading = false }
         do {
             noteSummaries = try await repository.listNotes()
+            folderCatalog = try await repository.loadFolderCatalog()
         } catch {
             lastError = "Failed to list notes: \(error.localizedDescription)"
+        }
+    }
+
+    /// Hierarchical rows for the sidebar (`FolderCatalog` + notes from `filteredNoteSummaries`).
+    var sidebarOutline: [SidebarOutlineEntry] {
+        Self.buildSidebarOutline(
+            folderCatalog: folderCatalog,
+            notes: filteredNoteSummaries,
+            parentID: FolderCatalog.rootFolderID
+        )
+    }
+
+    private static func buildSidebarOutline(
+        folderCatalog: FolderCatalog,
+        notes: [NoteSummary],
+        parentID: UUID
+    ) -> [SidebarOutlineEntry] {
+        let folders = folderCatalog.childFolders(of: parentID).sorted {
+            $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+        }
+        let noteList = notes.filter { $0.folderID == parentID }.sorted {
+            $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
+        }
+        var rows: [SidebarOutlineEntry] = []
+        for f in folders {
+            let children = buildSidebarOutline(folderCatalog: folderCatalog, notes: notes, parentID: f.id)
+            rows.append(.folder(f, children))
+        }
+        for n in noteList {
+            rows.append(.note(n))
+        }
+        return rows
+    }
+
+    func createFolder(parentID: UUID = FolderCatalog.rootFolderID, name: String = "New Folder") {
+        Task { @MainActor in
+            do {
+                _ = try await repository.createFolder(parentID: parentID, name: name)
+                await refreshNotes()
+            } catch {
+                lastError = error.localizedDescription
+            }
+        }
+    }
+
+    func deleteFolder(id: UUID) {
+        Task { @MainActor in
+            do {
+                try await repository.deleteFolder(id: id)
+                await refreshNotes()
+            } catch {
+                lastError = error.localizedDescription
+            }
+        }
+    }
+
+    func deleteSelectedNote() {
+        guard let path = selectedBaseName else { return }
+        Task { @MainActor in
+            do {
+                let manifest = try await repository.loadManifest()
+                guard let id = manifest.entry(relativePath: path)?.noteID else { return }
+                try await repository.deleteNote(noteID: id)
+                await refreshNotes()
+                if noteSummaries.isEmpty {
+                    selectedBaseName = nil
+                } else {
+                    selectedBaseName = noteSummaries.first?.relativePath
+                }
+                await loadSelectedNote()
+            } catch {
+                lastError = error.localizedDescription
+            }
         }
     }
 
@@ -102,7 +217,7 @@ final class AppModel: ObservableObject {
         let q = noteQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !q.isEmpty else { return noteSummaries }
         return noteSummaries.filter { summary in
-            summary.baseName.lowercased().contains(q)
+            summary.relativePath.lowercased().contains(q)
                 || summary.title.lowercased().contains(q)
         }
     }
@@ -112,7 +227,7 @@ final class AppModel: ObservableObject {
             backlinks = []
             return
         }
-        let id = doc.metadata.noteID
+        let targetNoteID = doc.metadata.noteID
         do {
             let graph: LinkGraph
             if let cached = cachedLinkGraph {
@@ -123,15 +238,31 @@ final class AppModel: ObservableObject {
                 graph = loaded
             }
             let resolver = try await repository.linkResolver()
-            let sourceIDs = graph.backlinks(to: id)
-            var result: [NoteSummary] = []
+            let sourceIDs = graph.backlinks(to: targetNoteID)
+            var result: [BacklinkItem] = []
             for sid in sourceIDs {
-                if let base = resolver.baseName(forTargetNoteID: sid),
-                   let title = noteSummaries.first(where: { $0.noteID == sid })?.title {
-                    result.append(NoteSummary(noteID: sid, title: title, baseName: base))
-                } else if let base = resolver.baseName(forTargetNoteID: sid) {
-                    result.append(NoteSummary(noteID: sid, title: base, baseName: base))
+                guard let relPath = resolver.baseName(forTargetNoteID: sid) else { continue }
+                let title =
+                    noteSummaries.first(where: { $0.noteID == sid })?.title
+                    ?? (relPath as NSString).lastPathComponent.replacingOccurrences(of: "-", with: " ").capitalized
+                var snippet = ""
+                var linkRange = MiranNotesCore.TextRange(start: 0, length: 0)
+                if let sourceResult = try? await repository.loadNote(noteID: sid) {
+                    let sourceDoc = sourceResult.document
+                    if let link = sourceDoc.metadata.links.first(where: { $0.targetNoteID == targetNoteID }) {
+                        linkRange = link.range
+                        snippet = BacklinkSnippetBuilder.snippet(around: link.range, in: sourceDoc.text)
+                    }
                 }
+                result.append(
+                    BacklinkItem(
+                        sourceNoteID: sid,
+                        title: title,
+                        relativePath: relPath,
+                        snippet: snippet,
+                        linkRange: linkRange
+                    )
+                )
             }
             backlinks = result
         } catch {
@@ -150,11 +281,28 @@ final class AppModel: ObservableObject {
     }
 
     func openNote(noteID: UUID) {
-        guard let summary = noteSummaries.first(where: { $0.noteID == noteID }) else {
+        guard noteSummaries.contains(where: { $0.noteID == noteID }) else {
             lastError = "Could not open note (not in vault list)."
             return
         }
-        changeSelection(baseName: summary.baseName)
+        pendingEditorScroll = nil
+        changeSelection(noteID: noteID)
+    }
+
+    func openBacklinkSource(_ item: BacklinkItem) {
+        if !item.linkRange.isEmpty {
+            pendingEditorScroll = PendingEditorScroll(noteID: item.sourceNoteID, range: item.linkRange)
+        } else {
+            pendingEditorScroll = nil
+        }
+        if activeDocument?.metadata.noteID == item.sourceNoteID {
+            return
+        }
+        changeSelection(noteID: item.sourceNoteID)
+    }
+
+    func clearPendingEditorScroll() {
+        pendingEditorScroll = nil
     }
 
     func insertWikiLink(to targetNoteID: UUID, displayText: String? = nil) {
@@ -166,14 +314,14 @@ final class AppModel: ObservableObject {
     }
 
     func renameActiveNote(newTitle: String) {
-        guard let oldBase = selectedBaseName else { return }
+        guard let oldPath = selectedBaseName else { return }
         Task { @MainActor in
             await flushCurrentNoteToDiskIfDirty()
             navigationGeneration += 1
             do {
-                let newBase = try await repository.renameNote(from: oldBase, to: newTitle)
+                let newPath = try await repository.renameNote(from: oldPath, to: newTitle)
                 await refreshNotes()
-                selectedBaseName = newBase
+                selectedBaseName = newPath
                 await refreshBacklinks()
             } catch {
                 lastError = "Rename failed: \(error.localizedDescription)"
@@ -219,14 +367,14 @@ final class AppModel: ObservableObject {
             await flushCurrentNoteToDiskIfDirty()
             navigationGeneration += 1
             do {
-                let (document, baseName) = try await repository.createNote(named: "untitled-note")
+                let (document, relPath) = try await repository.createNote(named: "untitled-note")
                 await refreshNotes()
-                selectedBaseName = baseName
+                selectedBaseName = relPath
                 activeDocument = document
                 lastPersistedDocument = document
                 do {
-                    lastKnownDiskDate = try await repository.noteModifiedDate(baseName: baseName)
-                    lastKnownDiskRevision = try await repository.noteRevisionToken(baseName: baseName)
+                    lastKnownDiskDate = try await repository.noteModifiedDate(relativePath: relPath)
+                    lastKnownDiskRevision = try await repository.noteRevisionToken(relativePath: relPath)
                 } catch {
                     lastError = "Failed to read note timestamps: \(error.localizedDescription)"
                 }
@@ -239,24 +387,25 @@ final class AppModel: ObservableObject {
 
     func loadSelectedNote() async {
         editorCursorOffset = 0
-        guard let selectedBaseName else {
+        guard let path = selectedBaseName else {
+            pendingEditorScroll = nil
             activeDocument = nil
             lastPersistedDocument = nil
             lastKnownDiskDate = nil
             lastKnownDiskRevision = nil
-            repairNotice = nil
+            repairAdvisory = nil
             backlinks = []
             clearUndoStack()
             return
         }
         do {
-            let result = try await repository.loadNote(baseName: selectedBaseName)
+            let result = try await repository.loadNote(baseName: path)
             activeDocument = result.document
             lastPersistedDocument = result.document
-            repairNotice = Self.buildRepairNotice(result: result)
+            repairAdvisory = RepairDiagnosticsBuilder.buildLoadAdvisory(result: result)
             do {
-                lastKnownDiskDate = try await repository.noteModifiedDate(baseName: selectedBaseName)
-                lastKnownDiskRevision = try await repository.noteRevisionToken(baseName: selectedBaseName)
+                lastKnownDiskDate = try await repository.noteModifiedDate(relativePath: path)
+                lastKnownDiskRevision = try await repository.noteRevisionToken(relativePath: path)
             } catch {
                 lastError = "Failed to read note timestamps: \(error.localizedDescription)"
             }
@@ -267,21 +416,33 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private static func buildRepairNotice(result: NoteLoadResult) -> String? {
-        var parts: [String] = []
+    func dismissRepairAdvisory() {
+        repairAdvisory = nil
+    }
 
-        if result.wasRepaired {
-            parts.append("Block structure was repaired on load — metadata may not perfectly reflect the original block types.")
-        }
+    func presentFullBufferAdvisory() {
+        repairAdvisory = RepairAdvisory(
+            kind: .fullBufferFallback,
+            title: "We updated how this note is structured",
+            explanation:
+                "A large edit happened in one step, so section information may differ slightly from before. What you see on screen is unchanged.",
+            detailsPlainText: RepairAdvisory.fullBufferDetails
+        )
+    }
 
-        let text = result.document.text
-        let hasWikiSyntax = text.contains("[[")
-        let hasMissingLinkMetadata = hasWikiSyntax && result.document.metadata.links.isEmpty
-        if hasMissingLinkMetadata {
-            parts.append("Note contains [[link]] syntax with no recorded link metadata. Links will not be navigable until re-created in the editor.")
-        }
+    func presentSizeLimitAdvisory() {
+        repairAdvisory = RepairAdvisory(
+            kind: .sizeLimitExceeded,
+            title: "This note can't grow further",
+            explanation: "This note is at the maximum size, so the new text was not added.",
+            detailsPlainText: RepairAdvisory.sizeLimitDetails
+        )
+    }
 
-        return parts.isEmpty ? nil : parts.joined(separator: "\n")
+    func revealSelectedNoteFileInFinder() {
+        guard let path = selectedBaseName else { return }
+        let url = VaultPath.fileURL(vaultRoot: repository.vaultURL, relativePathWithoutExtension: path, extension: "txt")
+        NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 
     @discardableResult
@@ -322,14 +483,56 @@ final class AppModel: ObservableObject {
         }
         guard doc != before else { return doc }
 
-        if recordUndo, let undo = undoManager {
+        if recordUndo, undoManager != nil {
             let after = doc
             let name = Self.undoActionName(for: intercepted)
-            undo.registerUndo(withTarget: self) { model in
-                model.applyUndoSnapshot(from: after, to: before)
+            let singleReplace = Self.isSingleReplaceTextOnly(intercepted)
+            let now = Date()
+            let windowSeconds = Double(undoPolicy.coalesceReplaceTextWindowNanoseconds) / 1_000_000_000.0
+
+            let canTryCoalesce =
+                undoPolicy.coalesceReplaceTextWindowNanoseconds > 0
+                && singleReplace
+                && lastRecordedUndoWasSingleReplaceText
+                && !undoCheckpoints.isEmpty
+                && undoCheckpoints.last == before
+
+            var didCoalesce = false
+            if canTryCoalesce, let lastDate = lastUndoRegistrationDate {
+                let elapsed = now.timeIntervalSince(lastDate)
+                if elapsed < windowSeconds {
+                    undoCheckpoints[undoCheckpoints.count - 1] = after
+                    if !undoActionNames.isEmpty {
+                        undoActionNames[undoActionNames.count - 1] = name
+                    }
+                    reregisterAllUndoActions()
+                    didCoalesce = true
+                }
             }
-            undo.setActionName(name)
-            undoHistory.append((before: before, after: after, actionName: name))
+
+            if !didCoalesce {
+                if undoCheckpoints.isEmpty {
+                    undoCheckpoints = [before, after]
+                    undoActionNames = [name]
+                    let top = 1
+                    undoManager?.registerUndo(withTarget: self) { model in
+                        model.applyCheckpointUndo(fromIndex: top, toIndex: top - 1)
+                    }
+                    undoManager?.setActionName(name)
+                } else {
+                    assert(undoCheckpoints.last == before)
+                    undoCheckpoints.append(after)
+                    undoActionNames.append(name)
+                    let top = undoCheckpoints.count - 1
+                    undoManager?.registerUndo(withTarget: self) { model in
+                        model.applyCheckpointUndo(fromIndex: top, toIndex: top - 1)
+                    }
+                    undoManager?.setActionName(name)
+                }
+            }
+
+            lastRecordedUndoWasSingleReplaceText = singleReplace
+            lastUndoRegistrationDate = now
             enforceUndoPolicyIfNeeded()
         }
 
@@ -339,34 +542,51 @@ final class AppModel: ObservableObject {
         return doc
     }
 
-    private func applyUndoSnapshot(from after: NoteDocument, to before: NoteDocument) {
-        activeDocument = before
+    private func applyCheckpointUndo(fromIndex: Int, toIndex: Int) {
+        guard undoCheckpoints.indices.contains(toIndex) else { return }
+        activeDocument = undoCheckpoints[toIndex]
         scheduleAutosave()
+        scheduleBacklinkRefresh()
         undoManager?.registerUndo(withTarget: self) { model in
-            model.applyUndoSnapshot(from: before, to: after)
+            model.applyCheckpointUndo(fromIndex: toIndex, toIndex: fromIndex)
+        }
+    }
+
+    private func reregisterAllUndoActions() {
+        undoManager?.removeAllActions(withTarget: self)
+        guard undoCheckpoints.count >= 2 else { return }
+        for i in 1..<undoCheckpoints.count {
+            let fromIdx = i
+            let toIdx = i - 1
+            let name = undoActionNames[i - 1]
+            undoManager?.registerUndo(withTarget: self) { model in
+                model.applyCheckpointUndo(fromIndex: fromIdx, toIndex: toIdx)
+            }
+            undoManager?.setActionName(name)
         }
     }
 
     private func clearUndoStack() {
         undoManager?.removeAllActions(withTarget: self)
-        undoHistory.removeAll()
+        undoCheckpoints.removeAll()
+        undoActionNames.removeAll()
+        lastUndoRegistrationDate = nil
+        lastRecordedUndoWasSingleReplaceText = false
     }
 
     private func enforceUndoPolicyIfNeeded() {
         let max = undoPolicy.maxUndoSteps
-        guard undoHistory.count > max else { return }
-        // Trim oldest entries, then re-register surviving steps so NSUndoManager stays in sync.
-        undoHistory = Array(undoHistory.suffix(max))
-        undoManager?.removeAllActions(withTarget: self)
-        for step in undoHistory {
-            let before = step.before
-            let after = step.after
-            undoManager?.registerUndo(withTarget: self) { model in
-                model.applyUndoSnapshot(from: after, to: before)
-            }
-            undoManager?.setActionName(step.actionName)
-        }
+        let steps = undoCheckpoints.count - 1
+        guard steps > max else { return }
+        undoCheckpoints = Array(undoCheckpoints.suffix(max + 1))
+        undoActionNames = Array(undoActionNames.suffix(max))
+        reregisterAllUndoActions()
         Logger.vault.info("Undo stack pruned to \(max, privacy: .public) steps")
+    }
+
+    private static func isSingleReplaceTextOnly(_ commands: [EditCommand]) -> Bool {
+        guard commands.count == 1, case .replaceText = commands[0] else { return false }
+        return true
     }
 
     private static func undoActionName(for commands: [EditCommand]) -> String {
@@ -384,6 +604,8 @@ final class AppModel: ObservableObject {
                     if replacement.isEmpty, range.length > 0 {
                         return "Slash Command"
                     }
+                case (.replaceText, .replaceMetadataBlocks):
+                    return "Full Buffer Edit"
                 default:
                     break
                 }
@@ -400,6 +622,7 @@ final class AppModel: ObservableObject {
             case .insertWikiLink: return "Insert Link"
             case .registerTableArtifact: return "Add Table"
             case .repairMetadata: return "Repair Note"
+            case .replaceMetadataBlocks: return "Recover Blocks"
             }
         })
         if kinds.count == 1, let only = kinds.first {
@@ -412,9 +635,41 @@ final class AppModel: ObservableObject {
         externalEditConflictAlert = nil
         Task { @MainActor in
             if selectedBaseName == baseName { return }
+            if let p = pendingEditorScroll, let path = baseName {
+                let manifest = try? await repository.loadManifest()
+                let newID = manifest?.entry(relativePath: path)?.noteID
+                if newID != p.noteID { pendingEditorScroll = nil }
+            } else if baseName == nil {
+                pendingEditorScroll = nil
+            }
             await flushCurrentNoteToDiskIfDirty()
             navigationGeneration += 1
             selectedBaseName = baseName
+            await loadSelectedNote()
+        }
+    }
+
+    func changeSelection(noteID: UUID?) {
+        externalEditConflictAlert = nil
+        Task { @MainActor in
+            let path: String?
+            if let id = noteID {
+                do {
+                    let manifest = try await repository.loadManifest()
+                    path = manifest.entry(noteID: id)?.relativePath
+                } catch {
+                    path = nil
+                }
+            } else {
+                path = nil
+            }
+            if selectedBaseName == path, activeDocument?.metadata.noteID == noteID { return }
+            if let p = pendingEditorScroll, p.noteID != noteID {
+                pendingEditorScroll = nil
+            }
+            await flushCurrentNoteToDiskIfDirty()
+            navigationGeneration += 1
+            selectedBaseName = path
             await loadSelectedNote()
         }
     }
@@ -423,12 +678,12 @@ final class AppModel: ObservableObject {
     private func flushCurrentNoteToDiskIfDirty() async {
         saveTask?.cancel()
         saveTask = nil
-        guard let doc = activeDocument, let baseName = selectedBaseName else { return }
+        guard let doc = activeDocument, let path = selectedBaseName else { return }
         guard doc != lastPersistedDocument else { return }
         do {
-            try await repository.save(doc, asBaseName: baseName)
-            let modified = try await repository.noteModifiedDate(baseName: baseName)
-            let revision = try await repository.noteRevisionToken(baseName: baseName)
+            try await repository.save(doc, asBaseName: path)
+            let modified = try await repository.noteModifiedDate(relativePath: path)
+            let revision = try await repository.noteRevisionToken(relativePath: path)
             lastKnownDiskDate = modified
             lastKnownDiskRevision = revision
             lastPersistedDocument = doc
@@ -441,7 +696,7 @@ final class AppModel: ObservableObject {
 
     private func scheduleAutosave() {
         saveTask?.cancel()
-        guard let expectedBaseName = selectedBaseName, activeDocument != nil else { return }
+        guard let expectedPath = selectedBaseName, activeDocument != nil else { return }
         let gen = navigationGeneration
         let startedAt = Date()
         saveTask = Task { @MainActor in
@@ -454,13 +709,13 @@ final class AppModel: ObservableObject {
             try? await Task.sleep(for: .milliseconds(autosaveDebounceMilliseconds))
             guard !Task.isCancelled else { return }
             guard gen == navigationGeneration else { return }
-            guard selectedBaseName == expectedBaseName else { return }
+            guard selectedBaseName == expectedPath else { return }
             guard let latest = activeDocument else { return }
             do {
-                try await repository.save(latest, asBaseName: expectedBaseName)
-                let modified = try await repository.noteModifiedDate(baseName: expectedBaseName)
-                let revision = try await repository.noteRevisionToken(baseName: expectedBaseName)
-                guard gen == navigationGeneration, selectedBaseName == expectedBaseName else { return }
+                try await repository.save(latest, asBaseName: expectedPath)
+                let modified = try await repository.noteModifiedDate(relativePath: expectedPath)
+                let revision = try await repository.noteRevisionToken(relativePath: expectedPath)
+                guard gen == navigationGeneration, selectedBaseName == expectedPath else { return }
                 lastKnownDiskDate = modified
                 lastKnownDiskRevision = revision
                 lastPersistedDocument = latest
@@ -528,13 +783,13 @@ final class AppModel: ObservableObject {
     /// Package-internal for tests that simulate vault changes without relying on filesystem timing.
     func processExternalDiskActivity() async {
         guard externalEditConflictAlert == nil else { return }
-        guard let selectedBaseName, activeDocument != nil else { return }
+        guard let path = selectedBaseName, activeDocument != nil else { return }
 
         let diskDate: Date?
         let diskRevision: DocumentRevisionToken?
         do {
-            diskDate = try await repository.noteModifiedDate(baseName: selectedBaseName)
-            diskRevision = try await repository.noteRevisionToken(baseName: selectedBaseName)
+            diskDate = try await repository.noteModifiedDate(relativePath: path)
+            diskRevision = try await repository.noteRevisionToken(relativePath: path)
         } catch {
             lastError = "Failed to read note timestamps: \(error.localizedDescription)"
             return
@@ -550,7 +805,7 @@ final class AppModel: ObservableObject {
 
         let loadedFromDisk: NoteDocument
         do {
-            let raw = try await repository.loadNote(baseName: selectedBaseName)
+            let raw = try await repository.loadNote(baseName: path)
             loadedFromDisk = EditCommandEngine.apply(.repairMetadata, to: raw.document)
         } catch {
             lastError = "Failed to read external changes: \(error.localizedDescription)"

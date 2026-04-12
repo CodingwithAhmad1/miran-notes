@@ -18,8 +18,10 @@ final class AppModelUndoTests: XCTestCase {
         let (_, baseName) = try await repo.createNote(named: "undo-note")
 
         let undoManager = UndoManager()
-        let model = AppModel(repository: repo)
+        let noCoalesce = UndoPolicy(maxUndoSteps: 200, coalesceReplaceTextWindowNanoseconds: 0)
+        let model = AppModel(repository: repo, undoPolicy: noCoalesce)
         model.setUndoManager(undoManager)
+        await model.refreshNotes()
         model.selectedBaseName = baseName
         await model.loadSelectedNote()
 
@@ -38,8 +40,10 @@ final class AppModelUndoTests: XCTestCase {
         let (_, baseName) = try await repo.createNote(named: "undo-retain")
 
         let undoManager = UndoManager()
-        let model = AppModel(repository: repo)
+        let noCoalesce = UndoPolicy(maxUndoSteps: 200, coalesceReplaceTextWindowNanoseconds: 0)
+        let model = AppModel(repository: repo, undoPolicy: noCoalesce)
         model.setUndoManager(undoManager)
+        await model.refreshNotes()
         model.selectedBaseName = baseName
         await model.loadSelectedNote()
 
@@ -61,6 +65,7 @@ final class AppModelUndoTests: XCTestCase {
         let undoManager = UndoManager()
         let model = AppModel(repository: repo)
         model.setUndoManager(undoManager)
+        await model.refreshNotes()
         model.selectedBaseName = baseName
         await model.loadSelectedNote()
 
@@ -83,6 +88,7 @@ final class AppModelUndoTests: XCTestCase {
         let (_, baseName) = try await repo.createNote(named: "interceptor-note")
 
         let model = AppModel(repository: repo)
+        await model.refreshNotes()
         model.selectedBaseName = baseName
         await model.loadSelectedNote()
 

@@ -20,6 +20,7 @@ final class AppModelTableTests: XCTestCase {
         let (_, baseName) = try await repo.createNote(named: "note-with-table")
 
         let model = AppModel(repository: repo)
+        await model.refreshNotes()
         model.selectedBaseName = baseName
         await model.loadSelectedNote()
         XCTAssertNotNil(model.activeDocument)
@@ -42,6 +43,7 @@ final class AppModelTableTests: XCTestCase {
         let (_, baseName) = try await repo.createNote(named: "table-persist")
 
         let model = AppModel(repository: repo)
+        await model.refreshNotes()
         model.selectedBaseName = baseName
         await model.loadSelectedNote()
 
@@ -66,9 +68,9 @@ final class AppModelTableTests: XCTestCase {
         let targetID = targetDoc.document.metadata.noteID
 
         let model = AppModel(repository: repo)
+        await model.refreshNotes()
         model.selectedBaseName = baseName
         await model.loadSelectedNote()
-        await model.refreshNotes()
 
         // Set cursor to position 0 (start of document).
         model.editorCursorOffset = 0
@@ -88,9 +90,9 @@ final class AppModelTableTests: XCTestCase {
         let targetID = targetDoc.document.metadata.noteID
 
         let model = AppModel(repository: repo)
+        await model.refreshNotes()
         model.selectedBaseName = baseName
         await model.loadSelectedNote()
-        await model.refreshNotes()
 
         let beforeText = model.activeDocument?.text ?? ""
         model.editorCursorOffset = beforeText.utf16.count
@@ -109,6 +111,7 @@ final class AppModelTableTests: XCTestCase {
         let (_, baseName) = try await repo.createNote(named: "apply-return-test")
 
         let model = AppModel(repository: repo)
+        await model.refreshNotes()
         model.selectedBaseName = baseName
         await model.loadSelectedNote()
 
@@ -128,6 +131,7 @@ final class AppModelTableTests: XCTestCase {
         let (_, baseName) = try await repo.createNote(named: "interceptor-test")
 
         let model = AppModel(repository: repo)
+        await model.refreshNotes()
         model.selectedBaseName = baseName
         await model.loadSelectedNote()
 

@@ -18,10 +18,11 @@ final class AppModelRepairNoticeTests: XCTestCase {
         let (_, baseName) = try await repo.createNote(named: "clean-note")
 
         let model = AppModel(repository: repo)
+        await model.refreshNotes()
         model.selectedBaseName = baseName
         await model.loadSelectedNote()
 
-        XCTAssertNil(model.repairNotice)
+        XCTAssertNil(model.repairAdvisory)
     }
 
     func testRepairNoticeSetWhenBlocksDoNotCoverText() async throws {
@@ -50,10 +51,12 @@ final class AppModelRepairNoticeTests: XCTestCase {
         try encoder.encode(badMeta).write(to: metaURL)
 
         let model = AppModel(repository: repo)
+        await model.refreshNotes()
         model.selectedBaseName = baseName
         await model.loadSelectedNote()
 
-        XCTAssertNotNil(model.repairNotice, "Expected repair notice for mismatched block ranges")
+        XCTAssertNotNil(model.repairAdvisory, "Expected repair advisory for mismatched block ranges")
+        XCTAssertEqual(model.repairAdvisory?.kind, .loadStructuralRepair)
     }
 
     func testRepairNoticeClearsWhenSwitchingToCleanNote() async throws {
@@ -74,16 +77,17 @@ final class AppModelRepairNoticeTests: XCTestCase {
         try encoder.encode(badMeta).write(to: metaURL)
 
         let model = AppModel(repository: repo)
+        await model.refreshNotes()
         model.selectedBaseName = brokenBase
         await model.loadSelectedNote()
-        XCTAssertNotNil(model.repairNotice)
+        XCTAssertNotNil(model.repairAdvisory)
 
         model.changeSelection(baseName: cleanBase)
         for _ in 0..<80 {
             if model.selectedBaseName == cleanBase { break }
             try await Task.sleep(for: .milliseconds(25))
         }
-        XCTAssertNil(model.repairNotice)
+        XCTAssertNil(model.repairAdvisory)
     }
 
     func testRepairNoticeIncludesWikiLinkAdvisoryWhenSyntaxPresentButLinksEmpty() async throws {
@@ -106,13 +110,15 @@ final class AppModelRepairNoticeTests: XCTestCase {
         try encoder.encode(meta).write(to: metaURL)
 
         let model = AppModel(repository: repo)
+        await model.refreshNotes()
         model.selectedBaseName = baseName
         await model.loadSelectedNote()
 
-        guard let notice = model.repairNotice else {
-            XCTFail("Expected repair notice for missing link metadata")
+        guard let advisory = model.repairAdvisory else {
+            XCTFail("Expected repair advisory for missing link metadata")
             return
         }
-        XCTAssertTrue(notice.contains("[[link]]"), "Notice should mention wiki-link syntax")
+        XCTAssertEqual(advisory.kind, .wikiLinksMissingMetadata)
+        XCTAssertTrue(advisory.explanation.lowercased().contains("link"))
     }
 }

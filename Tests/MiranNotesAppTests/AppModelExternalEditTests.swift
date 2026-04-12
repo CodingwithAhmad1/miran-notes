@@ -17,6 +17,7 @@ final class AppModelExternalEditTests: XCTestCase {
         try await repo.ensureVault()
         let (_, baseName) = try await repo.createNote(named: "conflict-note")
         let model = AppModel(repository: repo)
+        await model.refreshNotes()
         model.selectedBaseName = baseName
         await model.loadSelectedNote()
         model.apply(EditCommand.replaceText(range: TextRange(start: 0, length: 0), replacement: "local"))
@@ -34,6 +35,7 @@ final class AppModelExternalEditTests: XCTestCase {
         try await repo.ensureVault()
         let (_, baseName) = try await repo.createNote(named: "keep-local")
         let model = AppModel(repository: repo)
+        await model.refreshNotes()
         model.selectedBaseName = baseName
         await model.loadSelectedNote()
         model.apply(EditCommand.replaceText(range: TextRange(start: 0, length: 0), replacement: "L"))
@@ -57,6 +59,7 @@ final class AppModelExternalEditTests: XCTestCase {
         try await repo.ensureVault()
         let (_, baseName) = try await repo.createNote(named: "reload-me")
         let model = AppModel(repository: repo)
+        await model.refreshNotes()
         model.selectedBaseName = baseName
         await model.loadSelectedNote()
         model.apply(EditCommand.replaceText(range: TextRange(start: 0, length: 0), replacement: "LOCAL"))
@@ -83,6 +86,7 @@ final class AppModelExternalEditTests: XCTestCase {
         try await repo.ensureVault()
         let (_, baseName) = try await repo.createNote(named: "meta-conflict")
         let model = AppModel(repository: repo)
+        await model.refreshNotes()
         model.selectedBaseName = baseName
         await model.loadSelectedNote()
         model.apply(EditCommand.replaceText(range: TextRange(start: 0, length: 0), replacement: "local"))
