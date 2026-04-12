@@ -42,6 +42,7 @@ final class PlanningModel: ObservableObject {
     @Published var isLoaded = false
     @Published var lastError: String?
     @Published var config: PlanningConfig = .default
+    var onDataChanged: (() -> Void)?
 
     let _databaseRepo: DatabaseRepository
     private let configManager: PlanningConfigManager
@@ -99,6 +100,7 @@ final class PlanningModel: ObservableObject {
     func refreshAll() async {
         await refreshTasks()
         await refreshSessions()
+        onDataChanged?()
     }
 
     func refreshTasks() async {
@@ -158,7 +160,9 @@ final class PlanningModel: ObservableObject {
         time: String? = nil,
         duration: Int? = nil,
         priority: String? = nil,
-        project: String? = nil
+        project: String? = nil,
+        sourceNoteID: UUID? = nil,
+        forcedRowID: UUID? = nil
     ) async {
         guard let dbID = tasksDatabaseID else { return }
         var cells: [String: String] = [
@@ -172,13 +176,20 @@ final class PlanningModel: ObservableObject {
         if let duration { cells["duration"] = String(duration) }
         if let priority { cells["priority"] = priority }
         if let project { cells["project"] = project }
+        if let sourceNoteID { cells["linkedNote"] = sourceNoteID.uuidString }
 
         do {
             let doc = try await _databaseRepo.openDocument(id: dbID)
             try await doc.loadIfNeeded()
-            await doc.insertRow(TableRowRecord(cells: cells))
+            let desiredRowID = forcedRowID ?? UUID()
+            let existing = await doc.allRows()
+            if existing.contains(where: { $0.id == desiredRowID }) {
+                return
+            }
+            await doc.insertRow(TableRowRecord(id: desiredRowID, cells: cells))
             try await doc.flushToDisk()
             await refreshTasks()
+            onDataChanged?()
         } catch {
             lastError = "Failed to add task: \(error.localizedDescription)"
         }
@@ -193,7 +204,9 @@ final class PlanningModel: ObservableObject {
         date: Date? = nil,
         startTime: String? = nil,
         duration: Int? = nil,
-        objective: String? = nil
+        objective: String? = nil,
+        sourceNoteID: UUID? = nil,
+        forcedRowID: UUID? = nil
     ) async {
         guard let dbID = sessionsDatabaseID else { return }
         var cells: [String: String] = [
@@ -208,13 +221,20 @@ final class PlanningModel: ObservableObject {
         if let startTime { cells["startTime"] = startTime }
         if let duration { cells["duration"] = String(duration) }
         if let objective { cells["objective"] = objective }
+        if let sourceNoteID { cells["linkedNote"] = sourceNoteID.uuidString }
 
         do {
             let doc = try await _databaseRepo.openDocument(id: dbID)
             try await doc.loadIfNeeded()
-            await doc.insertRow(TableRowRecord(cells: cells))
+            let desiredRowID = forcedRowID ?? UUID()
+            let existing = await doc.allRows()
+            if existing.contains(where: { $0.id == desiredRowID }) {
+                return
+            }
+            await doc.insertRow(TableRowRecord(id: desiredRowID, cells: cells))
             try await doc.flushToDisk()
             await refreshSessions()
+            onDataChanged?()
         } catch {
             lastError = "Failed to add session: \(error.localizedDescription)"
         }
@@ -232,6 +252,7 @@ final class PlanningModel: ObservableObject {
             await doc.updateCell(rowID: rowID, columnID: "status", value: newStatus)
             try await doc.flushToDisk()
             await refreshTasks()
+            onDataChanged?()
         } catch {
             lastError = "Failed to update task: \(error.localizedDescription)"
         }
@@ -244,6 +265,7 @@ final class PlanningModel: ObservableObject {
             await doc.updateRow(id: rowID, cells: cells)
             try await doc.flushToDisk()
             await refreshTasks()
+            onDataChanged?()
         } catch {
             lastError = "Failed to update task: \(error.localizedDescription)"
         }
@@ -256,6 +278,7 @@ final class PlanningModel: ObservableObject {
             await doc.deleteRow(id: rowID)
             try await doc.flushToDisk()
             await refreshTasks()
+            onDataChanged?()
         } catch {
             lastError = "Failed to delete task: \(error.localizedDescription)"
         }
@@ -270,6 +293,20 @@ final class PlanningModel: ObservableObject {
             await doc.updateCell(rowID: rowID, columnID: "status", value: status)
             try await doc.flushToDisk()
             await refreshSessions()
+            onDataChanged?()
+        } catch {
+            lastError = "Failed to update session: \(error.localizedDescription)"
+        }
+    }
+
+    func updateSession(rowID: UUID, cells: [String: String]) async {
+        guard let dbID = sessionsDatabaseID else { return }
+        do {
+            let doc = try await _databaseRepo.openDocument(id: dbID)
+            await doc.updateRow(id: rowID, cells: cells)
+            try await doc.flushToDisk()
+            await refreshSessions()
+            onDataChanged?()
         } catch {
             lastError = "Failed to update session: \(error.localizedDescription)"
         }
@@ -282,10 +319,14 @@ final class PlanningModel: ObservableObject {
             await doc.deleteRow(id: rowID)
             try await doc.flushToDisk()
             await refreshSessions()
+            onDataChanged?()
         } catch {
             lastError = "Failed to delete session: \(error.localizedDescription)"
         }
     }
+
+    func taskDatabaseID() -> UUID? { tasksDatabaseID }
+    func sessionsDatabaseIDValue() -> UUID? { sessionsDatabaseID }
 
     // MARK: - Date-range queries
 

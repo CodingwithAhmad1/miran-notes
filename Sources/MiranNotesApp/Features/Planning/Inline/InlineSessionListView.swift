@@ -35,31 +35,13 @@ struct InlineSessionListView: View {
     }
 
     private func compactSessionRow(_ session: TableRowRecord) -> some View {
-        HStack(spacing: 6) {
-            RoundedRectangle(cornerRadius: 2)
-                .fill(sessionColor(session))
-                .frame(width: 3, height: 16)
-
-            VStack(alignment: .leading, spacing: 0) {
-                Text(session.cells["title"] ?? "")
-                    .font(.caption)
-                    .lineLimit(1)
-                if let time = session.cells["startTime"], !time.isEmpty {
-                    Text(time)
-                        .font(.system(size: 9))
-                        .foregroundStyle(.secondary)
-                }
+        VStack(alignment: .leading, spacing: 0) {
+            InlineDatabaseRowView(row: session, kind: .session)
+            if let time = session.cells["startTime"], !time.isEmpty {
+                Text(time)
+                    .font(.system(size: 9))
+                    .foregroundStyle(.secondary)
             }
-        }
-    }
-
-    private func sessionColor(_ session: TableRowRecord) -> Color {
-        switch session.cells["type"] {
-        case "session": return .indigo
-        case "block": return .gray
-        case "habit": return .green
-        case "event": return .purple
-        default: return .blue
         }
     }
 }

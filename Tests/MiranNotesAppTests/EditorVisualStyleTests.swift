@@ -175,16 +175,10 @@ final class EditorVisualStyleTests: XCTestCase {
         // Simulate startup registration
         SlashCommandRegistry.registerBuiltins()
         let items = SlashCommandRegistry.catalogItems()
-        XCTAssertEqual(items.count, 8, "All 8 built-in slash commands must be registered")
         let ids = Set(items.map(\.id))
-        XCTAssertTrue(ids.contains("h1"))
-        XCTAssertTrue(ids.contains("h2"))
-        XCTAssertTrue(ids.contains("h3"))
-        XCTAssertTrue(ids.contains("p"))
-        XCTAssertTrue(ids.contains("code"))
-        XCTAssertTrue(ids.contains("list"))
-        XCTAssertTrue(ids.contains("divider"))
-        XCTAssertTrue(ids.contains("callout"))
+        // Core block commands (8). Planning may register additional commands in the same static catalog.
+        let coreBuiltinIDs = Set(["h1", "h2", "h3", "p", "code", "list", "divider", "callout"])
+        XCTAssertEqual(ids.intersection(coreBuiltinIDs), coreBuiltinIDs, "All core built-in slash commands must be registered")
     }
 
     func testRegisterCustomDescriptorAppearsInCatalog() {

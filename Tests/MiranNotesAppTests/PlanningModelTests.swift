@@ -67,6 +67,23 @@ final class PlanningModelTests: XCTestCase {
         XCTAssertEqual(model.todayTasks.first?.cells["status"], "open")
     }
 
+    func testQuickAddTaskFromNoteContextSetsLinkedNote() async throws {
+        let vault = try tempVaultURL()
+        try ensureVault(vault)
+        let model = makeModel(vault)
+        await model.bootstrap()
+        let noteID = UUID()
+
+        await model.quickAddTask(
+            title: "Linked task",
+            date: model.selectedDate,
+            sourceNoteID: noteID
+        )
+
+        let row = try XCTUnwrap(model.todayTasks.first(where: { $0.cells["title"] == "Linked task" }))
+        XCTAssertEqual(row.cells["linkedNote"], noteID.uuidString)
+    }
+
     func testQuickAddSessionAppearsInTodaySessions() async throws {
         let vault = try tempVaultURL()
         try ensureVault(vault)

@@ -16,6 +16,8 @@ public struct NoteLink: Codable, Equatable, Sendable {
 
 public enum EmbeddedArtifactKind: String, Codable, Sendable, CaseIterable {
     case table
+    case databaseRow
+    case databaseView
 }
 
 /// Reference to auxiliary storage under `vault/_aux/{noteID}/`.
@@ -29,6 +31,18 @@ public struct EmbeddedArtifact: Codable, Equatable, Sendable {
         self.id = id
         self.kind = kind
         self.relativePath = relativePath
+    }
+}
+
+public struct DatabaseRowReference: Codable, Equatable, Sendable {
+    public var databaseID: UUID
+    public var rowID: UUID
+    public var blockID: String?
+
+    public init(databaseID: UUID, rowID: UUID, blockID: String? = nil) {
+        self.databaseID = databaseID
+        self.rowID = rowID
+        self.blockID = blockID
     }
 }
 

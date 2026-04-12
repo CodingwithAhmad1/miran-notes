@@ -20,6 +20,7 @@ public struct NoteMetadata: Codable, Equatable {
     public var spans: [Span]
     public var links: [NoteLink]
     public var artifacts: [EmbeddedArtifact]
+    public var databaseRowReferences: [DatabaseRowReference]
     /// Small key-value properties for queries / front-matter style use (v2+).
     public var properties: [String: String]
 
@@ -33,6 +34,7 @@ public struct NoteMetadata: Codable, Equatable {
             spans: [],
             links: [],
             artifacts: [],
+            databaseRowReferences: [],
             properties: [:]
         )
     }
@@ -44,6 +46,7 @@ public struct NoteMetadata: Codable, Equatable {
         spans: [Span],
         links: [NoteLink] = [],
         artifacts: [EmbeddedArtifact] = [],
+        databaseRowReferences: [DatabaseRowReference] = [],
         properties: [String: String] = [:]
     ) {
         self.schemaVersion = schemaVersion
@@ -52,6 +55,7 @@ public struct NoteMetadata: Codable, Equatable {
         self.spans = spans
         self.links = links
         self.artifacts = artifacts
+        self.databaseRowReferences = databaseRowReferences
         self.properties = properties
     }
 
@@ -62,6 +66,7 @@ public struct NoteMetadata: Codable, Equatable {
         case spans
         case links
         case artifacts
+        case databaseRowReferences
         case properties
     }
 
@@ -73,6 +78,7 @@ public struct NoteMetadata: Codable, Equatable {
         spans = try c.decodeIfPresent([Span].self, forKey: .spans) ?? []
         links = try c.decodeIfPresent([NoteLink].self, forKey: .links) ?? []
         artifacts = try c.decodeIfPresent([EmbeddedArtifact].self, forKey: .artifacts) ?? []
+        databaseRowReferences = try c.decodeIfPresent([DatabaseRowReference].self, forKey: .databaseRowReferences) ?? []
         properties = try c.decodeIfPresent([String: String].self, forKey: .properties) ?? [:]
     }
 
@@ -84,6 +90,7 @@ public struct NoteMetadata: Codable, Equatable {
         try c.encode(spans, forKey: .spans)
         try c.encode(links, forKey: .links)
         try c.encode(artifacts, forKey: .artifacts)
+        try c.encode(databaseRowReferences, forKey: .databaseRowReferences)
         try c.encode(properties, forKey: .properties)
     }
 }

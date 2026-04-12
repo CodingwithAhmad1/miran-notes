@@ -23,7 +23,17 @@ struct SlashCommandDescriptor {
     let produce: (_ tokenWithoutSlash: String, _ tokenRange: MiranNotesCore.TextRange, _ blockID: String) -> [EditCommand]?
 
     func matchesToken(_ tokenWithoutSlash: String) -> Bool {
-        tokenWithoutSlash == id || aliases.contains(tokenWithoutSlash)
+        let command = Self.commandToken(from: tokenWithoutSlash)
+        return command == id || aliases.contains(command)
+    }
+
+    static func commandToken(from tokenWithoutSlash: String) -> String {
+        tokenWithoutSlash
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(whereSeparator: \.isWhitespace)
+            .first
+            .map(String.init)?
+            .lowercased() ?? ""
     }
 
     func accepts(match: SlashCommitMatch, blockType: BlockType?) -> Bool {
@@ -196,6 +206,7 @@ enum SlashCommandRegistry {
     }
 
     static func editCommands(for match: SlashCommitMatch, blockID: String, blockType: BlockType? = nil) -> [EditCommand]? {
+        registerBuiltins()
         let tokenRange = MiranNotesCore.TextRange(
             start: match.lineStartUTF16,
             length: match.commitUTF16Index - match.lineStartUTF16
@@ -210,7 +221,8 @@ enum SlashCommandRegistry {
     }
 
     static func catalogItems() -> [SlashCommandCatalogItem] {
-        descriptors.map(\.catalogItem)
+        registerBuiltins()
+        return descriptors.map(\.catalogItem)
     }
 
     static func resolveCatalogCommand(
@@ -219,6 +231,7 @@ enum SlashCommandRegistry {
         blockID: String,
         blockType: BlockType? = nil
     ) -> [EditCommand]? {
+        registerBuiltins()
         guard let descriptor = descriptors.first(where: { $0.id == catalogID }) else { return nil }
         guard descriptor.accepts(match: SlashCommitMatch(
             lineStartUTF16: queryTokenRange.start,

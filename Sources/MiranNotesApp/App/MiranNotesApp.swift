@@ -255,6 +255,17 @@ private struct EditorRootView: View {
                     .navigationTitle("Editor")
 
                     VStack(alignment: .leading, spacing: 8) {
+                        if let planning = model.planningModel {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("Planning")
+                                    .font(.headline)
+                                InlineTaskListView(model: planning, noteID: current.metadata.noteID)
+                                Divider()
+                                InlineSessionListView(model: planning, noteID: current.metadata.noteID)
+                            }
+                            .padding(.bottom, 8)
+                        }
+
                         Text("Backlinks")
                             .font(.headline)
                         if model.backlinks.isEmpty {

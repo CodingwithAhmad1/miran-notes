@@ -48,21 +48,8 @@ struct InlineTaskListView: View {
     }
 
     private func compactTaskRow(_ task: TableRowRecord) -> some View {
-        HStack(spacing: 6) {
-            let isComplete = task.cells["status"] == "complete"
-            Button {
-                Task { await model.toggleTaskComplete(rowID: task.id) }
-            } label: {
-                Image(systemName: isComplete ? "checkmark.circle.fill" : "circle")
-                    .foregroundStyle(isComplete ? .green : .secondary)
-                    .font(.caption)
-            }
-            .buttonStyle(.plain)
-
-            Text(task.cells["title"] ?? "")
-                .font(.caption)
-                .strikethrough(isComplete)
-                .lineLimit(1)
+        InlineDatabaseRowView(row: task, kind: .task) { rowID in
+            Task { await model.toggleTaskComplete(rowID: rowID) }
         }
     }
 }

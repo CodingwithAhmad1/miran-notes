@@ -11,6 +11,18 @@ final class AppModelTableTests: XCTestCase {
             .appendingPathComponent("MiranTable-\(UUID().uuidString)", isDirectory: true)
     }
 
+    private func waitUntil(
+        timeoutMs: Int = 2_000,
+        checkEveryMs: Int = 25,
+        condition: @escaping () -> Bool
+    ) async {
+        let iterations = max(1, timeoutMs / checkEveryMs)
+        for _ in 0..<iterations {
+            if condition() { return }
+            try? await Task.sleep(for: .milliseconds(checkEveryMs))
+        }
+    }
+
     // MARK: - addTableToActiveNote
 
     func testAddTableToActiveNoteRegistersArtifactInActiveDocument() async throws {
@@ -171,5 +183,119 @@ final class AppModelTableTests: XCTestCase {
 
         _ = model.apply(.replaceText(range: TextRange(start: 0, length: 0), replacement: "hello"))
         XCTAssertEqual(model.activeDocument?.text, "HELLO")
+    }
+
+    func testTaskSlashCommandCreatesRealLinkedDatabaseRow() async throws {
+        SlashCommandRegistry.registerPlanningCommands()
+        let vault = try tempVaultURL()
+        let repo = NoteRepository(vaultURL: vault)
+        try await repo.ensureVault()
+        let (_, baseName) = try await repo.createNote(named: "slash-task-note")
+
+        let model = AppModel(repository: repo)
+        model.loadVault()
+        await waitUntil { model.planningModel?.isLoaded == true }
+        model.selectedBaseName = baseName
+        await model.loadSelectedNote()
+
+        let blockID = try XCTUnwrap(model.activeDocument?.metadata.blocks.first?.id)
+        let noteID = try XCTUnwrap(model.activeDocument?.metadata.noteID)
+        let slashText = "/task Buy milk"
+        _ = model.apply(.replaceText(range: TextRange(start: 0, length: 0), replacement: slashText))
+
+        let match = SlashCommitMatch(
+            lineStartUTF16: 0,
+            commitUTF16Index: slashText.utf16.count,
+            commitCharacter: .newline,
+            tokenWithoutSlash: "task Buy milk"
+        )
+        let commands = try XCTUnwrap(SlashCommandRegistry.editCommands(for: match, blockID: blockID, blockType: .paragraph))
+        _ = model.apply(commands)
+
+        await waitUntil {
+            model.planningModel?.allTasks.contains(where: { $0.cells["title"] == "Buy milk" }) == true
+        }
+        let taskRow = try XCTUnwrap(model.planningModel?.allTasks.first(where: { $0.cells["title"] == "Buy milk" }))
+        XCTAssertEqual(taskRow.cells["linkedNote"], noteID.uuidString)
+        XCTAssertTrue(
+            model.activeDocument?.metadata.databaseRowReferences.contains(where: { $0.rowID == taskRow.id }) == true,
+            "Slash task should register metadata row reference"
+        )
+    }
+
+    func testToggleInlineTaskStatusUpdatesDatabaseRow() async throws {
+        let vault = try tempVaultURL()
+        let repo = NoteRepository(vaultURL: vault)
+        try await repo.ensureVault()
+        let (_, baseName) = try await repo.createNote(named: "toggle-inline")
+
+        let model = AppModel(repository: repo)
+        model.loadVault()
+        await waitUntil { model.planningModel?.isLoaded == true }
+        model.selectedBaseName = baseName
+        await model.loadSelectedNote()
+        let noteID = try XCTUnwrap(model.activeDocument?.metadata.noteID)
+        let planning = try XCTUnwrap(model.planningModel)
+        await planning.quickAddTask(title: "Inline toggle", sourceNoteID: noteID)
+        let rowID = try XCTUnwrap(planning.allTasks.first(where: { $0.cells["title"] == "Inline toggle" })?.id)
+
+        await model.toggleInlineTaskStatus(rowID: rowID)
+        await waitUntil {
+            model.planningModel?.allTasks.first(where: { $0.id == rowID })?.cells["status"] == "complete"
+        }
+
+        let refreshed = model.planningModel?.allTasks.first(where: { $0.id == rowID })
+        XCTAssertEqual(refreshed?.cells["status"], "complete")
+    }
+
+    func testLinkActiveNoteToSessionUpdatesSessionsDatabase() async throws {
+        let vault = try tempVaultURL()
+        let repo = NoteRepository(vaultURL: vault)
+        try await repo.ensureVault()
+        let (_, baseName) = try await repo.createNote(named: "session-link-note")
+
+        let model = AppModel(repository: repo)
+        model.loadVault()
+        await waitUntil { model.planningModel?.isLoaded == true }
+        model.selectedBaseName = baseName
+        await model.loadSelectedNote()
+        let noteID = try XCTUnwrap(model.activeDocument?.metadata.noteID)
+        let planning = try XCTUnwrap(model.planningModel)
+        await planning.quickAddSession(title: "Link me")
+        let rowID = try XCTUnwrap(planning.allSessions.first(where: { $0.cells["title"] == "Link me" })?.id)
+
+        await model.linkActiveNoteToSession(rowID: rowID)
+        await waitUntil {
+            model.planningModel?.allSessions.first(where: { $0.id == rowID })?.cells["linkedNote"] == noteID.uuidString
+        }
+
+        XCTAssertEqual(
+            model.planningModel?.allSessions.first(where: { $0.id == rowID })?.cells["linkedNote"],
+            noteID.uuidString
+        )
+    }
+
+    func testPlanningRefreshSynchronizesInlineReferences() async throws {
+        let vault = try tempVaultURL()
+        let repo = NoteRepository(vaultURL: vault)
+        try await repo.ensureVault()
+        let (_, baseName) = try await repo.createNote(named: "bidi-sync-note")
+
+        let model = AppModel(repository: repo)
+        model.loadVault()
+        await waitUntil { model.planningModel?.isLoaded == true }
+        model.selectedBaseName = baseName
+        await model.loadSelectedNote()
+        let planning = try XCTUnwrap(model.planningModel)
+        await planning.quickAddTask(title: "Sync marker")
+        let task = try XCTUnwrap(planning.allTasks.first(where: { $0.cells["title"] == "Sync marker" }))
+        let dbID = try XCTUnwrap(planning.taskDatabaseID())
+
+        _ = model.apply(.registerDatabaseRow(databaseID: dbID, rowID: task.id))
+        model.inlineDatabaseRowReferences = []
+        await planning.refreshAll()
+        await waitUntil { !model.inlineDatabaseRowReferences.isEmpty }
+
+        XCTAssertTrue(model.inlineDatabaseRowReferences.contains(where: { $0.rowID == task.id }))
     }
 }

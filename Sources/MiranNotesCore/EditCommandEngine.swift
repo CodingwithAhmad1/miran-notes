@@ -12,6 +12,8 @@ public enum EditCommand {
     case insertWikiLink(utf16Offset: Int, targetNoteID: UUID, displayText: String)
     /// Registers a table artifact path under `_aux/{noteID}/` (file created by repository / UI).
     case registerTableArtifact(artifactID: UUID, relativePath: String)
+    /// Registers an inline database row reference in note metadata.
+    case registerDatabaseRow(databaseID: UUID, rowID: UUID)
     case repairMetadata
     /// Replaces `metadata.blocks` after a full-buffer text sync, reconstraining spans and links. Text must already match `document.text`.
     case replaceMetadataBlocks(blocks: [Block])
@@ -40,6 +42,8 @@ public struct EditCommandEngine {
             next = insertWikiLink(document: next, utf16Offset: utf16Offset, targetNoteID: targetNoteID, displayText: displayText)
         case let .registerTableArtifact(artifactID, relativePath):
             next = registerTableArtifact(document: next, artifactID: artifactID, relativePath: relativePath)
+        case let .registerDatabaseRow(databaseID, rowID):
+            next = registerDatabaseRow(document: next, databaseID: databaseID, rowID: rowID)
         case .repairMetadata:
             next = repair(document: next)
         case let .replaceMetadataBlocks(blocks):
@@ -226,6 +230,16 @@ public struct EditCommandEngine {
         let artifact = EmbeddedArtifact(id: artifactID, kind: .table, relativePath: relativePath)
         if !next.metadata.artifacts.contains(where: { $0.id == artifactID }) {
             next.metadata.artifacts.append(artifact)
+        }
+        return next
+    }
+
+    private static func registerDatabaseRow(document: NoteDocument, databaseID: UUID, rowID: UUID) -> NoteDocument {
+        var next = document
+        if !next.metadata.databaseRowReferences.contains(where: { $0.databaseID == databaseID && $0.rowID == rowID }) {
+            next.metadata.databaseRowReferences.append(
+                DatabaseRowReference(databaseID: databaseID, rowID: rowID, blockID: nil)
+            )
         }
         return next
     }

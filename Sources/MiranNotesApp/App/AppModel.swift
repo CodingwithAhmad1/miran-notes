@@ -114,6 +114,7 @@ final class AppModel: ObservableObject {
     @Published var externalTextCompare: ExternalTextComparePayload?
     /// Cached folder tree for outline UI (kept in sync with `refreshNotes()`).
     @Published var folderCatalog: FolderCatalog = FolderCatalog()
+    @Published var inlineDatabaseRowReferences: [DatabaseRowReference] = []
 
     let repository: NoteRepository
     @Published var planningModel: PlanningModel?
@@ -223,8 +224,14 @@ final class AppModel: ObservableObject {
         let dbRepo = DatabaseRepository(vaultURL: vaultURL)
         let configManager = PlanningConfigManager(vaultURL: vaultURL)
         let planning = PlanningModel(databaseRepo: dbRepo, configManager: configManager)
+        planning.onDataChanged = { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.syncInlineReferencesFromDatabase()
+            }
+        }
         planningModel = planning
         await planning.bootstrap()
+        syncInlineReferencesFromDatabase()
     }
 
     // MARK: - Cross-feature navigation (Notes ↔ Planning)
@@ -253,7 +260,136 @@ final class AppModel: ObservableObject {
         let row = planning.allSessions.first(where: { $0.id == rowID })
         guard var cells = row?.cells else { return }
         cells["linkedNote"] = noteID.uuidString
-        await planning.updateTask(rowID: rowID, cells: cells)
+        await planning.updateSession(rowID: rowID, cells: cells)
+    }
+
+    func toggleInlineTaskStatus(rowID: UUID) async {
+        guard let planning = planningModel else { return }
+        await planning.toggleTaskComplete(rowID: rowID)
+        syncInlineReferencesFromDatabase()
+    }
+
+    func syncInlineReferencesFromDatabase() {
+        inlineDatabaseRowReferences = activeDocument?.metadata.databaseRowReferences ?? []
+    }
+
+    private enum PlanningSlashRowKind {
+        case task
+        case session
+    }
+
+    private struct PendingPlanningRowRegistration {
+        var rowID: UUID
+        var title: String
+        var kind: PlanningSlashRowKind
+    }
+
+    private static let slashTasksDatabaseSentinel = UUID(uuidString: "00000000-0000-0000-0000-0000000000A1")!
+    private static let slashSessionsDatabaseSentinel = UUID(uuidString: "00000000-0000-0000-0000-0000000000B2")!
+
+    private func handlePlanningBridgeCommands(_ commands: [EditCommand]) {
+        guard planningModel != nil else { return }
+        let pending = collectPendingPlanningRegistrations(from: commands)
+        guard !pending.isEmpty else {
+            syncInlineReferencesFromDatabase()
+            return
+        }
+        let sourceNoteID = activeDocument?.metadata.noteID
+        for registration in pending {
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                await self.handleDatabaseRowRegistration(
+                    rowID: registration.rowID,
+                    title: registration.title,
+                    kind: registration.kind,
+                    sourceNoteID: sourceNoteID
+                )
+            }
+        }
+    }
+
+    private func collectPendingPlanningRegistrations(from commands: [EditCommand]) -> [PendingPlanningRowRegistration] {
+        var registrations: [PendingPlanningRowRegistration] = []
+        for index in commands.indices {
+            guard case let .registerDatabaseRow(databaseID, rowID) = commands[index] else { continue }
+            let context = planningContext(around: index, in: commands)
+            let kind: PlanningSlashRowKind
+            if databaseID == Self.slashTasksDatabaseSentinel {
+                kind = .task
+            } else if databaseID == Self.slashSessionsDatabaseSentinel {
+                kind = .session
+            } else {
+                kind = context.kind
+            }
+            registrations.append(
+                PendingPlanningRowRegistration(
+                    rowID: rowID,
+                    title: context.title,
+                    kind: kind
+                )
+            )
+        }
+        return registrations
+    }
+
+    private func planningContext(around registrationIndex: Int, in commands: [EditCommand]) -> (kind: PlanningSlashRowKind, title: String) {
+        for idx in stride(from: registrationIndex - 1, through: 0, by: -1) {
+            guard case let .replaceText(_, replacement) = commands[idx] else { continue }
+            if replacement.hasPrefix("[ ] ") {
+                let title = String(replacement.dropFirst(4)).trimmingCharacters(in: .whitespacesAndNewlines)
+                return (.task, title.isEmpty ? "New Task" : title)
+            }
+            if replacement.hasPrefix("📅 ") {
+                let title = String(replacement.dropFirst(2)).trimmingCharacters(in: .whitespacesAndNewlines)
+                return (.session, title.isEmpty ? "New Session" : title)
+            }
+        }
+        return (.task, "New Task")
+    }
+
+    private func handleDatabaseRowRegistration(
+        rowID: UUID,
+        title: String,
+        kind: PlanningSlashRowKind,
+        sourceNoteID: UUID?
+    ) async {
+        guard let planning = planningModel else { return }
+        switch kind {
+        case .task:
+            await planning.quickAddTask(
+                title: title,
+                sourceNoteID: sourceNoteID,
+                forcedRowID: rowID
+            )
+            guard let databaseID = planning.taskDatabaseID() else { return }
+            registerResolvedDatabaseRowReference(databaseID: databaseID, rowID: rowID)
+        case .session:
+            await planning.quickAddSession(
+                title: title,
+                sourceNoteID: sourceNoteID,
+                forcedRowID: rowID
+            )
+            guard let databaseID = planning.sessionsDatabaseIDValue() else { return }
+            registerResolvedDatabaseRowReference(databaseID: databaseID, rowID: rowID)
+        }
+    }
+
+    private func registerResolvedDatabaseRowReference(databaseID: UUID, rowID: UUID) {
+        guard var document = activeDocument else { return }
+        document.metadata.databaseRowReferences.removeAll { reference in
+            reference.rowID == rowID && (
+                reference.databaseID == Self.slashTasksDatabaseSentinel
+                    || reference.databaseID == Self.slashSessionsDatabaseSentinel
+            )
+        }
+        if !document.metadata.databaseRowReferences.contains(where: { $0.databaseID == databaseID && $0.rowID == rowID }) {
+            document.metadata.databaseRowReferences.append(
+                DatabaseRowReference(databaseID: databaseID, rowID: rowID)
+            )
+        }
+        activeDocument = document
+        syncInlineReferencesFromDatabase()
+        scheduleAutosave()
     }
 
     /// Large-vault startup policy: sync link graph inline for small/medium vaults,
@@ -655,6 +791,7 @@ final class AppModel: ObservableObject {
                 await refreshOnDiskFingerprints(for: relPath)
                 clearUndoStack()
                 syncTableEditorPayloadWithActiveDocument()
+                syncInlineReferencesFromDatabase()
             } catch {
                 lastError = "Failed to create note: \(error.localizedDescription)"
             }
@@ -676,6 +813,7 @@ final class AppModel: ObservableObject {
             backlinks = []
             clearUndoStack()
             updateActiveNoteFilePresenter()
+            syncInlineReferencesFromDatabase()
             return
         }
         do {
@@ -686,6 +824,7 @@ final class AppModel: ObservableObject {
             await refreshOnDiskFingerprints(for: path)
             clearUndoStack()
             syncTableEditorPayloadWithActiveDocument()
+            syncInlineReferencesFromDatabase()
             await refreshBacklinks()
         } catch {
             lastError = "Failed to load note: \(error.localizedDescription)"
@@ -837,6 +976,7 @@ final class AppModel: ObservableObject {
         activeDocument = doc
         scheduleAutosave()
         scheduleBacklinkRefresh()
+        handlePlanningBridgeCommands(intercepted)
         return doc
     }
 
@@ -845,6 +985,7 @@ final class AppModel: ObservableObject {
         activeDocument = materializeCheckpoint(at: toIndex)
         scheduleAutosave()
         scheduleBacklinkRefresh()
+        syncInlineReferencesFromDatabase()
         undoManager?.registerUndo(withTarget: self) { model in
             model.applyCheckpointUndo(fromIndex: toIndex, toIndex: fromIndex)
         }
@@ -951,6 +1092,7 @@ final class AppModel: ObservableObject {
             case .toggleSpanStyle: return "Toggle Style"
             case .insertWikiLink: return "Insert Link"
             case .registerTableArtifact: return "Add Table"
+            case .registerDatabaseRow: return "Link Planning Row"
             case .repairMetadata: return "Repair Note"
             case .replaceMetadataBlocks: return "Recover Blocks"
             case .duplicateBlock: return "Duplicate Block"
