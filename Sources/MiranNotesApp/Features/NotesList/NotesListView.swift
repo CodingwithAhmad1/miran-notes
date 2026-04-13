@@ -40,6 +40,7 @@ private struct SidebarOutlineRows: View {
                 .listRowBackground(
                     RoundedRectangle(cornerRadius: 5)
                         .fill(rowColor(for: note.noteID))
+                        .allowsHitTesting(false)
                 )
                 .onHover { isHovered in
                     hoveredNoteID = isHovered ? note.noteID : nil
