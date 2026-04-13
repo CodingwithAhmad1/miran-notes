@@ -1,6 +1,8 @@
-# Miran Notes MVP (macOS)
+# Miran Notes (macOS)
 
-Local-first, Swift-native notes editor with plain-text storage and sidecar metadata.
+A simple, minimalistic, Mac-native knowledge storer. Local-first, plain-text storage, zero cloud dependency.
+
+> **Pivot note (Apr 2026):** Miran Notes is being refocused as a pure knowledge-storage tool. The Miran Planning / calendar feature set (menu-bar extra, task and session databases, dashboard, calendar views) has been **deactivated** — code is preserved but not built into the active product. The new direction is a clean, distraction-free note-taking experience native to macOS.
 
 **Documentation hub:** [docs/README.md](docs/README.md) — index of [Constraints.md](Constraints.md), ADRs, architecture notes, plans, and code pointers. **Product / engineering brief:** [docs/investor-and-engineering-brief.md](docs/investor-and-engineering-brief.md).
 
@@ -15,15 +17,15 @@ Local-first, Swift-native notes editor with plain-text storage and sidecar metad
 - **Extension hooks:** `SlashCommandRegistry` (open registration), `ExtensionRegistry` + ordered closure interceptors on `AppModel` (see [extension-registry-and-interceptors.md](docs/architecture/extension-registry-and-interceptors.md)).
 - **Navigation / search:** Folder sidebar outline, searchable list with body snippets, backlinks panel with snippets; vault-wide filesystem watch (subtree) and optional active-note file coordination where implemented.
 - **Backlinks:** Debounced refresh; `LinkGraph` is cached inside `VaultIndexActor` (invalidated on external vault events and updated after commits).
-- **Vault-level databases:** `DatabaseDocument` actor + `DatabaseRepository` actor provide schema-typed JSONL databases under `_databases/`. `DatabaseRegistry` in `.miran/` tracks all databases. 10 column types including `select`, `multiSelect`, `relation`, `noteLink`, `url`, `duration`. `DatabaseViewConfig` supports table, board, calendar, and list layouts with filters and sort keys.
-- **Miran Planning:** Integrated planning feature built on the database layer. `PlanningModel` bootstraps Tasks and Sessions databases with predefined schemas. Dashboard with quick-add, daily/weekly/monthly calendar views, weekly review metrics, inline task/session embedding, `/task` and `/session` slash commands, and `ZoraMigrationEngine` for importing from Zora Planning vaults. Settings include subject management, color schema, CSV export.
+- **Vault-level databases:** `DatabaseDocument` actor + `DatabaseRepository` actor provide schema-typed JSONL databases under `_databases/`. `DatabaseRegistry` in `.miran/` tracks all databases. 10 column types including `select`, `multiSelect`, `relation`, `noteLink`, `url`, `duration`. `DatabaseViewConfig` supports table, board, calendar, and list layouts with filters and sort keys. *(Infrastructure preserved; Planning UI deactivated — see pivot note above.)*
+- **Miran Planning *(deactivated)*:** Dashboard, calendar views, task/session databases, weekly review, inline embeds, `/task` and `/session` slash commands, and Zora migration engine. All source is preserved under `Sources/MiranNotesApp/Features/Planning/` but is not active in the current product direction.
 
 ## Module layout
 
 - `Sources/MiranNotesCore` — `NoteDocument`, `EditCommandEngine`, `UndoInverseSupport`, `TextEditDiff`, `NoteIntegrity`, `ExtensionRegistry`, `CommandPipelineContract`, `DatabaseModels`, `LinkTarget`.
 - `Sources/MiranNotesApp/Data` — `AppModel`, `NoteRepository`, vault/commit/index types, `DatabaseDocument`, `DatabaseRepository`, `PlanningConfigManager`, `PlanningSchemas`.
 - `Sources/MiranNotesApp/Features/Editor` — `SingleSurfaceNoteEditor`, `SlashCommandRegistry`, editor features.
-- `Sources/MiranNotesApp/Features/Planning` — `PlanningModel`, dashboard, calendar (daily/weekly/monthly/review), database views (table/board), edit sheets, inline embeds, settings, migration, slash commands, daily template engine.
+- `Sources/MiranNotesApp/Features/Planning` — `PlanningModel`, dashboard, calendar (daily/weekly/monthly/review), database views (table/board), edit sheets, inline embeds, settings, migration, slash commands, daily template engine. *(Preserved but deactivated.)*
 - `Tests/MiranNotesTests`, `Tests/MiranNotesAppTests` — `swift test`.
 
 ## Milestones (historical)
@@ -33,7 +35,7 @@ Local-first, Swift-native notes editor with plain-text storage and sidecar metad
 3. **M3 Core edits** — split/merge, block types, spans.  
 4. **M4 Quality** — autosave, atomic persistence.  
 5. **M5 Hardening** — migration seam, malformed metadata handling.
-6. **M6 Databases & Planning** — vault-level database layer, Miran Planning integration (dashboard, calendar, task/session databases, cross-feature linking, Zora migration).
+6. **M6 Databases & Planning** — vault-level database layer, Miran Planning integration (dashboard, calendar, task/session databases, cross-feature linking, Zora migration). *(M6 planning features deactivated in pivot to minimalistic knowledge storer.)*
 
 ## Acceptance checklist (high level)
 
@@ -43,10 +45,10 @@ Local-first, Swift-native notes editor with plain-text storage and sidecar metad
 - [x] Repair / advisory surfaces for load repair, integrity, conflicts, size limit (see `RepairAdvisory`).  
 - [x] Hybrid + snapshot undo with cap, coalescing, and safe prune.  
 - [x] Slash commands + discovery menu; open registry.  
-- [x] Vault-level databases with typed schemas, JSONL rows, and multi-layout views.  
-- [x] Miran Planning: dashboard, calendar, task/session databases, quick add, weekly review, cross-feature linking.  
-- [x] Zora vault migration engine and CSV export.  
-- [x] `/task` and `/session` slash commands; inline embeddable task/session views.  
+- [x] Vault-level databases with typed schemas, JSONL rows, and multi-layout views. *(infrastructure preserved)*
+- [~] Miran Planning: dashboard, calendar, task/session databases — **deactivated** during pivot.
+- [~] Zora vault migration engine and CSV export — **deactivated** during pivot.
+- [~] `/task` and `/session` slash commands — **deactivated** during pivot.  
 - [x] Project builds; `swift test` passes (204 tests).
 
 ## Run

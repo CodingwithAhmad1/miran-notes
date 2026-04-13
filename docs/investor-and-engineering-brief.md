@@ -1,8 +1,10 @@
-# Miran Notes — Investor & Engineering Brief
+# Miran Notes — Engineering Brief
 
-**Purpose:** This document explains what Miran Notes is, why it exists, how it works for users and under the hood, and where the product and codebase are headed. It is written for **investors** who need a clear value story and for **software engineers** who need a map of the system, honest gaps, and prioritized improvement areas.
+> **Pivot note (Apr 2026):** Miran Notes is pivoting to a **simple, minimalistic, Mac-native knowledge storer**. The Miran Planning / calendar feature set (menu-bar extra, task and session databases, dashboard, calendar views, Zora migration) has been **deactivated** — source is preserved but the active product no longer surfaces it. References to Planning and investor narrative below are retained for historical context only. Current engineering focus is the core note-taking experience: vault, editor, wiki links, search, and atomic persistence.
 
-**Scope note:** Financial projections, market sizing, and go-to-market strategy are **not** specified in the repository; those would need founder input to make an investment case complete.
+**Purpose:** This document explains what Miran Notes is, how it works under the hood, and where the codebase is headed. It is written primarily for **software engineers** who need a map of the system, honest gaps, and improvement areas.
+
+**Scope note:** Financial projections, market sizing, and go-to-market strategy are **not** specified in the repository.
 
 **Document freshness:** This revision reflects the current platform after **nested vault folders (manifest v2)**, **sidebar search with body snippets**, **richer repair and conflict UX**, **vault startup recovery and post-save integrity checks**, **backlink snippets with scroll-to-link navigation**, and related editor and persistence hardening. For file-format and constraint details, see **`Constraints.md`** and **`docs/adr/`**.
 
@@ -12,9 +14,9 @@
 
 ### What the app is
 
-**Miran Notes** is a **local-first, macOS-native** notes application. Each note is stored as human-readable files in a **vault**: canonical body text in `{relativePath}.txt`, structured metadata (blocks, inline styles, wiki links, embedded artifact references) in `{relativePath}.meta.json`, plus vault-level indexes under **`.miran/`** (manifest, link graph, relationship index, folder catalog, path index, pending-commit staging). Heavy structured data (for example **tables**) can live under **`_aux/{noteID}/`** as JSONL and schema files (per ADR 0002).
+**Miran Notes** is a **simple, minimalistic, local-first, macOS-native** knowledge storer. Each note is stored as human-readable files in a **vault**: canonical body text in `{relativePath}.txt`, structured metadata (blocks, inline styles, wiki links, embedded artifact references) in `{relativePath}.meta.json`, plus vault-level indexes under **`.miran/`** (manifest, link graph, relationship index, folder catalog, path index, pending-commit staging). Heavy structured data (for example **tables**) can live under **`_aux/{noteID}/`** as JSONL and schema files (per ADR 0002).
 
-**Problem it solves:** Many knowledge workers want the **feel** of modern linked notes (Notion-like slash commands, Obsidian-like `[[wiki links]]`) without surrendering data to a hosted service or running a heavy, plugin-dependent runtime. Miran targets users who value **speed, ownership of files, and predictable behavior** on a single machine—students, lawyers, researchers, and developers who treat notes as durable assets.
+**Problem it solves:** Many knowledge workers want a **fast, trustworthy place to store and connect ideas** without surrendering data to a cloud service or dealing with a heavy, plugin-heavy runtime. Miran targets users who value **simplicity, ownership of files, and predictable behavior** on a Mac—students, researchers, and developers who treat notes as durable assets and want nothing more than a clean editor and reliable storage.
 
 **Why local-first matters:** Notes remain ordinary files that can be backed up, diffed, and opened with other tools. The app adds structure and navigation on top without making the filesystem opaque.
 
@@ -27,7 +29,7 @@ The motivation (as reflected in project constraints and architecture docs) is to
 
 Miran aims for a **disciplined editing pipeline**—commands, integrity checks, atomic persistence—so the product can feel responsive and “modern” while storage stays simple and inspectable.
 
-**Vision (1–3 years, directional):** **Identity-first linking** and **folder/path organization** are now first-class on disk and in the UI (see ADR 0003); links stay stable across rename and move because **`noteID`** is canonical. Next waves can deepen **extension contracts** and optional **sync or multi-device** layers *above* the local vault rather than replacing it. Richer structured content can grow via sidecars and `_aux/` without bloating the plain-text hot path.
+**Vision (near-term):** Stay simple. **Identity-first linking** and **folder/path organization** are first-class (ADR 0003); links stay stable across renames because **`noteID`** is canonical. The product does not add complexity — optional sync or multi-device layers could sit *above* the local vault, but the core stays minimal and native.
 
 ### High-level value proposition
 
@@ -260,11 +262,9 @@ flowchart TB
 
 ## 6. Conclusion and next steps
 
-### Summary for investors
+### Product direction summary
 
-Miran Notes is a **native, local-first** notes product that combines familiar productivity patterns (nested folders, search, slash commands, wikilinks, structured blocks, tables) with a **disciplined engineering story**: human-readable files, UUID-based identity, command-driven editing, **journal-backed atomic persistence with startup recovery**, and honest handling of ambiguity. The codebase shows **intentional architecture** (core vs app, ADRs, constraints, tests) and **shipped UX** that matches much of the data-layer roadmap—not an unbounded prototype.
-
-**What would complete an investment narrative (outside this repo):** target customer segment, pricing, distribution, team, roadmap timing, and competitive moat in **market** terms—not just technical terms.
+Miran Notes is a **native, local-first** Mac knowledge storer: clean editor, wiki links, nested folders, fast search, and atomic persistence — nothing more. The **Miran Planning** feature set (calendar, tasks, sessions, dashboard) has been deactivated as part of a deliberate pivot toward minimalism. The codebase retains a disciplined architecture (core vs app, ADRs, constraints, tests) that can support future small features without accumulating complexity.
 
 ### Guidance for the implementing engineer
 

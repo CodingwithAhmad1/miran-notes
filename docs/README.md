@@ -4,7 +4,11 @@
 
 ## What this project is
 
-Miran Notes is a **local-first** macOS notes app: canonical text in per-note `.txt` files, structured metadata in a sidecar, edits through `EditCommandEngine`, and a SwiftUI + AppKit editor. It also includes **Miran Planning**, an integrated planning feature with vault-level databases for tasks and sessions, a dashboard, calendar views, and cross-feature linking. The [root README](../README.md) summarizes build commands, module layout, and features.
+Miran Notes is a **simple, minimalistic, local-first** macOS knowledge storer: canonical text in per-note `.txt` files, structured metadata in a sidecar, edits through `EditCommandEngine`, and a SwiftUI + AppKit editor.
+
+> **Pivot (Apr 2026):** Miran Planning (menu-bar calendar, task/session databases, dashboard) has been **deactivated**. The active product is the core note-taking experience — vault, editor, wiki links, folders, and search. Planning source is preserved under `Features/Planning/` but is not wired into the active app.
+
+The [root README](../README.md) summarizes build commands, module layout, and features.
 
 ## Document map
 
@@ -22,7 +26,7 @@ Miran Notes is a **local-first** macOS notes app: canonical text in per-note `.t
 | [architecture/architecture-flexibility-assessment.md](architecture/architecture-flexibility-assessment.md) | Flexibility and product-fit assessment |
 | [architecture/links-folders-tables-database-analysis.md](architecture/links-folders-tables-database-analysis.md) | Links, folders, tables analysis |
 | [architecture/vault-data-layer.md](architecture/vault-data-layer.md) | Repository, on-disk layout, text hash vs revision token, TOCTOU |
-| [architecture/planning-integration.md](architecture/planning-integration.md) | Miran Planning architecture: databases, PlanningModel, UI, migration |
+| [architecture/planning-integration.md](architecture/planning-integration.md) | Miran Planning architecture: databases, PlanningModel, UI, migration *(deactivated — preserved for reference)* |
 | **ADRs** | |
 | [adr/README.md](adr/README.md) | Architecture Decision Records index |
 | **Plans and QA** | |
@@ -44,8 +48,8 @@ Miran Notes is a **local-first** macOS notes app: canonical text in per-note `.t
 - **Core:** `Sources/MiranNotesCore/` — `NoteDocument`, `EditCommandEngine`, `UndoInverseSupport`, `TextEditDiff`, `NoteIntegrity`, `ExtensionRegistry`, `CommandPipelineContract`, `DatabaseModels`, `LinkTarget`.
 - **App / Data:** `Sources/MiranNotesApp/Data/` — `NoteRepository`, `VaultCommitCoordinator`, indexes (`LinkGraph`, `RelationshipIndex`, `FolderCatalog`, `PathIndex`), `DatabaseDocument`, `DatabaseRepository`, `PlanningConfigManager`, `PlanningSchemas`.
 - **App / Editor:** `Sources/MiranNotesApp/Features/Editor/` — `SingleSurfaceNoteEditor`, `EditorVisualStyle`, `SlashCommandRegistry`.
-- **App / Planning:** `Sources/MiranNotesApp/Features/Planning/` — `PlanningModel`, dashboard, calendar, database views, edit sheets, inline embeds, settings, migration engine, slash commands, daily template.
-- **App shell:** `Sources/MiranNotesApp/App/` — `AppModel`, `MiranNotesApp` (with `AppContentMode` switcher between Notes and Planning).
+- **App / Planning *(deactivated)*:** `Sources/MiranNotesApp/Features/Planning/` — `PlanningModel`, dashboard, calendar, database views, edit sheets, inline embeds, settings, migration engine, slash commands, daily template. Source preserved; `MenuBarExtra` and planning slash commands are commented out during the pivot.
+- **App shell:** `Sources/MiranNotesApp/App/` — `AppModel`, `MiranNotesApp`.
 - **Tests:** `Tests/MiranNotesTests/`, `Tests/MiranNotesAppTests/` (`swift test`, 204 tests).
 
 ## Key `AppModel` published properties (selected)
@@ -58,7 +62,7 @@ Miran Notes is a **local-first** macOS notes app: canonical text in per-note `.t
 | `editorTextSelection` | UTF-16 selection range for command context |
 | `externalEditConflictAlert` | External change vs dirty buffer |
 | `extensionRegistry` | Typed extension registry (runs before closure interceptors) |
-| `planningModel` | `PlanningModel` for tasks, sessions, dashboard, calendar (bootstrapped at vault load) |
+| `planningModel` | `PlanningModel` for tasks, sessions, dashboard, calendar — *deactivated during pivot; field still present on AppModel* |
 
 ## Key `AppModel` internals (tests)
 

@@ -4,8 +4,11 @@ This document records **non-negotiable product and engineering constraints** for
 
 ## Product scope
 
+> **Pivot (Apr 2026):** Miran Notes is now focused as a **simple, minimalistic, Mac-native knowledge storer**. The Miran Planning feature set (menu-bar calendar, task/session databases, dashboard, Zora migration) is **deactivated** — source preserved, not active. All new work should align with a clean, distraction-free note-taking direction.
+
 - **Local-first, single-writer editing** is the baseline. Real-time multi-user collaboration is **not** a current goal and should not drive core architecture.
 - **Human-readable storage** (`note.txt` + sidecar JSON) remains the default mental model for notes.
+- **Simplicity over features:** the product no longer bundles a planning/productivity layer. The editor, vault, wiki links, and search are the product.
 
 ## Semantic reconciliation
 
@@ -178,13 +181,15 @@ The fifteen additional gaps identified in the **Foundation Hardening** audit (se
 - `EditorVisualStyle.apply` is guarded by a document-ID and text-hash cache so styling passes only re-run when content changes.
 - `TextKit2BlockEditor` and `BlockListView` (unused code paths) have been removed.
 
-## Vault-level databases and planning (M6)
+## Vault-level databases and planning (M6 — deactivated)
+
+> M6 Planning features are **deactivated** as of the Apr 2026 pivot. The constraints below are preserved for reference and for any future re-activation decision.
 
 - **Database storage:** Vault-level databases live under `_databases/{databaseID}/` with `schema.json`, `rows.jsonl`, and `views/`. The `database-registry.json` index lives in `.miran/`. This layout is forward-compatible: older Miran Notes versions ignore `_databases/` and the registry file.
 - **Schema typing:** `DatabaseColumnType` enforces value validation at the cell level via `accepts(_:)`. Invalid values are silently rejected (not written) rather than stored with error markers.
 - **Planning bootstrap:** `PlanningModel.bootstrap()` is idempotent — it creates Tasks and Sessions databases only if they don't exist, so repeated calls (e.g. across app launches) are safe.
 - **Cross-feature linking:** `LinkTarget.database(databaseID:)` and `LinkTarget.databaseRow(databaseID:, rowID:)` participate in the existing `RelationshipIndex` and `VaultIntegrityChecker` contracts. The `linkedNote` column in planning databases uses `DatabaseColumnType.noteLink` (validated as a UUID string).
-- **Slash commands:** `/task` and `/session` are registered at app startup alongside built-in commands. They follow the same registry, commit policy, and discovery contracts as all other slash commands.
+- **Slash commands:** `/task` and `/session` registrations are suspended. `SlashCommandRegistry.registerPlanningCommands()` is commented out in `MiranNotesApp.init`.
 - **Database persistence isolation:** Database writes (`DatabaseDocument.flushToDisk`) use direct atomic file I/O rather than `VaultCommitCoordinator` participation, because database edits are self-contained and not entangled with note-file saves. This is a deliberate simplification; coordinated multi-entity transactions can be added later if needed.
 - **Migration:** `ZoraMigrationEngine` is additive (imports into existing databases) and does not delete source Zora files.
 

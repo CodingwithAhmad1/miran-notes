@@ -18,7 +18,8 @@ struct MiranNotesApp: App {
 
     init() {
         SlashCommandRegistry.registerBuiltins()
-        SlashCommandRegistry.registerPlanningCommands()
+        // DEACTIVATED — planning slash commands suspended during pivot.
+        // SlashCommandRegistry.registerPlanningCommands()
         let vault = URL(fileURLWithPath: NSHomeDirectory())
             .appendingPathComponent("MiranNotesVault", isDirectory: true)
         let repository = NoteRepository(vaultURL: vault)
@@ -122,10 +123,14 @@ struct MiranNotesApp: App {
             }
         }
 
-        MenuBarExtra("Planning", systemImage: "calendar.badge.clock") {
-            PlanningMenuBarView(appModel: model)
-        }
-        .menuBarExtraStyle(.window)
+        // DEACTIVATED — Planning/calendar menu bar extra is suspended during the
+        // pivot to a simple, minimalistic Mac-native knowledge storer.
+        // Code is preserved; re-enable by un-commenting when/if planning returns.
+        //
+        // MenuBarExtra("Planning", systemImage: "calendar.badge.clock") {
+        //     PlanningMenuBarView(appModel: model)
+        // }
+        // .menuBarExtraStyle(.window)
     }
 
     private var notesContentView: some View {
