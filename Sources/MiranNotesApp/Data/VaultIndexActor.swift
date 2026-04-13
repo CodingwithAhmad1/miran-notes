@@ -4,7 +4,7 @@ import os.log
 
 /// Manifest + `.miran/` JSON indexes and atomic commits. Used by ``NoteRepository``.
 actor VaultIndexActor {
-    private static let commitParticipants: [VaultCommitParticipant] = [
+    private nonisolated(unsafe) static let commitParticipants: [VaultCommitParticipant] = [
         NoteFilesCommitParticipant(),
         ManifestCommitParticipant(),
         LinkGraphCommitParticipant(),

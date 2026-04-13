@@ -91,10 +91,12 @@ final class VaultDirectoryWatcher {
 
     private func scheduleDebounced() {
         debounceTask?.cancel()
+        let debounceNs = debounceNanoseconds
+        let handler = onEvent
         debounceTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: debounceNanoseconds)
+            try? await Task.sleep(nanoseconds: debounceNs)
             guard !Task.isCancelled else { return }
-            onEvent()
+            handler()
         }
     }
 

@@ -1,7 +1,7 @@
 import Foundation
 import MiranNotesCore
 
-struct FolderCatalog: Codable, Equatable {
+struct FolderCatalog: Codable, Equatable, Sendable {
     static let currentSchemaVersion = 1
     static let rootFolderID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
 
@@ -26,7 +26,7 @@ struct FolderCatalog: Codable, Equatable {
     }
 }
 
-struct FolderEntry: Codable, Equatable, Hashable {
+struct FolderEntry: Codable, Equatable, Hashable, Sendable {
     var id: UUID
     var name: String
     var parentFolderID: UUID?
@@ -38,7 +38,7 @@ struct FolderEntry: Codable, Equatable, Hashable {
     )
 }
 
-struct PathIndex: Codable, Equatable {
+struct PathIndex: Codable, Equatable, Sendable {
     static let currentSchemaVersion = 1
 
     var schemaVersion: Int
@@ -74,7 +74,7 @@ struct PathIndex: Codable, Equatable {
     }
 }
 
-struct PathIndexEntry: Codable, Equatable, Hashable {
+struct PathIndexEntry: Codable, Equatable, Hashable, Sendable {
     var noteID: UUID
     var folderID: UUID
     var relativePath: String

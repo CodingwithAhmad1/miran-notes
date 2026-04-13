@@ -56,6 +56,7 @@ struct SlashCommandDescriptor {
 }
 
 /// Slash command registry with open registration so feature modules can add commands at startup.
+@MainActor
 enum SlashCommandRegistry {
     private static var descriptors: [SlashCommandDescriptor] = []
     private static var builtinsRegistered = false

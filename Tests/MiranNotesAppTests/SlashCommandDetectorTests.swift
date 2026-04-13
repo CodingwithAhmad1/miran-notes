@@ -2,7 +2,13 @@ import XCTest
 @testable import MiranNotesApp
 import MiranNotesCore
 
+@MainActor
 final class SlashCommandDetectorTests: XCTestCase {
+    override func setUp() {
+        super.setUp()
+        SlashCommandRegistry.registerBuiltins()
+    }
+
     func testH1SpaceAtLineStart() {
         let model = "/h1"
         let storage = "/h1 "

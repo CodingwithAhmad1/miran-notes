@@ -93,6 +93,7 @@ private final class BlockTypeMenuRep: NSObject {
     }
 }
 
+@MainActor
 private struct SlashCommandMenuView: View {
     let matches: [SlashCommandMatch]
     let highlightedIndex: Int
@@ -168,7 +169,7 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
         // Document-level undo is handled by the window `UndoManager` in `AppModel`; disable `NSTextView`'s separate stack.
         textView.allowsUndo = false
         textView.delegate = context.coordinator
-        textView.textStorage?.delegate = context.coordinator
+        textView.textStorage?.delegate = context.coordinator.textStorageDelegateBridge
 
         let scrollView = NSScrollView()
         scrollView.hasVerticalScroller = true
@@ -220,9 +221,11 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
         context.coordinator.applyDocumentText()
     }
 
-    final class Coordinator: NSObject, NSTextViewDelegate, NSTextStorageDelegate {
+    @MainActor
+    final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: SingleSurfaceNoteEditor
         weak var textView: NSTextView?
+        fileprivate let textStorageDelegateBridge = TextStorageDelegateBridge()
         private var isApplyingModelUpdate = false
         private var pendingSelection: NSRange?
         private var currentSlashQuery: SlashQueryMatch?
@@ -241,6 +244,33 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
 
         init(_ parent: SingleSurfaceNoteEditor) {
             self.parent = parent
+            super.init()
+            textStorageDelegateBridge.owner = self
+        }
+
+        /// Forwards TextKit storage callbacks on the main thread; `Coordinator` cannot adopt `NSTextStorageDelegate` directly under Swift 6 isolation rules.
+        fileprivate final class TextStorageDelegateBridge: NSObject, NSTextStorageDelegate {
+            nonisolated(unsafe) weak var owner: Coordinator?
+
+            func textStorage(
+                _ textStorage: NSTextStorage,
+                didProcessEditing editedMask: NSTextStorageEditActions,
+                range editedRange: NSRange,
+                changeInLength delta: Int
+            ) {
+                guard let owner else { return }
+                let ownerPtr = Unmanaged.passUnretained(owner).toOpaque()
+                nonisolated(unsafe) let storage = textStorage
+                MainActor.assumeIsolated {
+                    let coordinator = Unmanaged<Coordinator>.fromOpaque(ownerPtr).takeUnretainedValue()
+                    coordinator.textStorageDidProcessEditing(
+                        storage,
+                        editedMask: editedMask,
+                        editedRange: editedRange,
+                        delta: delta
+                    )
+                }
+            }
         }
 
         func setupChrome(scrollView: NSScrollView, textView: NSTextView) {
@@ -279,6 +309,8 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
         }
 
         func teardownChrome() {
+            textView?.textStorage?.delegate = nil
+            textStorageDelegateBridge.owner = nil
             if let monitor = mouseMonitor {
                 NSEvent.removeMonitor(monitor)
                 mouseMonitor = nil
@@ -431,11 +463,11 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
             }
         }
 
-        func textStorage(
+        fileprivate func textStorageDidProcessEditing(
             _ textStorage: NSTextStorage,
-            didProcessEditing editedMask: NSTextStorageEditActions,
-            range editedRange: NSRange,
-            changeInLength delta: Int
+            editedMask: NSTextStorageEditActions,
+            editedRange: NSRange,
+            delta: Int
         ) {
             _ = editedMask
             _ = editedRange

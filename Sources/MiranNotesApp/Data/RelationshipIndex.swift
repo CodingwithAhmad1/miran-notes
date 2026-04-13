@@ -1,7 +1,7 @@
 import Foundation
 import MiranNotesCore
 
-struct RelationshipIndex: Codable, Equatable {
+struct RelationshipIndex: Codable, Equatable, Sendable {
     static let currentSchemaVersion = 1
 
     var schemaVersion: Int

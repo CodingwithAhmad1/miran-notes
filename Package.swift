@@ -1,5 +1,9 @@
-// swift-tools-version: 5.10
+// swift-tools-version: 6.0
 import PackageDescription
+
+let swift6Settings: [SwiftSetting] = [
+    .swiftLanguageMode(.v6)
+]
 
 let package = Package(
     name: "MiranNotes",
@@ -12,22 +16,26 @@ let package = Package(
     targets: [
         .target(
             name: "MiranNotesCore",
-            path: "Sources/MiranNotesCore"
+            path: "Sources/MiranNotesCore",
+            swiftSettings: swift6Settings
         ),
         .executableTarget(
             name: "MiranNotesApp",
             dependencies: ["MiranNotesCore"],
-            path: "Sources/MiranNotesApp"
+            path: "Sources/MiranNotesApp",
+            swiftSettings: swift6Settings
         ),
         .testTarget(
             name: "MiranNotesTests",
             dependencies: ["MiranNotesCore"],
-            path: "Tests/MiranNotesTests"
+            path: "Tests/MiranNotesTests",
+            swiftSettings: swift6Settings
         ),
         .testTarget(
             name: "MiranNotesAppTests",
             dependencies: ["MiranNotesApp", "MiranNotesCore"],
-            path: "Tests/MiranNotesAppTests"
+            path: "Tests/MiranNotesAppTests",
+            swiftSettings: swift6Settings
         )
     ]
 )

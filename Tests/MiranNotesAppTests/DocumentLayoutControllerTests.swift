@@ -4,6 +4,7 @@ import XCTest
 
 @testable import MiranNotesApp
 
+@MainActor
 final class DocumentLayoutControllerTests: XCTestCase {
     private func singleBlockDocument(text: String) -> NoteDocument {
         let noteID = UUID()

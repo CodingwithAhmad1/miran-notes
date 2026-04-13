@@ -2,6 +2,7 @@ import Foundation
 import MiranNotesCore
 
 enum DocumentLayoutController {
+    @MainActor
     static func commandsForEdit(
         document: NoteDocument,
         affectedRange: NSRange,
@@ -143,6 +144,7 @@ enum DocumentLayoutController {
     ///
     /// This is used by the newline-commit path so that pressing Enter after "/h1" applies the slash
     /// command and creates the new paragraph below — the same behaviour as committing with Space.
+    @MainActor
     private static func slashCommandsForNewlineCommit(
         document: NoteDocument,
         block: Block,

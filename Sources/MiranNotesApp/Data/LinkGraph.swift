@@ -2,7 +2,7 @@ import Foundation
 import MiranNotesCore
 
 /// Persisted forward link edges: source note ID → target note IDs (deduplicated).
-struct LinkGraph: Codable, Equatable {
+struct LinkGraph: Codable, Equatable, Sendable {
     static let currentSchemaVersion = 1
 
     var schemaVersion: Int

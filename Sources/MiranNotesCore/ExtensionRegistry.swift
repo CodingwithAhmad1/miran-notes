@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 public enum ExtensionCapability: String, Codable, Hashable, Sendable {
     case commandProduction
@@ -46,37 +47,38 @@ public struct CommandContext: Sendable {
 /// **Interceptor order:** `applyInterceptors` runs registered interceptors sorted by `descriptor.id`, then `AppModel` runs
 /// closure-based interceptors in registration order. All interceptors see the **same** pre-`EditCommandEngine` `NoteDocument`
 /// snapshot; each transforms the command batch only (document is not re-read between interceptors).
-public final class ExtensionRegistry: @unchecked Sendable {
-    private let lock = NSLock()
-    private var commandProducers: [String: any CommandProducerExtension] = [:]
-    private var commandInterceptors: [String: any CommandInterceptorExtension] = [:]
+public final class ExtensionRegistry: Sendable {
+    private final class Storage: @unchecked Sendable {
+        var commandProducers: [String: any CommandProducerExtension] = [:]
+        var commandInterceptors: [String: any CommandInterceptorExtension] = [:]
+    }
+
+    private let lock = OSAllocatedUnfairLock(initialState: Storage())
 
     public init() {}
 
     public func registerProducer(_ producer: any CommandProducerExtension) {
-        lock.lock()
-        defer { lock.unlock() }
-        commandProducers[producer.descriptor.id] = producer
+        lock.withLock { storage in
+            storage.commandProducers[producer.descriptor.id] = producer
+        }
     }
 
     public func registerInterceptor(_ interceptor: any CommandInterceptorExtension) {
-        lock.lock()
-        defer { lock.unlock() }
-        commandInterceptors[interceptor.descriptor.id] = interceptor
+        lock.withLock { storage in
+            storage.commandInterceptors[interceptor.descriptor.id] = interceptor
+        }
     }
 
     public func producerList() -> [ExtensionDescriptor] {
-        lock.lock()
-        let values = commandProducers.values.map(\.descriptor).sorted { $0.id < $1.id }
-        lock.unlock()
-        return values
+        lock.withLock { storage in
+            storage.commandProducers.values.map(\.descriptor).sorted { $0.id < $1.id }
+        }
     }
 
     public func interceptorList() -> [ExtensionDescriptor] {
-        lock.lock()
-        let values = commandInterceptors.values.map(\.descriptor).sorted { $0.id < $1.id }
-        lock.unlock()
-        return values
+        lock.withLock { storage in
+            storage.commandInterceptors.values.map(\.descriptor).sorted { $0.id < $1.id }
+        }
     }
 
     public func applyInterceptors(
@@ -84,9 +86,9 @@ public final class ExtensionRegistry: @unchecked Sendable {
         document: NoteDocument,
         context: CommandContext
     ) -> [EditCommand] {
-        lock.lock()
-        let interceptors = commandInterceptors.values.sorted { $0.descriptor.id < $1.descriptor.id }
-        lock.unlock()
+        let interceptors = lock.withLock { storage in
+            storage.commandInterceptors.values.sorted { $0.descriptor.id < $1.descriptor.id }
+        }
         return interceptors.reduce(commands) { partial, interceptor in
             interceptor.intercept(commands: partial, document: document, context: context)
         }

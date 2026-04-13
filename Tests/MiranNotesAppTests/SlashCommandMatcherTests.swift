@@ -2,7 +2,13 @@ import XCTest
 
 @testable import MiranNotesApp
 
+@MainActor
 final class SlashCommandMatcherTests: XCTestCase {
+    override func setUp() {
+        super.setUp()
+        SlashCommandRegistry.registerBuiltins()
+    }
+
     func testEmptyQueryReturnsFullCatalog() {
         let catalog = SlashCommandRegistry.catalogItems()
         let matches = SlashCommandMatcher.filterAndRank(query: "", catalog: catalog)

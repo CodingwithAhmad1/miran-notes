@@ -12,20 +12,20 @@ private enum UndoCheckpoint {
 }
 
 /// Drives the “file changed on disk” alert; non-nil means a conflict is being presented.
-struct ExternalEditConflict: Identifiable, Equatable {
+struct ExternalEditConflict: Identifiable, Equatable, Sendable {
     let id = UUID()
     var diskDate: Date
     var revisionToken: DocumentRevisionToken?
 }
 
-struct ExternalTextComparePayload: Identifiable, Equatable {
+struct ExternalTextComparePayload: Identifiable, Equatable, Sendable {
     let id = UUID()
     var localText: String
     var diskText: String
 }
 
 /// Pending scroll to a wiki-link range after navigating to `noteID` (e.g. from the backlink panel).
-struct PendingEditorScroll: Equatable {
+struct PendingEditorScroll: Equatable, Sendable {
     var noteID: UUID
     var range: MiranNotesCore.TextRange
 }
@@ -1150,7 +1150,7 @@ final class AppModel {
             lastKnownDiskDate = diskDate
             lastKnownDiskRevision = diskRevision
             lastKnownNoteTextSHA256 = observedTextHash
-            Task { await refreshBacklinks() }
+            Task { @MainActor in await refreshBacklinks() }
             return
         }
 

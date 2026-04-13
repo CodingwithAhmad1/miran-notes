@@ -1,6 +1,6 @@
 import Foundation
 
-public struct NoteDocument: Identifiable, Equatable {
+public struct NoteDocument: Identifiable, Equatable, Sendable {
     /// Stable vault-wide identity; delegates to `metadata.noteID` so there is exactly one source of truth.
     public var id: UUID { metadata.noteID }
     public var text: String
@@ -20,7 +20,7 @@ private struct EmbeddedArtifactDecodingDTO: Decodable {
     var relativePath: String
 }
 
-public struct NoteMetadata: Codable, Equatable {
+public struct NoteMetadata: Codable, Equatable, Sendable {
     public var schemaVersion: Int
     /// Stable vault-wide identity; persisted in sidecar (v2+). Assigned on migrate for legacy notes.
     public var noteID: UUID
@@ -116,7 +116,7 @@ public struct NoteMetadata: Codable, Equatable {
     }
 }
 
-public struct Block: Codable, Identifiable, Equatable {
+public struct Block: Codable, Identifiable, Equatable, Sendable {
     public var id: String
     public var type: BlockType
     public var range: TextRange
@@ -132,7 +132,7 @@ public struct Block: Codable, Identifiable, Equatable {
     }
 }
 
-public enum BlockType: String, Codable, CaseIterable {
+public enum BlockType: String, Codable, CaseIterable, Sendable {
     case paragraph
     case heading
     case listItem
@@ -141,7 +141,7 @@ public enum BlockType: String, Codable, CaseIterable {
     case divider
 }
 
-public struct Span: Codable, Equatable {
+public struct Span: Codable, Equatable, Sendable {
     public var range: TextRange
     public var style: SpanStyle
 
@@ -151,7 +151,7 @@ public struct Span: Codable, Equatable {
     }
 }
 
-public enum SpanStyle: String, Codable, CaseIterable {
+public enum SpanStyle: String, Codable, CaseIterable, Sendable {
     case bold
     case italic
     case code
@@ -186,7 +186,7 @@ extension TextRange {
     }
 }
 
-public struct MetadataValidationResult {
+public struct MetadataValidationResult: Sendable {
     public var normalizedMetadata: NoteMetadata
     public var warnings: [String]
 

@@ -3,7 +3,7 @@ import MiranNotesCore
 import os.log
 
 /// Result of loading a note from disk, including any structural repair warnings.
-struct NoteLoadResult {
+struct NoteLoadResult: Sendable {
     var document: NoteDocument
     var repairWarnings: [String]
 
@@ -48,7 +48,7 @@ enum NoteRepositoryError: LocalizedError, Equatable {
     }
 }
 
-struct NoteSummary: Identifiable, Hashable {
+struct NoteSummary: Identifiable, Hashable, Sendable {
     var id: UUID { noteID }
     var noteID: UUID
     var title: String
@@ -59,7 +59,7 @@ struct NoteSummary: Identifiable, Hashable {
 }
 
 /// One incoming link from a source note (backlink row in the UI).
-struct BacklinkItem: Identifiable {
+struct BacklinkItem: Identifiable, Sendable {
     var id: UUID { sourceNoteID }
     var sourceNoteID: UUID
     var title: String
@@ -480,7 +480,7 @@ actor NoteRepository {
         let normalized = RangeNormalizer.normalize(metadata: doc.metadata, for: doc.text)
         let documentToPersist = NoteDocument(text: doc.text, metadata: normalized.normalizedMetadata)
 
-        await index.logIfIntegrityIssues(try await index.executeNoteCommit(
+        let renameIntegrity = try await index.executeNoteCommit(
             label: "rename:\(oldRelativePath)->\(uniqueNew)",
             relativePath: uniqueNew,
             document: documentToPersist,
@@ -492,7 +492,8 @@ actor NoteRepository {
             folderCatalog: folderCatalog,
             pathIndex: pathIndex,
             deletePathsAfterCommit: [oldTxt, oldMeta].filter { FileManager.default.fileExists(atPath: $0.path) }
-        ))
+        )
+        await index.logIfIntegrityIssues(renameIntegrity)
 
         return uniqueNew
     }

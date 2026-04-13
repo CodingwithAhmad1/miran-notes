@@ -91,7 +91,31 @@ SwiftUI now tracks fine-grained property access on `AppModel` instead of invalid
 
 ### Difficulty: Medium. Achievable in 2–3 compiler-guided passes.
 
+### Status: completed (April 2026)
+
+**Shipped**
+
+- **Tooling:** [`Package.swift`](../../Package.swift) uses `swift-tools-version: 6.0` and applies `swiftLanguageMode(.v6)` to `MiranNotesCore`, `MiranNotesApp`, `MiranNotesTests`, and `MiranNotesAppTests` (strict concurrency as language default for those targets).
+- **Core `Sendable`:** `NoteDocument`, `NoteMetadata`, `Block`, `Span`, `BlockType`, `SpanStyle`, `EditCommand`, `MetadataValidationResult` in [`NoteDocument.swift`](../../Sources/MiranNotesCore/NoteDocument.swift) / [`EditCommandEngine.swift`](../../Sources/MiranNotesCore/EditCommandEngine.swift).
+- **`ExtensionRegistry`:** [`ExtensionRegistry.swift`](../../Sources/MiranNotesCore/ExtensionRegistry.swift) is now a `Sendable` class using `OSAllocatedUnfairLock` and a private `@unchecked Sendable` storage class (replaces `NSLock` + `@unchecked Sendable` on the registry itself). Interceptor ordering and semantics are unchanged.
+- **Vault / repository payloads:** `Sendable` on `NoteLoadResult`, `NoteSummary`, `BacklinkItem`; vault index/value types in [`VaultManifest.swift`](../../Sources/MiranNotesApp/Data/VaultManifest.swift), [`LinkGraph.swift`](../../Sources/MiranNotesApp/Data/LinkGraph.swift), [`RelationshipIndex.swift`](../../Sources/MiranNotesApp/Data/RelationshipIndex.swift), [`FolderCatalog.swift`](../../Sources/MiranNotesApp/Data/FolderCatalog.swift). [`NoteRepository`](../../Sources/MiranNotesApp/Data/NoteRepository.swift) rename path: split `executeNoteCommit` + `logIfIntegrityIssues` into two statements to satisfy the region isolation checker (no semantic change).
+- **`VaultIndexActor`:** `commitParticipants` is `private nonisolated(unsafe) static let` (immutable table of participants).
+- **`SlashCommandRegistry`:** `@MainActor` enum in [`SlashCommandRegistry.swift`](../../Sources/MiranNotesApp/Features/Editor/SlashCommandRegistry.swift). Tests that call into it use `@MainActor` types and `registerBuiltins()` in `setUp` where needed ([`SlashCommandDetectorTests`](../../Tests/MiranNotesAppTests/SlashCommandDetectorTests.swift), [`SlashCommandMatcherTests`](../../Tests/MiranNotesAppTests/SlashCommandMatcherTests.swift)); [`DocumentLayoutController`](../../Sources/MiranNotesApp/Features/Editor/DocumentLayoutController.swift) entry points that use the registry are `@MainActor`.
+- **Editor:** [`SingleSurfaceNoteEditor.swift`](../../Sources/MiranNotesApp/Features/Editor/SingleSurfaceNoteEditor.swift) — `@MainActor` `Coordinator`; `NSTextStorageDelegate` implemented via `TextStorageDelegateBridge` using `Unmanaged` + `MainActor.assumeIsolated` (Swift 6 cannot merge formal `NSTextStorageDelegate` conformance with a `@MainActor` coordinator); `@MainActor` `SlashCommandMenuView`.
+- **`VaultDirectoryWatcher`:** debounce `Task` captures only `debounceNanoseconds` and `onEvent` (avoids sending `self` into the task).
+- **`AppModel`:** `Sendable` on `ExternalEditConflict`, `ExternalTextComparePayload`, `PendingEditorScroll`; `Task { @MainActor in await refreshBacklinks() }` where a detached task was ambiguous.
+
+**Intentionally deferred / unchanged**
+
+- **`ActiveNoteFilePresenter`:** still calls `onChange()` synchronously from `presentedItemDidChange`; `presentedItemOperationQueue` remains `OperationQueue.main` (no `Task` hop added — avoids `@Sendable` closure churn while keeping behavior).
+- **`DatabaseRepository`:** fire-and-forget `Task { await doc... }` for row ops unchanged (async flush ordering unchanged).
+- **`WikiLinkTextView`:** not `@MainActor`; main-thread isolation is carried by `Coordinator` and the storage delegate bridge.
+
+`swift build` and `swift test` (228 tests) pass with the settings above.
+
 ### Current concurrency posture
+
+*Snapshot below is largely historical context from the pre–Swift 6 audit; the **Status** subsection above describes what shipped.*
 
 **Actors (6):**
 
@@ -304,10 +328,7 @@ The `textStorage(_:didProcessEditing:)` pipeline (`SingleSurfaceNoteEditor.swift
 
 1. ~~**ObservableObject → @Observable**~~ **Done (Apr 2026).**
 
-2. **Swift 6 strict concurrency** (2–3 sessions, compiler-guided)
-   - Enable warnings first, fix iteratively.
-   - Doing this second means `@Observable` is already in place (one less migration in flight).
-   - The compiler tells you exactly what to fix — no guesswork.
+2. ~~**Swift 6 strict concurrency**~~ **Done (Apr 2026)** — see Part 3 *Status* for flags and file-level notes.
 
 3. **TextKit 1 → TextKit 2** (3–5 sessions, test-intensive)
    - Largest risk, longest tail of validation.
@@ -320,7 +341,7 @@ The `textStorage(_:didProcessEditing:)` pipeline (`SingleSurfaceNoteEditor.swift
 | Migration | Sessions | Lines changed (est.) | Test changes |
 |-----------|----------|---------------------|-------------|
 | @Observable | 1 | ~80 | 0 *(completed)* |
-| Swift 6 concurrency | 2–3 | ~200–400 | ~50 (add `@MainActor`, fix warnings) |
+| Swift 6 concurrency | 2–3 | ~200–400 | ~50 *(completed Apr 2026)* |
 | TextKit 2 | 3–5 | ~300–500 | ~100 (new geometry tests, QA matrix) |
 
 ---

@@ -1,7 +1,7 @@
 import Foundation
 import os.log
 
-public enum EditCommand {
+public enum EditCommand: Sendable {
     case replaceText(range: TextRange, replacement: String)
     case splitBlock(blockID: String, atOffset: Int)
     case mergeWithPrevious(blockID: String)

@@ -2,7 +2,7 @@ import Foundation
 import MiranNotesCore
 
 /// Maps `noteID` ↔ current relative path for O(1) resolution after renames.
-struct VaultManifest: Codable, Equatable {
+struct VaultManifest: Codable, Equatable, Sendable {
     static let currentSchemaVersion = 2
 
     var schemaVersion: Int
@@ -67,7 +67,7 @@ struct VaultManifest: Codable, Equatable {
     }
 }
 
-struct ManifestEntry: Codable, Equatable, Hashable {
+struct ManifestEntry: Codable, Equatable, Hashable, Sendable {
     var noteID: UUID
     /// Path under the vault root without extension, e.g. `notes/alpha` or flat `alpha`.
     var relativePath: String
