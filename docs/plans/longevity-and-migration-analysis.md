@@ -103,11 +103,11 @@ For views that use `$model.foo` bindings (sheet items, searchable, editor bindin
 ```swift
 // Before
 @ObservedObject var model: AppModel
-// usage: .sheet(item: $model.tableEditorPayload)
+// usage: .sheet(item: $model.somePayload)
 
 // After
 @Bindable var model: AppModel
-// usage: .sheet(item: $model.tableEditorPayload) — same syntax, different wrapper
+// usage: .sheet(item: $model.somePayload) — same syntax, different wrapper
 ```
 
 **Step 4: Custom `Binding(get:set:)` wrappers**
@@ -118,7 +118,7 @@ The `Binding(get: { model.lastError }, set: { ... })` patterns in `MiranNotesApp
 
 | File | Line(s) | Binding pattern |
 |------|---------|-----------------|
-| `MiranNotesApp.swift` | 33–36 | `.sheet(item: $model.tableEditorPayload)`, `$model.externalTextCompare` |
+| `MiranNotesApp.swift` | *(sheet bindings)* | `.sheet(item: $model.externalTextCompare)` and other item sheets |
 | `MiranNotesApp.swift` | 170–171 | `$model.editorCursorOffset`, `$model.editorTextSelection` |
 | `NotesListView.swift` | 86 | `.searchable(text: $model.noteQuery)` |
 | `TiledEditorView.swift` | 159–160 | `$model.editorCursorOffset`, `$model.editorTextSelection` |
@@ -141,7 +141,7 @@ Tests construct `AppModel(repository:)` as a plain value — no property wrapper
 
 ### Current concurrency posture
 
-**Actors (7):**
+**Actors (6):**
 
 | Actor | File | Risk |
 |-------|------|------|
@@ -150,7 +150,6 @@ Tests construct `AppModel(repository:)` as a plain value — no property wrapper
 | `NoteRepository` | `Data/NoteRepository.swift` | Low–medium — many APIs; ensure payloads are Sendable |
 | `DatabaseDocument` | `Data/DatabaseDocument.swift` | Low |
 | `DatabaseRepository` | `Data/DatabaseRepository.swift` | Medium — fire-and-forget `Task` usage |
-| `TableDocument` | `Data/TableDocument.swift` | Low |
 | `ExternalBookmarkStore` | `Data/ExternalBookmarkStore.swift` | Low |
 
 **`@MainActor` annotations:**
@@ -190,7 +189,7 @@ Tests construct `AppModel(repository:)` as a plain value — no property wrapper
 
 **Tier 1 — Mechanical (high confidence):**
 
-1. Add `Sendable` to core value types that cross isolation boundaries: `NoteDocument`, `NoteMetadata`, `Block`, `Span`, `EditCommand`, `NoteLink`, `NoteSummary`, `BacklinkItem`, `RepairAdvisory`, `FolderCatalog`, `PendingEditorScroll`, `TableEditorPayload`, `ExternalEditConflict`, `ExternalTextComparePayload`. These are likely all structs with Sendable-compatible fields.
+1. Add `Sendable` to core value types that cross isolation boundaries: `NoteDocument`, `NoteMetadata`, `Block`, `Span`, `EditCommand`, `NoteLink`, `NoteSummary`, `BacklinkItem`, `RepairAdvisory`, `FolderCatalog`, `PendingEditorScroll`, `ExternalEditConflict`, `ExternalTextComparePayload`. These are likely all structs with Sendable-compatible fields.
 2. Mark `SingleSurfaceNoteEditor.Coordinator` and `WikiLinkTextView` as `@MainActor` — they already execute on main; this makes it explicit.
 3. Mark `@Sendable` on `ActiveNoteFilePresenter.onChange` closure and `VaultDirectoryWatcher` callback closures.
 

@@ -178,9 +178,6 @@ private struct ActiveEditorPane: View {
                                 }
                             }
                         }
-                        Button("Table") { model.addTableToActiveNote() }
-                        Button("Open table") { model.openFirstTableArtifact() }
-                            .disabled(!current.metadata.artifacts.contains { $0.kind == .table })
                     }
                 }
             } else {

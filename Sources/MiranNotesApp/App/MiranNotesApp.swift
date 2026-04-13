@@ -30,9 +30,6 @@ struct MiranNotesApp: App {
             .task {
                 model.loadVault()
             }
-            .sheet(item: $model.tableEditorPayload) { payload in
-                TableEditorSheet(jsonlURL: payload.jsonlURL, schemaURL: payload.schemaURL)
-            }
             .sheet(item: $model.externalTextCompare) { payload in
                 ExternalEditCompareSheet(payload: payload) {
                     model.externalTextCompare = nil
@@ -193,13 +190,6 @@ struct EditorRootView: View {
                                 }
                             }
                         }
-                        Button("Table") {
-                            model.addTableToActiveNote()
-                        }
-                        Button("Open table") {
-                            model.openFirstTableArtifact()
-                        }
-                        .disabled(!current.metadata.artifacts.contains { $0.kind == .table })
                     }
                 }
             }

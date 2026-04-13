@@ -14,7 +14,7 @@
 
 ### What the app is
 
-**Miran Notes** is a **simple, minimalistic, local-first, macOS-native** knowledge storer. Each note is stored as human-readable files in a **vault**: canonical body text in `{relativePath}.txt`, structured metadata (blocks, inline styles, wiki links, embedded artifact references) in `{relativePath}.meta.json`, plus vault-level indexes under **`.miran/`** (manifest, link graph, relationship index, folder catalog, path index, pending-commit staging). Heavy structured data (for example **tables**) can live under **`_aux/{noteID}/`** as JSONL and schema files (per ADR 0002).
+**Miran Notes** is a **simple, minimalistic, local-first, macOS-native** knowledge storer. Each note is stored as human-readable files in a **vault**: canonical body text in `{relativePath}.txt`, structured metadata (blocks, inline styles, wiki links, embedded artifact references) in `{relativePath}.meta.json`, plus vault-level indexes under **`.miran/`** (manifest, link graph, relationship index, folder catalog, path index, pending-commit staging). **Structured, queryable grids** belong in **vault-level databases** under **`_databases/`** ([ADR 0004](adr/0004-vault-level-databases-and-planning.md)); optional **`_aux/{noteID}/`** may exist from legacy builds or future note-scoped files (see [ADR 0002](adr/0002-auxiliary-storage-jsonl.md)).
 
 **Problem it solves:** Many knowledge workers want a **fast, trustworthy place to store and connect ideas** without surrendering data to a cloud service or dealing with a heavy, plugin-heavy runtime. Miran targets users who value **simplicity, ownership of files, and predictable behavior** on a Mac—students, researchers, and developers who treat notes as durable assets and want nothing more than a clean editor and reliable storage.
 
@@ -56,10 +56,9 @@ Miran aims for a **disciplined editing pipeline**—commands, integrity checks, 
 7. **Markdown-style list entry** — Typing `-` at line start and committing with **space** can be recognized (`MarkdownCommandDetector`) as a structured list path parallel to slash auto-commit.  
 8. **Wiki links** — `[[Display Title]]` in the body; metadata stores ranges and `targetNoteID`. **Clicking** a link in the editor navigates to the target note. The **Link** toolbar menu inserts a link to another note at the **live caret** (`editorCursorOffset`). Links resolve by **note ID**, not filename.  
 9. **Backlinks** — A **Backlinks** column shows notes that link *to* the open note, with **context snippets** around the link in the source. Choosing a backlink opens that note and, when possible, **scrolls to the link range** in the editor (`pendingEditorScroll`).  
-10. **Tables (structured artifacts)** — Toolbar actions can **add a table** (bootstrap JSONL + schema under `_aux/{noteID}/`) or **open** an existing table in a **table editor sheet** (lazy load; separate concern from the main text surface—ADR 0002).  
-11. **Persistence** — Debounced autosave writes text and metadata; vault commit runs a **two-phase** prepare/commit with a **persisted commit journal** and **resumable** renames. **Dirty flags** skip rewriting unchanged index files.  
-12. **External edits** — The vault **subtree** is watched; events debounce and autosave-self-writes are ignored. If the buffer is dirty and disk changed, the user gets a **conflict** alert with plain-language copy, **Use the saved file** vs **Keep my edits**, **Show in Finder**, and optional **details** (disk timestamp). `DocumentRevisionToken` complements modification dates where used.  
-13. **Integrity and notices** — Load-time normalization, missing wiki metadata, full-buffer replace fallback, size cap, **vault integrity** after save, and **recovery** summaries surface as **dismissible banners** with optional **Details** sheets (non-technical titles; technical lines when needed for support).
+10. **Persistence** — Debounced autosave writes text and metadata; vault commit runs a **two-phase** prepare/commit with a **persisted commit journal** and **resumable** renames. **Dirty flags** skip rewriting unchanged index files.  
+11. **External edits** — The vault **subtree** is watched; events debounce and autosave-self-writes are ignored. If the buffer is dirty and disk changed, the user gets a **conflict** alert with plain-language copy, **Use the saved file** vs **Keep my edits**, **Show in Finder**, and optional **details** (disk timestamp). `DocumentRevisionToken` complements modification dates where used.  
+12. **Integrity and notices** — Load-time normalization, missing wiki metadata, full-buffer replace fallback, size cap, **vault integrity** after save, and **recovery** summaries surface as **dismissible banners** with optional **Details** sheets (non-technical titles; technical lines when needed for support).
 
 **Typical session:** Open the vault, browse folders, search for a phrase, edit with slash commands and formatting, insert internal links from the toolbar, follow backlinks with snippets, rely on autosave, and resolve rare conflicts explicitly.
 
@@ -81,7 +80,7 @@ Miran aims for a **disciplined editing pipeline**—commands, integrity checks, 
 ### Screens and interactions (textual)
 
 - **Shell:** `NavigationSplitView` — **sidebar** (folder tree, search, toolbar actions) and **detail** (editor or empty state).  
-- **Editor:** `HSplitView` — main **single-surface editor** and **Backlinks** strip; toolbar **Link** menu, **Table** / **Open table**, standard **Format** menu shortcuts.  
+- **Editor:** `HSplitView` — main **single-surface editor** and **Backlinks** strip; toolbar **Link** menu and standard **Format** menu shortcuts.  
 - **Editor:** `EditorVisualStyle` applies fonts per block type, styled spans, link coloring; **`BlockChromeOverlayView`** draws minimal gutter/handle hints for hovered/focused blocks (pass-through hits).  
 - **Caret-aware operations:** `editorCursorOffset` binds caret position for wiki-link insertion and command routing.  
 - **Banners:** Dismissible advisories for structural repair, wiki metadata gaps, full-buffer replace, **1 MB (UTF-16) cap**, **vault recovery**, and **vault integrity** warnings—with **Details** where useful.  
@@ -161,15 +160,14 @@ flowchart TB
 5. **No SQLite in core path** — Files + JSON indexes. **Trade-off:** Custom consistency discipline; **win:** transparency, simple backup story.  
 6. **Atomic multi-file commits + recovery** — Staging dir + journal; **startup recovery** completes or discards interrupted work.  
 7. **Semantic reconciliation policy** — When text and metadata disagree, the system **must not silently guess user intent**; user-visible repair/conflict flows (Constraints).  
-8. **Tables in JSONL (ADR 0002)** — Heavy rows off the main editing loop; separate sheet editor.  
-9. **Extension contracts** — `ExtensionContractVersion`, `CommandPipelineContract.maxCommandsPerBatch`, `ExtensionCompatibility.supports` — **directional** stability for interceptors and future modules; not a full plugin marketplace yet.
+8. **Extension contracts** — `ExtensionContractVersion`, `CommandPipelineContract.maxCommandsPerBatch`, `ExtensionCompatibility.supports` — **directional** stability for interceptors and future modules; not a full plugin marketplace yet.
 
 ### Extensibility and future-proofing
 
 - **Schema versioning** in metadata and manifest (`VaultManifest.schemaVersion` 2) supports migration (legacy `baseName` decodes as `relativePath`).  
 - **`ExtensionPoints.swift`** documents roadmap placeholders without forcing premature implementation.  
 - **Slash registry** allows new commands without forking the editor.  
-- **Auxiliary storage** (`_aux/{noteID}/`) holds structured artifacts without merging megabytes into `note.txt`.
+- **Auxiliary storage** (`_aux/{noteID}/`) may exist for legacy or future note-scoped files without merging megabytes into `note.txt`; vault-level structured data lives under `_databases/` (ADR 0004).
 
 **Engineering expectation:** New features should state **what is stored where**, how **migration** works, and impact on **performance** and **constraints** (per internal docs).
 
@@ -185,7 +183,7 @@ flowchart TB
 - Documented **constraints** and **ADRs** for links, auxiliary storage, folders/paths (0003), slash behavior.  
 - **Automated tests** (core, app, watcher races, performance baselines, copy stability tests) and explicit **integrity** hooks.  
 - **Hardening** shipped: journal-backed commits, startup recovery, dirty index writes, debounced backlink refresh, bounded undo, repair and integrity notices, external-edit conflict path with clearer copy, nested vault paths with **FolderCatalog** / **PathIndex** wired through repository and **sidebar UI**.  
-- **Product UX** now includes folder tree, search-with-snippets, backlink snippets, table toolbar, and wiki-link insertion—not only index layers.
+- **Product UX** now includes folder tree, search-with-snippets, backlink snippets, and wiki-link insertion—not only index layers.
 
 **Fragile or evolving:**
 
@@ -256,7 +254,7 @@ flowchart TB
 
 1. **Student preparing for exams** — Course folders per subject, search across notes, callouts and lists, links between topics (`[[…]]`). **Architecture:** fast autosave, offline-only, no account.  
 2. **Lawyer organizing matters** — Nested folders per client or matter; internal links between memos; conflict prompts if a file is edited outside the app. **Architecture:** identity-first links reduce breakage when paths change.  
-3. **Developer documenting a system** — Code blocks, wiki links between design docs; JSONL tables for structured reference data without bloating the note body. **Architecture:** auxiliary files per ADR 0002.
+3. **Developer documenting a system** — Code blocks, wiki links between design docs; structured reference data can live in **vault-level databases** (`_databases/`, ADR 0004) when Planning/database UIs are enabled; the core app stays text-first.
 
 ---
 

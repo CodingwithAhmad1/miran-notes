@@ -5,7 +5,7 @@
 
 ## Context
 
-Miran Notes had per-note JSONL tables under `_aux/{noteID}/` ([ADR 0002](0002-auxiliary-storage-jsonl.md)), but these were scoped to individual notes, bypassed the `VaultCommitCoordinator`, and lacked a query layer. The Zora Planning application was a separate standalone menu-bar app using YAML frontmatter in `.md` files for tasks and sessions — architecturally disconnected from Miran Notes.
+Miran Notes once experimented with per-note JSONL tables under `_aux/{noteID}/` ([ADR 0002](0002-auxiliary-storage-jsonl.md)); that path was scoped to individual notes, bypassed the `VaultCommitCoordinator`, and lacked a query layer (the standalone table UI was later withdrawn—0002 is historical). The Zora Planning application was a separate standalone menu-bar app using YAML frontmatter in `.md` files for tasks and sessions — architecturally disconnected from Miran Notes.
 
 The goal was to integrate planning (tasks, sessions, calendar, dashboard) seamlessly into Miran Notes, similar to how Notion Calendar connects with Notion: shared data layer, cross-linking, and unified UI.
 
@@ -61,7 +61,7 @@ Cross-feature bridges: `/task` and `/session` slash commands, `linkActiveNoteToT
 
 ## Consequences
 
-- **Per-note tables** (`_aux/`) remain for note-scoped tabular data; vault-level databases under `_databases/` serve cross-note structured data.
+- **Per-note table artifacts** (`_aux/…/tables/`) are no longer created by the app (see ADR 0002); vault-level databases under `_databases/` are the structured-data path.
 - Database persistence currently uses direct file I/O rather than participating in `VaultCommitCoordinator` atomic commits. This is acceptable because database writes are self-contained (not entangled with note saves), but a future enhancement could add a `DatabaseCommitParticipant` for coordinated multi-entity transactions.
 - The `DatabaseRegistry` index adds a new file to `.miran/` that older Miran Notes versions will ignore (forward-compatible by convention).
 - Planning schemas are predefined but extensible — users can add columns, views, and filters.

@@ -15,16 +15,14 @@ public struct NoteLink: Codable, Equatable, Sendable {
 }
 
 public enum EmbeddedArtifactKind: String, Codable, Sendable, CaseIterable {
-    case table
     case databaseRow
     case databaseView
 }
 
-/// Reference to auxiliary storage under `vault/_aux/{noteID}/`.
+/// Reference to auxiliary storage under `vault/_aux/{noteID}/` (paths relative to that directory).
 public struct EmbeddedArtifact: Codable, Equatable, Sendable {
     public var id: UUID
     public var kind: EmbeddedArtifactKind
-    /// Path relative to `_aux/{noteID}/`, e.g. `tables/{artifactID}.jsonl`.
     public var relativePath: String
 
     public init(id: UUID, kind: EmbeddedArtifactKind, relativePath: String) {

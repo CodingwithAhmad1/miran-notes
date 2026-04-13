@@ -10,6 +10,8 @@ Miran Notes is a **simple, minimalistic, local-first** macOS knowledge storer: c
 
 The [root README](../README.md) summarizes build commands, module layout, and features.
 
+**Legacy per-note tables:** An older experiment stored JSONL under `_aux/{noteID}/tables/`. The app no longer surfaces that feature; see [ADR 0002](adr/0002-auxiliary-storage-jsonl.md) for history and on-disk cleanup notes.
+
 ## Document map
 
 | Document | Role |

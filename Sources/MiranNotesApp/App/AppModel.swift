@@ -23,12 +23,6 @@ struct ExternalTextComparePayload: Identifiable, Equatable {
     var diskText: String
 }
 
-struct TableEditorPayload: Identifiable {
-    let id: UUID
-    let jsonlURL: URL
-    let schemaURL: URL
-}
-
 /// Pending scroll to a wiki-link range after navigating to `noteID` (e.g. from the backlink panel).
 struct PendingEditorScroll: Equatable {
     var noteID: UUID
@@ -103,7 +97,6 @@ final class AppModel: ObservableObject {
     @Published var noteQuery: String = ""
     /// Raw note body text per `noteID`, built asynchronously after `refreshNotes()` for substring search.
     @Published private(set) var bodySearchIndex: [UUID: String] = [:]
-    @Published var tableEditorPayload: TableEditorPayload?
     @Published var isLoading = false
     @Published var lastError: String?
     /// Non-nil when load-time adjustment ran, editor fallback fired, or size limit was hit.
@@ -578,45 +571,6 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func addTableToActiveNote() {
-        guard let doc = activeDocument else { return }
-        let noteID = doc.metadata.noteID
-        let artifactID = UUID()
-        Task { @MainActor in
-            do {
-                let paths = try TableDocumentFactory.bootstrapEmptyTable(
-                    vaultURL: repository.vaultURL,
-                    noteID: noteID,
-                    artifactID: artifactID
-                )
-                // Register the artifact in the model — scheduleAutosave handles persistence.
-                apply([.registerTableArtifact(artifactID: artifactID, relativePath: paths.relativePath)])
-                tableEditorPayload = TableEditorPayload(id: artifactID, jsonlURL: paths.jsonl, schemaURL: paths.schema)
-            } catch {
-                lastError = "Could not create table: \(error.localizedDescription)"
-            }
-        }
-    }
-
-    func openFirstTableArtifact() {
-        guard let doc = activeDocument,
-              let art = doc.metadata.artifacts.first(where: { $0.kind == .table }) else {
-            lastError = "No table on this note."
-            return
-        }
-        let aux = VaultPaths.auxDirectory(vaultURL: repository.vaultURL, noteID: doc.metadata.noteID)
-        let jsonl = aux.appendingPathComponent(art.relativePath, isDirectory: false)
-        let schemaName = (art.relativePath as NSString).lastPathComponent.replacingOccurrences(of: ".jsonl", with: ".schema.json")
-        let schema = jsonl.deletingLastPathComponent().appendingPathComponent(schemaName)
-        guard FileManager.default.fileExists(atPath: jsonl.path),
-              FileManager.default.fileExists(atPath: schema.path) else {
-            lastError = "Table files are missing on disk. Recreate the table artifact."
-            tableEditorPayload = nil
-            return
-        }
-        tableEditorPayload = TableEditorPayload(id: art.id, jsonlURL: jsonl, schemaURL: schema)
-    }
-
     func createNote() {
         Task { @MainActor in
             await flushCurrentNoteToDiskIfDirty()
@@ -630,7 +584,6 @@ final class AppModel: ObservableObject {
                 lastPersistedDocument = document
                 await refreshOnDiskFingerprints(for: relPath)
                 clearUndoStack()
-                syncTableEditorPayloadWithActiveDocument()
             } catch {
                 lastError = "Failed to create note: \(error.localizedDescription)"
             }
@@ -650,7 +603,6 @@ final class AppModel: ObservableObject {
             pendingEditorScroll = nil
             activeDocument = nil
             selectedNoteID = nil
-            tableEditorPayload = nil
             lastPersistedDocument = nil
             lastKnownDiskDate = nil
             lastKnownDiskRevision = nil
@@ -669,7 +621,6 @@ final class AppModel: ObservableObject {
             repairAdvisory = RepairDiagnosticsBuilder.buildLoadAdvisory(result: result)
             await refreshOnDiskFingerprints(for: path)
             clearUndoStack()
-            syncTableEditorPayloadWithActiveDocument()
             await refreshBacklinks()
         } catch {
             lastError = "Failed to load note: \(error.localizedDescription)"
@@ -934,7 +885,6 @@ final class AppModel: ObservableObject {
             case .changeBlockType: return "Change Block"
             case .toggleSpanStyle: return "Toggle Style"
             case .insertWikiLink: return "Insert Link"
-            case .registerTableArtifact: return "Add Table"
             case .registerDatabaseRow: return "Link Database Row"
             case .repairMetadata: return "Repair Note"
             case .replaceMetadataBlocks: return "Recover Blocks"
@@ -1198,7 +1148,6 @@ final class AppModel: ObservableObject {
             lastKnownDiskDate = diskDate
             lastKnownDiskRevision = diskRevision
             lastKnownNoteTextSHA256 = observedTextHash
-            syncTableEditorPayloadWithActiveDocument()
             Task { await refreshBacklinks() }
             return
         }
@@ -1233,24 +1182,6 @@ final class AppModel: ObservableObject {
 
     func dismissDiskActivityBanner() {
         diskActivityBanner = nil
-    }
-
-    /// Ensures an open table editor always points to an artifact in the active note and existing files.
-    private func syncTableEditorPayloadWithActiveDocument() {
-        guard let payload = tableEditorPayload else { return }
-        guard let document = activeDocument else {
-            tableEditorPayload = nil
-            return
-        }
-        let hasArtifact = document.metadata.artifacts.contains { artifact in
-            artifact.id == payload.id && artifact.kind == .table
-        }
-        let filesExist =
-            FileManager.default.fileExists(atPath: payload.jsonlURL.path)
-            && FileManager.default.fileExists(atPath: payload.schemaURL.path)
-        if !hasArtifact || !filesExist {
-            tableEditorPayload = nil
-        }
     }
 
     private func updateActiveNoteFilePresenter() {

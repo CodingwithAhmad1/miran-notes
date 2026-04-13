@@ -113,8 +113,6 @@ Additionally, ADR 0001 notes that `[[...]]` tokens can outlive `links[]` after a
 
 **`insertWikiLink` cursor**: `AppModel` always inserts at end of document. The coordinator knows the cursor (`textView.selectedRange()`), the model does not.
 
-**`addTableToActiveNote` redundant save**: calls `repository.save` directly after `apply(...)` which already scheduled autosave, bypassing the generation guard.
-
 ### Changes
 
 **`SingleSurfaceNoteEditor.swift`**:
@@ -131,12 +129,10 @@ Additionally, ADR 0001 notes that `[[...]]` tokens can outlive `links[]` after a
 - `apply(_ command: EditCommand) -> NoteDocument` — convenience wrapper returns result.
 - Add `@Published var editorCursorOffset: Int = 0`.
 - `insertWikiLink(to:displayText:)` reads `editorCursorOffset` instead of always using text end.
-- `addTableToActiveNote`: remove `try await repository.save(updated, asBaseName: baseName)`. Let debounce handle it.
 
 **`MiranNotesApp.swift`**: Update `onCommands: { model.apply($0) }` closure signature to `{ model.apply($0) }` — same call, just now returns `NoteDocument` (closure return type inferred).
 
-**Tests** — new `AppModelTableTests.swift`:
-- `addTableToActiveNote` sets `activeDocument.metadata.artifacts`, debounce eventually persists.
+**Tests**:
 - `insertWikiLink` with `editorCursorOffset = 3` inserts at position 3, not end.
 - Styling coherence: after `apply(.toggleSpanStyle(...))`, the returned document's spans match what would be styled (unit test of the return value, no NSTextView needed).
 

@@ -40,7 +40,7 @@ final class RangeNormalizerTests: XCTestCase {
     }
 
     func testNormalizePreservesArtifacts() {
-        let artifact = EmbeddedArtifact(id: UUID(), kind: .table, relativePath: "tables/foo.jsonl")
+        let artifact = EmbeddedArtifact(id: UUID(), kind: .databaseView, relativePath: "views/foo.json")
         let m = meta(
             blocks: [Block(id: "b0", type: .paragraph, range: TextRange(start: 0, length: 2), level: nil, icon: nil)],
             artifacts: [artifact]

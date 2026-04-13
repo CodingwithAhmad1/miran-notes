@@ -11,7 +11,7 @@ Internal inventory of every persistence touchpoint for `note.txt`, sidecars, vau
 | `relationship-index.json` | Coordinator (`RelationshipIndexCommitParticipant`) | **Already atomic** |
 | `folder-catalog.json` | Coordinator (`FolderCatalogCommitParticipant`) | **Already atomic** |
 | `path-index.json` | Coordinator (`PathIndexCommitParticipant`) | **Already atomic** |
-| `_aux/{noteID}/` tables (`*.jsonl`, schema JSON) | `TableDocument` private `atomicWrite` (tmp + `replaceItemAt`) | **Single-file by design** — not bundled in multi-file note/index commits; each table file is atomically replaced |
+| `_aux/{noteID}/` *(legacy)* | *(none — per-note table editor removed)* | Orphan `tables/*.jsonl` may remain from older builds until manual cleanup or note delete |
 | `.miran/external-bookmarks.json` | `ExternalBookmarkStore.saveAll` — `Data.write(..., .atomic)` | **Single-file by design** — atomic single-file write; not part of the note/index commit group |
 | `.miran/pending-commits/*` | Staging directories for in-flight `VaultCommitCoordinator` runs; removed after success or discarded on incomplete prepare | **Implementation detail** — not user data; used for crash recovery |
 

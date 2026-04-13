@@ -117,5 +117,5 @@ AppContentMode switcher (Cmd+1 Notes / Cmd+2 Planning)
 ## Related documents
 
 - [ADR 0004](../adr/0004-vault-level-databases-and-planning.md) — decision record for vault-level databases
-- [ADR 0002](../adr/0002-auxiliary-storage-jsonl.md) — per-note auxiliary JSONL (still used for note-scoped tables)
+- [ADR 0002](../adr/0002-auxiliary-storage-jsonl.md) — historical per-note `_aux/` JSONL layout (withdrawn; see ADR status)
 - [Constraints.md](../../Constraints.md) — non-negotiable constraints the planning layer respects

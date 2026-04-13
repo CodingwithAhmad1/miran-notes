@@ -10,8 +10,6 @@ public enum EditCommand {
     case toggleSpanStyle(range: TextRange, style: SpanStyle)
     /// Inserts `[[displayText]]` at UTF-16 offset and records a wiki link to `targetNoteID` over the inserted token.
     case insertWikiLink(utf16Offset: Int, targetNoteID: UUID, displayText: String)
-    /// Registers a table artifact path under `_aux/{noteID}/` (file created by repository / UI).
-    case registerTableArtifact(artifactID: UUID, relativePath: String)
     /// Registers an inline database row reference in note metadata.
     case registerDatabaseRow(databaseID: UUID, rowID: UUID)
     case repairMetadata
@@ -40,8 +38,6 @@ public struct EditCommandEngine {
             next = toggleSpan(document: next, range: range, style: style)
         case let .insertWikiLink(utf16Offset, targetNoteID, displayText):
             next = insertWikiLink(document: next, utf16Offset: utf16Offset, targetNoteID: targetNoteID, displayText: displayText)
-        case let .registerTableArtifact(artifactID, relativePath):
-            next = registerTableArtifact(document: next, artifactID: artifactID, relativePath: relativePath)
         case let .registerDatabaseRow(databaseID, rowID):
             next = registerDatabaseRow(document: next, databaseID: databaseID, rowID: rowID)
         case .repairMetadata:
@@ -225,15 +221,6 @@ public struct EditCommandEngine {
         if !RangeNormalizer.isValid(metadata: next.metadata, for: next.text) {
             let repaired = RangeNormalizer.normalize(metadata: next.metadata, for: next.text, stripZeroLengthBlocks: false)
             next.metadata = repaired.normalizedMetadata
-        }
-        return next
-    }
-
-    private static func registerTableArtifact(document: NoteDocument, artifactID: UUID, relativePath: String) -> NoteDocument {
-        var next = document
-        let artifact = EmbeddedArtifact(id: artifactID, kind: .table, relativePath: relativePath)
-        if !next.metadata.artifacts.contains(where: { $0.id == artifactID }) {
-            next.metadata.artifacts.append(artifact)
         }
         return next
     }

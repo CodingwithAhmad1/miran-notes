@@ -242,7 +242,7 @@ final class NoteRepositoryTests: XCTestCase {
         )
         let artifactID = UUID()
         metadata.artifacts = [
-            EmbeddedArtifact(id: artifactID, kind: .table, relativePath: "tables/\(artifactID.uuidString.lowercased()).jsonl")
+            EmbeddedArtifact(id: artifactID, kind: .databaseView, relativePath: "views/\(artifactID.uuidString.lowercased()).json")
         ]
         let doc = NoteDocument(text: "hello", metadata: metadata)
         try await repo.save(doc, asBaseName: "index-check")

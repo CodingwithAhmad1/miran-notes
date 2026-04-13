@@ -12,6 +12,14 @@ public struct NoteDocument: Identifiable, Equatable {
     }
 }
 
+/// Decodes `artifacts` from `.meta.json` with tolerant handling: legacy `kind: "table"` entries are dropped;
+/// unknown `kind` strings are skipped so older app versions can add kinds before this binary understands them.
+private struct EmbeddedArtifactDecodingDTO: Decodable {
+    var id: UUID
+    var kind: String
+    var relativePath: String
+}
+
 public struct NoteMetadata: Codable, Equatable {
     public var schemaVersion: Int
     /// Stable vault-wide identity; persisted in sidecar (v2+). Assigned on migrate for legacy notes.
@@ -77,9 +85,22 @@ public struct NoteMetadata: Codable, Equatable {
         blocks = try c.decodeIfPresent([Block].self, forKey: .blocks) ?? []
         spans = try c.decodeIfPresent([Span].self, forKey: .spans) ?? []
         links = try c.decodeIfPresent([NoteLink].self, forKey: .links) ?? []
-        artifacts = try c.decodeIfPresent([EmbeddedArtifact].self, forKey: .artifacts) ?? []
+        artifacts = try Self.decodeArtifactsFilteringLegacyTable(from: c)
         databaseRowReferences = try c.decodeIfPresent([DatabaseRowReference].self, forKey: .databaseRowReferences) ?? []
         properties = try c.decodeIfPresent([String: String].self, forKey: .properties) ?? [:]
+    }
+
+    private static func decodeArtifactsFilteringLegacyTable(from c: KeyedDecodingContainer<CodingKeys>) throws -> [EmbeddedArtifact] {
+        guard c.contains(.artifacts) else { return [] }
+        let dtos = try c.decodeIfPresent([EmbeddedArtifactDecodingDTO].self, forKey: .artifacts) ?? []
+        var out: [EmbeddedArtifact] = []
+        out.reserveCapacity(dtos.count)
+        for dto in dtos {
+            if dto.kind == "table" { continue }
+            guard let kind = EmbeddedArtifactKind(rawValue: dto.kind) else { continue }
+            out.append(EmbeddedArtifact(id: dto.id, kind: kind, relativePath: dto.relativePath))
+        }
+        return out
     }
 
     public func encode(to encoder: Encoder) throws {
