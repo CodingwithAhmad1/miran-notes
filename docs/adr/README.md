@@ -10,9 +10,10 @@ ADRs capture **significant, stable decisions** with context and consequences. Th
 | [0002-auxiliary-storage-jsonl.md](0002-auxiliary-storage-jsonl.md) | Historical `_aux/` JSONL table layout (withdrawn; decode-only cleanup) |
 | [0003-folders-paths-and-manifest-v2.md](0003-folders-paths-and-manifest-v2.md) | Nested folders, `relativePath`, manifest v2 |
 | [0004-vault-level-databases-and-planning.md](0004-vault-level-databases-and-planning.md) | Vault-level databases (`_databases/`) and Miran Planning integration |
+| [0005-block-metadata-invariants.md](0005-block-metadata-invariants.md) | Block metadata invariants (gapless UTF-16 partition, normalization contract) |
 
 ## Adding an ADR
 
-1. Use the next number after the latest ADR (e.g. `0005-short-title.md`).
+1. Use the next number after the latest ADR (e.g. `0006-short-title.md`).
 2. Include **Status**, **Context**, **Decision**, and **Consequences** (or equivalent).
 3. Link the new file from the table above.
