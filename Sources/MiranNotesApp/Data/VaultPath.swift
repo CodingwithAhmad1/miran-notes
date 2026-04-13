@@ -10,6 +10,17 @@ enum VaultPath {
         return last.replacingOccurrences(of: "-", with: " ").capitalized
     }
 
+    /// Sidebar / list label when several notes share the same ``displayTitle`` (e.g. `note.md` in different folders).
+    static func disambiguatedListTitle(relativePath: String) -> String {
+        let parts = relativePath.split(separator: "/").map(String.init)
+        let base = displayTitle(forRelativePath: relativePath)
+        guard parts.count > 1 else {
+            return "\(base) · Root"
+        }
+        let prefix = parts.dropLast().map { displayTitle(forRelativePath: $0) }.joined(separator: " › ")
+        return "\(prefix) › \(base)"
+    }
+
     /// Slug for a single path segment (folder display name or note title stem).
     static func slugifySegment(_ value: String) -> String {
         let slug = value
