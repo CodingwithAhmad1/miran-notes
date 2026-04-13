@@ -142,7 +142,7 @@ flowchart TB
 | Component | Responsibility |
 |-----------|----------------|
 | **MiranNotesCore** | Domain model, `EditCommand` semantics, `splitBlock` with span/link boundary constraints, integrity and normalization, `ExtensionRegistry`, `CommandPipelineContract`, `ExtensionCompatibility`, `TextEditDiff`, `DocumentRevisionToken`. |
-| **MiranNotesApp / AppModel** | Session state, undo checkpoints + `UndoManager`, autosave scheduling, repair and integrity advisories, conflict alerts, backlink/snippet building, body search index scheduling, folder/note CRUD orchestration, `pendingEditorScroll`, command interceptors (UUID deregistration). |
+| **MiranNotesApp / AppModel** | Session state on `@MainActor @Observable` (Swift `Observation`), undo checkpoints + `UndoManager`, autosave scheduling, repair and integrity advisories, conflict alerts, backlink/snippet building, body search index scheduling, folder/note CRUD orchestration, `pendingEditorScroll`, command interceptors (UUID deregistration). |
 | **SingleSurfaceNoteEditor** | TextKit bridge, incremental vs full-buffer updates, slash/menu UX, markdown bullet commit path, size limit gate, IME-safe behavior. |
 | **DocumentLayoutController** | Newline split / merge / empty list-item normalization at the text delegate layer. |
 | **SlashCommandRegistry** | Built-ins + **open** `register(_:)` for additional commands. |

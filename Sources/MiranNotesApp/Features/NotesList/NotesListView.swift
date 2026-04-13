@@ -3,7 +3,7 @@ import SwiftUI
 
 private struct SidebarOutlineRows: View {
     let entries: [SidebarOutlineEntry]
-    @ObservedObject var model: AppModel
+    var model: AppModel
     let selectedNoteID: UUID?
 
     @State private var hoveredNoteID: UUID?
@@ -60,7 +60,7 @@ private struct SidebarOutlineRows: View {
 }
 
 struct NotesListView: View {
-    @ObservedObject var model: AppModel
+    @Bindable var model: AppModel
 
     private var emptyListMessage: String {
         if model.noteSummaries.isEmpty {

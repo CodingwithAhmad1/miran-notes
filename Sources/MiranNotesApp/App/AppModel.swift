@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import MiranNotesCore
+import Observation
 import os.log
 import SwiftUI
 
@@ -45,7 +46,8 @@ enum SidebarOutlineEntry: Identifiable {
 }
 
 @MainActor
-final class AppModel: ObservableObject {
+@Observable
+final class AppModel {
     enum StartupLinkGraphSyncMode: Equatable {
         case immediate
         case deferred
@@ -84,41 +86,41 @@ final class AppModel: ObservableObject {
         return StartupLinkGraphSyncDecision(mode: .immediate, reason: "withinBudget")
     }
 
-    @Published var noteSummaries: [NoteSummary] = []
+    var noteSummaries: [NoteSummary] = []
     /// Manifest `relativePath` for the open note (stable selection for tests and shell).
-    @Published var selectedBaseName: String?
+    var selectedBaseName: String?
     /// Stable UUID identity of the selected note. This is the canonical UI selection key;
     /// `selectedBaseName` is the companion disk-I/O key kept in sync alongside it.
-    @Published var selectedNoteID: UUID?
-    @Published var activeDocument: NoteDocument?
-    @Published var backlinks: [BacklinkItem] = []
+    var selectedNoteID: UUID?
+    var activeDocument: NoteDocument?
+    var backlinks: [BacklinkItem] = []
     /// When set, the editor scrolls to this range once that note is loaded.
-    @Published var pendingEditorScroll: PendingEditorScroll?
-    @Published var noteQuery: String = ""
+    var pendingEditorScroll: PendingEditorScroll?
+    var noteQuery: String = ""
     /// Raw note body text per `noteID`, built asynchronously after `refreshNotes()` for substring search.
-    @Published private(set) var bodySearchIndex: [UUID: String] = [:]
-    @Published var isLoading = false
-    @Published var lastError: String?
+    private(set) var bodySearchIndex: [UUID: String] = [:]
+    var isLoading = false
+    var lastError: String?
     /// Non-nil when load-time adjustment ran, editor fallback fired, or size limit was hit.
     /// Shown as a dismissible advisory banner — the editor is always open.
-    @Published var repairAdvisory: RepairAdvisory?
+    var repairAdvisory: RepairAdvisory?
     /// When non-nil, shows the external-edit conflict alert (`diskDate` is the on-disk modification time that triggered it).
-    @Published var externalEditConflictAlert: ExternalEditConflict?
+    var externalEditConflictAlert: ExternalEditConflict?
     /// Non-blocking hint when disk changes conflict with a dirty buffer (set together with ``externalEditConflictAlert``).
-    @Published var diskActivityBanner: String?
+    var diskActivityBanner: String?
     /// Side-by-side compare payload (opened from conflict flow).
-    @Published var externalTextCompare: ExternalTextComparePayload?
+    var externalTextCompare: ExternalTextComparePayload?
     /// Cached folder tree for outline UI (kept in sync with `refreshNotes()`).
-    @Published var folderCatalog: FolderCatalog = FolderCatalog()
+    var folderCatalog: FolderCatalog = FolderCatalog()
 
     // MARK: - Layout state
 
     /// Active pane layout selection. Defaults to single-pane (the original behaviour).
-    @Published var currentLayout: PaneLayout = .single
+    var currentLayout: PaneLayout = .single
     /// Index of the pane that is currently editable (0 = top-left / first pane).
-    @Published var activePaneIndex: Int = 0
+    var activePaneIndex: Int = 0
     /// State for the non-active (read-only) view panes. Count is always `currentLayout.paneCount - 1`.
-    @Published var viewPaneStates: [ViewPaneState] = []
+    var viewPaneStates: [ViewPaneState] = []
 
     let repository: NoteRepository
     private var saveTask: Task<Void, Never>?
@@ -135,9 +137,9 @@ final class AppModel: ObservableObject {
     /// Bumped when the selected note identity changes so debounced autosave completions cannot apply stale persistence state.
     private var navigationGeneration = 0
     /// Current cursor offset (UTF-16) in the active editor surface, updated by the coordinator on selection change.
-    @Published var editorCursorOffset: Int = 0
+    var editorCursorOffset: Int = 0
     /// Full UTF-16 selection in the active editor (`length == 0` for caret-only).
-    @Published var editorTextSelection: MiranNotesCore.TextRange = MiranNotesCore.TextRange(start: 0, length: 0)
+    var editorTextSelection: MiranNotesCore.TextRange = MiranNotesCore.TextRange(start: 0, length: 0)
     private let undoPolicy: UndoPolicy
     /// One checkpoint per document version: `checkpoints[0]` is the oldest retained state, `checkpoints.last` materializes to `activeDocument` after each recorded edit.
     /// Uses ``UndoCheckpoint/replaceTextOnly`` to avoid retaining full ``NoteDocument`` copies for pure ``EditCommand/replaceText`` steps when inverses apply.

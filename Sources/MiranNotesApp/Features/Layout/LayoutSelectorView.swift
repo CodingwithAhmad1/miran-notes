@@ -3,7 +3,7 @@ import SwiftUI
 /// Popover panel for choosing a pane layout, shown from the top-right layout button.
 /// Left column lists saved layouts (empty for now); right column shows built-in layout options.
 struct LayoutSelectorView: View {
-    @ObservedObject var model: AppModel
+    var model: AppModel
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {

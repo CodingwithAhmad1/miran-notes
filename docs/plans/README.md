@@ -20,13 +20,14 @@ Tools such as Cursor may create plans under **`.cursor/plans/`** on a developer 
 | [reliability-and-autosave-fixes.md](reliability-and-autosave-fixes.md) | Navigation race conditions, debounced-save flush before note switch/rename/create, `navigationGeneration` guard, backlink error surfacing | Implemented |
 | [robustness-phased-plan.md](robustness-phased-plan.md) | Phased hardening: repair advisory, `adjustBlocks`, slash registry, sync `onCommands`, cursor binding | Implemented (see repo history for test counts) |
 | [hybrid-undo-appmodel-wiring.md](hybrid-undo-appmodel-wiring.md) | `UndoInverseSupport.replaceTextChainUndoCommands`, `AppModel` `UndoCheckpoint` hybrid storage, prune rebase, `Constraints` undo section | Implemented |
+| [longevity-and-migration-analysis.md](longevity-and-migration-analysis.md) (Part 2) | `AppModel`: `ObservableObject` / `@Published` → `@Observable`; root `@State`; `@Bindable` at binding sites (Apr 2026) | Implemented |
 | Vault-level databases & Miran Planning (see [ADR 0004](../adr/0004-vault-level-databases-and-planning.md), [planning-integration.md](../architecture/planning-integration.md)) | Database infrastructure, planning data layer, planning UI, cross-feature integration, Zora migration | Implemented |
 
 ## Active / reference plans
 
 | Plan | Role |
 |------|------|
-| [longevity-and-migration-analysis.md](longevity-and-migration-analysis.md) | Platform longevity assessment and migration plans for TextKit 2, @Observable, Swift 6 concurrency |
+| [longevity-and-migration-analysis.md](longevity-and-migration-analysis.md) | Longevity assessment; **@Observable migration done**; remaining: TextKit 2, Swift 6 concurrency |
 | [vault-write-paths-audit.md](vault-write-paths-audit.md) | Vault write path audit notes |
 | [constraints-touchpoint-map.md](constraints-touchpoint-map.md) | Constraints touchpoint mapping |
 | [editor-interaction-scenarios.md](editor-interaction-scenarios.md) | Manual QA checklist (ongoing) |

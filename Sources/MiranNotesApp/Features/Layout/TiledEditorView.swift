@@ -4,7 +4,7 @@ import SwiftUI
 /// The detail-column root for the Notes mode. Renders the active layout — either the
 /// classic single-pane editor or a tiled arrangement of multiple note panes.
 struct TiledEditorView: View {
-    @ObservedObject var model: AppModel
+    var model: AppModel
     @State private var layoutSelectorVisible = false
 
     var body: some View {
@@ -125,7 +125,7 @@ struct TiledEditorView: View {
 /// Stripped editor: SingleSurfaceNoteEditor + activity banners, without the backlinks sidebar.
 /// Used as the active/editable pane in two-, three-, and four-pane layouts.
 private struct ActiveEditorPane: View {
-    @ObservedObject var model: AppModel
+    @Bindable var model: AppModel
     @Environment(\.undoManager) private var undoManager
     @State private var repairDetailsPresented = false
 

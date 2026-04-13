@@ -12,7 +12,7 @@ private final class MiranNotesAppDelegate: NSObject, NSApplicationDelegate {
 @main
 struct MiranNotesApp: App {
     @NSApplicationDelegateAdaptor(MiranNotesAppDelegate.self) private var appDelegate
-    @StateObject private var model: AppModel
+    @State private var model: AppModel
     @State private var conflictDetailsPresented = false
     @State private var conflictDetailsDiskDate: Date?
 
@@ -21,7 +21,7 @@ struct MiranNotesApp: App {
         let vault = URL(fileURLWithPath: NSHomeDirectory())
             .appendingPathComponent("MiranNotesVault", isDirectory: true)
         let repository = NoteRepository(vaultURL: vault)
-        _model = StateObject(wrappedValue: AppModel(repository: repository))
+        _model = State(wrappedValue: AppModel(repository: repository))
     }
 
     var body: some Scene {
@@ -131,7 +131,7 @@ struct MiranNotesApp: App {
 }
 
 struct EditorRootView: View {
-    @ObservedObject var model: AppModel
+    @Bindable var model: AppModel
     @Environment(\.undoManager) private var undoManager
     @State private var repairDetailsPresented = false
 

@@ -33,7 +33,7 @@ The [root README](../README.md) summarizes build commands, module layout, and fe
 | [adr/README.md](adr/README.md) | Architecture Decision Records index |
 | **Plans and QA** | |
 | [plans/README.md](plans/README.md) | Planning docs index and completed plans |
-| [plans/longevity-and-migration-analysis.md](plans/longevity-and-migration-analysis.md) | Platform longevity assessment and migration plans (TextKit 2, @Observable, Swift 6) |
+| [plans/longevity-and-migration-analysis.md](plans/longevity-and-migration-analysis.md) | Longevity assessment; `@Observable` migration **done**; TextKit 2 + Swift 6 still planned |
 | [plans/editor-interaction-scenarios.md](plans/editor-interaction-scenarios.md) | Manual QA checklist (typing, blocks, IME, large notes) |
 | [plans/hybrid-undo-appmodel-wiring.md](plans/hybrid-undo-appmodel-wiring.md) | Hybrid undo implementation (completed) |
 | **Testing** | |
@@ -53,9 +53,11 @@ The [root README](../README.md) summarizes build commands, module layout, and fe
 - **App / Editor:** `Sources/MiranNotesApp/Features/Editor/` — `SingleSurfaceNoteEditor`, `EditorVisualStyle`, `SlashCommandRegistry`.
 - **App / Planning *(deactivated)*:** `Sources/MiranNotesApp/Features/Planning/` — `PlanningModel`, dashboard, calendar, database views, edit sheets, inline embeds, settings, migration engine, slash commands, daily template. Source preserved; `MenuBarExtra` and planning slash commands are commented out during the pivot.
 - **App shell:** `Sources/MiranNotesApp/App/` — `AppModel`, `MiranNotesApp`.
-- **Tests:** `Tests/MiranNotesTests/`, `Tests/MiranNotesAppTests/` (`swift test`, 204 tests).
+- **Tests:** `Tests/MiranNotesTests/`, `Tests/MiranNotesAppTests/` (`swift test`).
 
-## Key `AppModel` published properties (selected)
+## Key `AppModel` observable state (selected)
+
+`AppModel` is `@MainActor @Observable` (Swift `Observation` framework). SwiftUI observes individual properties; views that need `$` bindings use `@Bindable var model: AppModel` (see `MiranNotesApp`, `NotesListView`, `EditorRootView`, `ActiveEditorPane`).
 
 | Property | Purpose |
 |----------|---------|
@@ -65,7 +67,6 @@ The [root README](../README.md) summarizes build commands, module layout, and fe
 | `editorTextSelection` | UTF-16 selection range for command context |
 | `externalEditConflictAlert` | External change vs dirty buffer |
 | `extensionRegistry` | Typed extension registry (runs before closure interceptors) |
-| `planningModel` | `PlanningModel` for tasks, sessions, dashboard, calendar — *deactivated during pivot; field still present on AppModel* |
 
 ## Key `AppModel` internals (tests)
 

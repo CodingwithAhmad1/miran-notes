@@ -24,7 +24,7 @@ Analysis of platform pressure points that will require engineering attention ove
 | Swift language | Source-compatible | 5+ years |
 | AppKit APIs | Frozen / stable | 5–10+ years |
 | **TextKit 1** | **Subtle bugs, no new fixes from Apple** | **~3–5 years before real pain** |
-| ObservableObject | Friction with new SwiftUI APIs | ~2–4 years |
+| ObservableObject → `@Observable` | Friction with new SwiftUI APIs | **Done (Apr 2026)** — `AppModel` is `@Observable`; root `@State`; `@Bindable` at binding sites |
 | Swift 6 strict concurrency | Compiler warnings / errors (opt-in) | ~1–2 years (voluntary migration) |
 | macOS 14 minimum target | Feels dated | ~2–3 years before bump needed |
 
@@ -32,14 +32,18 @@ Analysis of platform pressure points that will require engineering attention ove
 
 ## Part 2: Migration 1 — ObservableObject to @Observable
 
-### Difficulty: Very easy. One-pass, near-certain success.
+### Status: **Completed (April 2026)**
 
-### Current surface area
+**Shipped:** `import Observation` on `AppModel`; `@MainActor @Observable final class AppModel` with plain stored properties (`private(set)` retained for `bodySearchIndex`). `MiranNotesApp` holds the model with `@State` / `State(wrappedValue:)`. Views that need projected bindings use `@Bindable var model: AppModel` (`EditorRootView`, `NotesListView`, `ActiveEditorPane`). Pass-through views use `var model: AppModel` (`TiledEditorView`, `LayoutSelectorView`, `SidebarOutlineRows`). Full `swift test` green after change.
+
+### Difficulty (retrospective): Very easy. One-pass.
+
+### Pre-migration surface area (historical)
 
 | Item | Count | Files |
 |------|-------|-------|
 | `ObservableObject` conformances | 1 | `AppModel.swift` |
-| `@Published` properties | 20 | `AppModel.swift` |
+| `@Published` properties | 19 +1 `private(set)` | `AppModel.swift` |
 | `@StateObject` usage | 1 | `MiranNotesApp.swift` |
 | `@ObservedObject` usage | 6 | `NotesListView.swift` (×2), `MiranNotesApp.swift`, `TiledEditorView.swift` (×2), `LayoutSelectorView.swift` |
 | `@EnvironmentObject` | 0 | — |
@@ -54,84 +58,32 @@ Analysis of platform pressure points that will require engineering attention ove
 - Already targeting macOS 14, which is the minimum for `@Observable`.
 - `bodySearchIndex` has `private(set)` — this pattern works natively with `@Observable`.
 
-### Migration steps
+### Reference: migration recipe (for other modules)
 
-**Step 1: `AppModel.swift`**
-```swift
-// Before
-@MainActor
-final class AppModel: ObservableObject {
-    @Published var noteSummaries: [NoteSummary] = []
-    @Published var selectedNoteID: UUID?
-    @Published private(set) var bodySearchIndex: [UUID: String] = [:]
-    // ... 17 more @Published properties
-}
+**`AppModel.swift`:** `@MainActor @Observable final class AppModel`, `import Observation`, replace `@Published` with ordinary stored properties.
 
-// After
-@MainActor @Observable
-final class AppModel {
-    var noteSummaries: [NoteSummary] = []
-    var selectedNoteID: UUID?
-    private(set) var bodySearchIndex: [UUID: String] = [:]
-    // ... 17 more stored properties (remove @Published)
-}
-```
+**`MiranNotesApp.swift`:** `@State private var model` + `State(wrappedValue:)` in `init`.
 
-**Step 2: `MiranNotesApp.swift`**
-```swift
-// Before
-@StateObject private var model: AppModel
-// init: _model = StateObject(wrappedValue: AppModel(repository: repository))
+**Views:** `@Bindable` only where `$model.*` appears; otherwise `var model: AppModel`.
 
-// After
-@State private var model: AppModel
-// init: _model = State(wrappedValue: AppModel(repository: repository))
-```
+**Custom `Binding(get:set:)`** around `model` fields unchanged.
 
-**Step 3: Views with `@ObservedObject`**
+### Binding sites (as implemented)
 
-For views that only read (no `$` bindings):
-```swift
-// Before
-@ObservedObject var model: AppModel
-
-// After
-var model: AppModel
-```
-
-For views that use `$model.foo` bindings (sheet items, searchable, editor bindings):
-```swift
-// Before
-@ObservedObject var model: AppModel
-// usage: .sheet(item: $model.somePayload)
-
-// After
-@Bindable var model: AppModel
-// usage: .sheet(item: $model.somePayload) — same syntax, different wrapper
-```
-
-**Step 4: Custom `Binding(get:set:)` wrappers**
-
-The `Binding(get: { model.lastError }, set: { ... })` patterns in `MiranNotesApp.swift` continue to work unchanged with `@Observable`.
-
-### Binding sites requiring `@Bindable`
-
-| File | Line(s) | Binding pattern |
-|------|---------|-----------------|
-| `MiranNotesApp.swift` | *(sheet bindings)* | `.sheet(item: $model.externalTextCompare)` and other item sheets |
-| `MiranNotesApp.swift` | 170–171 | `$model.editorCursorOffset`, `$model.editorTextSelection` |
-| `NotesListView.swift` | 86 | `.searchable(text: $model.noteQuery)` |
-| `TiledEditorView.swift` | 159–160 | `$model.editorCursorOffset`, `$model.editorTextSelection` |
-
-These views need `@Bindable var model: AppModel` instead of bare `var`.
+| File | Binding pattern |
+|------|-----------------|
+| `MiranNotesApp.swift` | `.sheet(item: $model.externalTextCompare)`; `$model` projections work with `@State` + `@Observable` |
+| `MiranNotesApp.swift` | `EditorRootView` — `@Bindable`; `$model.editorCursorOffset`, `$model.editorTextSelection` |
+| `NotesListView.swift` | `@Bindable`; `.searchable(text: $model.noteQuery)` |
+| `TiledEditorView.swift` | `ActiveEditorPane` — `@Bindable`; editor bindings |
 
 ### Tests
 
-Tests construct `AppModel(repository:)` as a plain value — no property wrappers. Migration requires zero test changes.
+No test changes required — tests construct `AppModel` directly.
 
-### Risk assessment
+### Outcome
 
-**Confidence: ~95%.** The only non-mechanical consideration is SwiftUI view update granularity. With `@Observable`, views re-render only when the *specific* properties they read change, rather than on any `@Published` mutation. This is typically a performance *improvement*, but should be verified with a smoke test across note switching, search, and editor interactions.
+SwiftUI now tracks fine-grained property access on `AppModel` instead of invalidating on any `@Published` change.
 
 ---
 
@@ -350,9 +302,7 @@ The `textStorage(_:didProcessEditing:)` pipeline (`SingleSurfaceNoteEditor.swift
 
 ### Recommended order
 
-1. **ObservableObject → @Observable** (1 session, minimal risk)
-   - Smallest change, highest confidence, immediate benefit.
-   - Aligns the codebase with Apple's current direction before SwiftUI features start requiring it.
+1. ~~**ObservableObject → @Observable**~~ **Done (Apr 2026).**
 
 2. **Swift 6 strict concurrency** (2–3 sessions, compiler-guided)
    - Enable warnings first, fix iteratively.
@@ -369,7 +319,7 @@ The `textStorage(_:didProcessEditing:)` pipeline (`SingleSurfaceNoteEditor.swift
 
 | Migration | Sessions | Lines changed (est.) | Test changes |
 |-----------|----------|---------------------|-------------|
-| @Observable | 1 | ~80 | 0 |
+| @Observable | 1 | ~80 | 0 *(completed)* |
 | Swift 6 concurrency | 2–3 | ~200–400 | ~50 (add `@MainActor`, fix warnings) |
 | TextKit 2 | 3–5 | ~300–500 | ~100 (new geometry tests, QA matrix) |
 
@@ -383,12 +333,12 @@ The `textStorage(_:didProcessEditing:)` pipeline (`SingleSurfaceNoteEditor.swift
 - `Sources/MiranNotesApp/Features/Editor/EditorVisualStyle.swift` — 96 lines, `NSTextStorage` attributes
 - `Sources/MiranNotesApp/Features/Editor/EditorSyncController.swift` — 129 lines, model → view sync
 
-### State (@Observable migration scope)
-- `Sources/MiranNotesApp/App/AppModel.swift` — 20 `@Published` properties
-- `Sources/MiranNotesApp/App/MiranNotesApp.swift` — `@StateObject`, binding sites
-- `Sources/MiranNotesApp/Features/NotesList/NotesListView.swift` — 2× `@ObservedObject`
-- `Sources/MiranNotesApp/Features/Layout/TiledEditorView.swift` — 2× `@ObservedObject`
-- `Sources/MiranNotesApp/Features/Layout/LayoutSelectorView.swift` — 1× `@ObservedObject`
+### State (`@Observable` — **completed**)
+- `Sources/MiranNotesApp/App/AppModel.swift` — `@Observable`, `Observation`
+- `Sources/MiranNotesApp/App/MiranNotesApp.swift` — `@State` model; `EditorRootView` `@Bindable`
+- `Sources/MiranNotesApp/Features/NotesList/NotesListView.swift` — `@Bindable` + `SidebarOutlineRows` pass-through `var model`
+- `Sources/MiranNotesApp/Features/Layout/TiledEditorView.swift` — `var model`; `ActiveEditorPane` `@Bindable`
+- `Sources/MiranNotesApp/Features/Layout/LayoutSelectorView.swift` — `var model`
 
 ### Concurrency (Swift 6 migration scope)
 - All 7 actor files under `Sources/MiranNotesApp/Data/`

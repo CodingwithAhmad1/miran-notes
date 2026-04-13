@@ -16,7 +16,7 @@ When plain text and metadata disagree (for example after an external edit to `no
 
 **Constraint:** The app must **detect** inconsistency, **classify** it (safe vs ambiguous), and **never silently pick a semantic winner** when ambiguity matters. Acceptable behavior includes: blocking save, offering a **repair preview**, or requiring explicit user confirmation before rewriting sidecar metadata.
 
-**Load-time advisory:** `NoteRepository.loadNote` now returns `NoteLoadResult` which carries any `repairWarnings` collected during the three `RangeNormalizer.normalize` passes. `AppModel` surfaces these via `@Published var repairAdvisory`, displayed as a dismissible banner. This satisfies the "detect and classify" requirement without blocking the editor. A missing `[[...]]` link-metadata gap is detected separately and included in the same advisory.
+**Load-time advisory:** `NoteRepository.loadNote` now returns `NoteLoadResult` which carries any `repairWarnings` collected during the three `RangeNormalizer.normalize` passes. `AppModel` surfaces these via `repairAdvisory` (observable state on the `@Observable` model), displayed as a dismissible banner. This satisfies the "detect and classify" requirement without blocking the editor. A missing `[[...]]` link-metadata gap is detected separately and included in the same advisory.
 
 **Nested vault paths:** Notes may live under arbitrary subfolders (for example `vault/Folder/note.txt`). External edits anywhere under the vault tree follow the same reconciliation rules; the app watches the vault subtree (File System Events) so nested file changes are observed.
 
