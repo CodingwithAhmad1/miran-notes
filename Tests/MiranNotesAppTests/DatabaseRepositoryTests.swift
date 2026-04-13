@@ -23,7 +23,7 @@ final class DatabaseRepositoryTests: XCTestCase {
         try ensureVault(vault)
         let repo = DatabaseRepository(vaultURL: vault)
 
-        let record = try await repo.createDatabase(name: "Tasks", kind: .tasks, schema: DatabaseSchema(columns: [
+        let record = try await repo.createDatabase(name: "Tasks", kind: .general, schema: DatabaseSchema(columns: [
             DatabaseColumnDefinition(id: "title", title: "Title", type: .string, required: true),
             DatabaseColumnDefinition(id: "status", title: "Status", type: .select, options: ["open", "complete"]),
         ]))
@@ -31,7 +31,7 @@ final class DatabaseRepositoryTests: XCTestCase {
         let all = try await repo.listDatabases()
         XCTAssertEqual(all.count, 1)
         XCTAssertEqual(all.first?.name, "Tasks")
-        XCTAssertEqual(all.first?.kind, .tasks)
+        XCTAssertEqual(all.first?.kind, .general)
         XCTAssertEqual(all.first?.id, record.id)
 
         let schemaURL = VaultPaths.databaseSchemaURL(vaultURL: vault, databaseID: record.id)
@@ -63,9 +63,9 @@ final class DatabaseRepositoryTests: XCTestCase {
         try ensureVault(vault)
         let repo = DatabaseRepository(vaultURL: vault)
 
-        _ = try await repo.createDatabase(name: "Tasks", kind: .tasks)
+        _ = try await repo.createDatabase(name: "Tasks", kind: .general)
         do {
-            _ = try await repo.createDatabase(name: "Tasks", kind: .tasks)
+            _ = try await repo.createDatabase(name: "Tasks", kind: .general)
             XCTFail("Expected error for duplicate database")
         } catch {
             XCTAssertTrue(error is DatabaseRepositoryError)
@@ -96,7 +96,7 @@ final class DatabaseRepositoryTests: XCTestCase {
             DatabaseColumnDefinition(id: "title", title: "Title", type: .string),
             DatabaseColumnDefinition(id: "priority", title: "Priority", type: .select, options: ["low", "medium", "high"]),
         ])
-        let record = try await repo.createDatabase(name: "Tasks", kind: .tasks, schema: schema)
+        let record = try await repo.createDatabase(name: "Tasks", kind: .general, schema: schema)
 
         let doc = try await repo.openDocument(id: record.id)
         try await doc.loadIfNeeded()

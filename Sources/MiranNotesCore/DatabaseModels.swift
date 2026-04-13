@@ -4,8 +4,6 @@ import Foundation
 
 public enum DatabaseKind: String, Codable, Sendable, CaseIterable {
     case general
-    case tasks
-    case sessions
 }
 
 public enum DatabaseColumnType: String, Codable, CaseIterable, Sendable {
