@@ -177,15 +177,7 @@ struct MiranNotesApp: App {
             NotesListView(model: model)
                 .navigationTitle("Notes")
         } detail: {
-            if model.activeDocument != nil {
-                EditorRootView(model: model)
-            } else {
-                ContentUnavailableView(
-                    "Select a note",
-                    systemImage: "note.text",
-                    description: Text("Create or open a note to start editing.")
-                )
-            }
+            TiledEditorView(model: model)
         }
     }
 
@@ -200,7 +192,7 @@ struct MiranNotesApp: App {
     }
 }
 
-private struct EditorRootView: View {
+struct EditorRootView: View {
     @ObservedObject var model: AppModel
     @Environment(\.undoManager) private var undoManager
     @State private var repairDetailsPresented = false
@@ -328,7 +320,7 @@ private struct EditorRootView: View {
     }
 }
 
-private struct RepairAdvisoryDetailsSheet: View {
+struct RepairAdvisoryDetailsSheet: View {
     let detailsText: String
     let onDone: () -> Void
 
@@ -351,7 +343,7 @@ private struct RepairAdvisoryDetailsSheet: View {
     }
 }
 
-private struct RepairNoticeBanner: View {
+struct RepairNoticeBanner: View {
     let advisory: RepairAdvisory
     let onDismiss: () -> Void
     let onShowInFinder: () -> Void
@@ -397,7 +389,7 @@ private struct RepairNoticeBanner: View {
     }
 }
 
-private struct DiskActivityBanner: View {
+struct DiskActivityBanner: View {
     let text: String
     let onDismiss: () -> Void
 

@@ -116,6 +116,15 @@ final class AppModel: ObservableObject {
     @Published var folderCatalog: FolderCatalog = FolderCatalog()
     @Published var inlineDatabaseRowReferences: [DatabaseRowReference] = []
 
+    // MARK: - Layout state
+
+    /// Active pane layout selection. Defaults to single-pane (the original behaviour).
+    @Published var currentLayout: PaneLayout = .single
+    /// Index of the pane that is currently editable (0 = top-left / first pane).
+    @Published var activePaneIndex: Int = 0
+    /// State for the non-active (read-only) view panes. Count is always `currentLayout.paneCount - 1`.
+    @Published var viewPaneStates: [ViewPaneState] = []
+
     let repository: NoteRepository
     @Published var planningModel: PlanningModel?
     private var saveTask: Task<Void, Never>?
@@ -1121,6 +1130,7 @@ final class AppModel: ObservableObject {
             await flushCurrentNoteToDiskIfDirty()
             navigationGeneration += 1
             selectedBaseName = baseName
+            syncActivePaneBaseName()
             await loadSelectedNote()
         }
     }
@@ -1148,6 +1158,7 @@ final class AppModel: ObservableObject {
             await flushCurrentNoteToDiskIfDirty()
             navigationGeneration += 1
             selectedBaseName = path
+            syncActivePaneBaseName()
             await loadSelectedNote()
         }
     }
@@ -1415,5 +1426,93 @@ final class AppModel: ObservableObject {
         }
         pendingExternalDiskCheck = true
         await runPendingExternalDiskReconciliationIfNeeded()
+    }
+
+    // MARK: - Layout management
+
+    /// Switches to a new pane layout. Flushes the current note to disk and resizes `viewPaneStates`,
+    /// preserving existing pane notes where the index still exists in the new layout.
+    func setLayout(_ layout: PaneLayout) {
+        Task { @MainActor in
+            await flushCurrentNoteToDiskIfDirty()
+            let viewPaneCount = layout.paneCount - 1
+            if viewPaneStates.count > viewPaneCount {
+                viewPaneStates = Array(viewPaneStates.prefix(viewPaneCount))
+            } else {
+                while viewPaneStates.count < viewPaneCount {
+                    viewPaneStates.append(ViewPaneState())
+                }
+            }
+            // Reset active pane to 0 when shrinking below the current index.
+            if activePaneIndex >= layout.paneCount {
+                activePaneIndex = 0
+            }
+            currentLayout = layout
+        }
+    }
+
+    /// Makes `index` the editable pane. Flushes the current note, saves the active pane's note
+    /// back into its slot, then loads the target pane's note into the editor.
+    ///
+    /// - Note: Switching active pane clears the undo history for the previous note. Acceptable for now.
+    func activatePane(index: Int) {
+        guard index != activePaneIndex, index < currentLayout.paneCount else { return }
+        Task { @MainActor in
+            await flushCurrentNoteToDiskIfDirty()
+
+            // Persist what was in the active pane back into viewPaneStates before switching.
+            if activePaneIndex > 0 {
+                let slot = activePaneIndex - 1
+                if slot < viewPaneStates.count {
+                    viewPaneStates[slot].noteBaseName = selectedBaseName
+                    viewPaneStates[slot].document = activeDocument
+                }
+            }
+
+            activePaneIndex = index
+
+            let targetBaseName: String?
+            if index == 0 {
+                // Pane 0 is always the original active slot; restore from its own tracking is handled
+                // by the fact that pane 0 doesn't have a viewPaneState slot — its note is selectedBaseName.
+                // When the user previously had pane 0 active, selectedBaseName is already correct.
+                // When switching back to pane 0 from a higher index, we need its saved note.
+                targetBaseName = selectedBaseName
+            } else {
+                let slot = index - 1
+                targetBaseName = slot < viewPaneStates.count ? viewPaneStates[slot].noteBaseName : nil
+            }
+
+            // Undo history is intentionally cleared when switching active pane; acceptable limitation.
+            changeSelection(baseName: targetBaseName)
+        }
+    }
+
+    /// Loads a note for a read-only view pane asynchronously. Does not affect the active editor.
+    func loadViewPane(index: Int, baseName: String) {
+        guard index > 0, index < currentLayout.paneCount else { return }
+        let slot = index - 1
+        guard slot < viewPaneStates.count else { return }
+        viewPaneStates[slot].noteBaseName = baseName
+        viewPaneStates[slot].document = nil
+        Task { @MainActor in
+            do {
+                let result = try await repository.loadNote(baseName: baseName)
+                guard slot < viewPaneStates.count, viewPaneStates[slot].noteBaseName == baseName else { return }
+                viewPaneStates[slot].document = result.document
+            } catch {
+                lastError = "Could not load view pane note: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    /// Keeps the active pane's slot in sync whenever `selectedBaseName` changes.
+    private func syncActivePaneBaseName() {
+        if activePaneIndex > 0 {
+            let slot = activePaneIndex - 1
+            if slot < viewPaneStates.count {
+                viewPaneStates[slot].noteBaseName = selectedBaseName
+            }
+        }
     }
 }
