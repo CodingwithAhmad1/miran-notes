@@ -162,6 +162,10 @@ public struct EditCommandEngine {
 
         next.metadata.blocks[index - 1].range = mergedRange
         next.metadata.blocks.remove(at: index)
+
+        next.metadata.spans = SpanAdjuster.constrainToBlocks(spans: next.metadata.spans, blocks: next.metadata.blocks)
+        next.metadata.links = LinkAdjuster.constrainToBlocks(links: next.metadata.links, blocks: next.metadata.blocks)
+
         return next
     }
 
@@ -271,7 +275,26 @@ public struct EditCommandEngine {
         guard let block = document.metadata.blocks.first(where: { $0.id == blockID }) else {
             return document
         }
-        return applyTextReplacement(document: document, range: block.range, replacement: "")
+        var next = applyTextReplacement(document: document, range: block.range, replacement: "")
+        // `applyTextReplacement` no longer auto-merges empty blocks (intentionally, so that slash
+        // commands can find the block by id in a subsequent changeBlockType). For deleteBlock we do
+        // want to remove the now-empty block; merge it into its neighbour explicitly here.
+        if let idx = next.metadata.blocks.firstIndex(where: { $0.id == blockID }) {
+            guard !(idx == 0 && next.metadata.blocks.count == 1) else { return next }
+            if idx > 0 {
+                next.metadata.blocks[idx - 1].range = TextRange(
+                    start: next.metadata.blocks[idx - 1].range.start,
+                    length: next.metadata.blocks[idx - 1].range.length + next.metadata.blocks[idx].range.length
+                )
+            } else {
+                next.metadata.blocks[idx + 1].range = TextRange(
+                    start: next.metadata.blocks[idx].range.start,
+                    length: next.metadata.blocks[idx + 1].range.length
+                )
+            }
+            next.metadata.blocks.remove(at: idx)
+        }
+        return next
     }
 
     private static func utf16Slice(text: String, range: TextRange) -> String {
@@ -291,22 +314,33 @@ public struct EditCommandEngine {
         let lines = next.text.components(separatedBy: "\n")
         var offset = 0
         var recovered: [Block] = []
+        var consumedBlockIDs: Set<String> = []
 
         for (i, line) in lines.enumerated() {
             let length = line.utf16.count
             let range = TextRange(start: offset, length: i < lines.count - 1 ? length + 1 : length)
 
-            // Find the first old block that covered this offset and had a non-paragraph type.
             let matchedType = oldBlocks.first { old in
                 old.range.contains(offset) && old.type != .paragraph
             }
 
-            if var block = next.metadata.blocks.first(where: { $0.range.intersects(range) }) {
+            if var block = next.metadata.blocks.first(where: {
+                $0.range.intersects(range) && !consumedBlockIDs.contains($0.id)
+            }) {
+                consumedBlockIDs.insert(block.id)
                 if let matched = matchedType, block.type == .paragraph {
                     block.type = matched.type
                     block.level = matched.level
                 }
                 recovered.append(block)
+            } else {
+                recovered.append(Block(
+                    id: UUID().uuidString,
+                    type: matchedType?.type ?? .paragraph,
+                    range: range,
+                    level: matchedType?.level,
+                    icon: nil
+                ))
             }
 
             offset += (i < lines.count - 1) ? length + 1 : length
@@ -321,7 +355,9 @@ public struct EditCommandEngine {
     /// Adjusts block ranges after a UTF-16 text replacement without calling `RangeNormalizer.normalize`.
     /// All cases that arise during normal editing are handled deterministically:
     ///   - Single-block edits: delta-adjust the affected block and shift following blocks.
-    ///   - Zero-length result: merge the empty block into its predecessor (or successor).
+    ///   - Zero-length result: the empty block is preserved as a valid structural unit so that a
+    ///     subsequent `changeBlockType` in the same command batch can still find it by ID. Only an
+    ///     explicit `mergeWithPrevious` (or `deleteBlock`) should remove blocks.
     ///   - Multi-block replacement: collapse all intersecting blocks into the first, shift the rest.
     ///   - Out-of-bounds edit: should not occur during normal editing; logged and returns current blocks unchanged.
     ///
@@ -373,19 +409,11 @@ public struct EditCommandEngine {
             for j in (i + 1)..<next.count {
                 next[j].range = TextRange(start: max(0, next[j].range.start + delta), length: next[j].range.length)
             }
-
-            // If the block became zero-length, merge it into its predecessor; if no predecessor, into successor.
-            if next[i].range.isEmpty {
-                if i > 0 {
-                    next[i - 1].range = TextRange(start: next[i - 1].range.start, length: next[i - 1].range.length + next[i].range.length)
-                    next.remove(at: i)
-                } else if next.count > 1 {
-                    // No predecessor: widen successor to start from this block's start.
-                    next[i + 1].range = TextRange(start: next[i].range.start, length: next[i + 1].range.length)
-                    next.remove(at: i)
-                }
-                // If this was the only block and it's now empty, it stays (empty document).
-            }
+            // A block that becomes zero-length is intentionally preserved as an empty structural unit.
+            // It represents a valid empty line or a block whose content was just cleared (e.g. after a
+            // slash-command token is removed). Only an explicit `mergeWithPrevious` command should merge
+            // blocks; auto-merging here would destroy the block before a subsequent `changeBlockType`
+            // command in the same batch can find it by ID.
         } else {
             // Multi-block replacement: collapse all intersecting blocks into the first one,
             // preserving the first block's id and type. Shift remaining blocks by delta.

@@ -42,12 +42,23 @@ final class BlockChromeOverlayView: NSView {
         for id in ids {
             guard let block = blocks.first(where: { $0.id == id }) else { continue }
             let r = block.range
-            guard r.length > 0 else { continue }
-            let charRange = NSRange(location: r.start, length: r.length)
-            let glyphRange = lm.glyphRange(forCharacterRange: charRange, actualCharacterRange: nil)
-            var rect = lm.boundingRect(forGlyphRange: glyphRange, in: tc)
-            rect.origin.x += inset.width
-            rect.origin.y += inset.height
+            let rect: NSRect
+            if r.length > 0 {
+                let charRange = NSRange(location: r.start, length: r.length)
+                let glyphRange = lm.glyphRange(forCharacterRange: charRange, actualCharacterRange: nil)
+                var bounds = lm.boundingRect(forGlyphRange: glyphRange, in: tc)
+                bounds.origin.x += inset.width
+                bounds.origin.y += inset.height
+                rect = bounds
+            } else {
+                // Zero-length block (e.g. freshly created empty line): derive the rect from the
+                // line fragment at the block's start position so the gutter bar is still visible.
+                let glyphIndex = lm.glyphIndexForCharacter(at: min(r.start, lm.numberOfGlyphs > 0 ? lm.numberOfGlyphs - 1 : 0))
+                var lineFragmentRect = lm.lineFragmentRect(forGlyphAt: glyphIndex, effectiveRange: nil)
+                lineFragmentRect.origin.x += inset.width
+                lineFragmentRect.origin.y += inset.height
+                rect = lineFragmentRect
+            }
 
             let isFocused = (id == focusedBlockID)
             let barColor = isFocused ? accent : hoverColor

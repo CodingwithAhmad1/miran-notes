@@ -490,7 +490,7 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
             insertion: (range: NSRange, replacement: String)
         ) -> [EditCommand]? {
             guard
-                let blockIndex = DocumentLayoutController.blockIndex(
+                let blockIndex = DocumentLayoutController.blockIndexMatchingTextEngineInsertion(
                     at: insertion.range.location,
                     blocks: parent.document.metadata.blocks
                 )
@@ -623,7 +623,7 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
             guard let textView, let query = currentSlashQuery else { return false }
             guard slashMatches.indices.contains(highlightedSlashIndex) else { return false }
             guard
-                let blockIndex = DocumentLayoutController.blockIndex(
+                let blockIndex = DocumentLayoutController.blockIndexMatchingTextEngineInsertion(
                     at: query.queryRange.location,
                     blocks: parent.document.metadata.blocks
                 )
@@ -759,14 +759,18 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
                 replacement: replacement,
                 selectedLocation: selectedLocation
             ) {
-                // If we're splitting a heading block, find the newly created block and demote it to paragraph.
+                // After splitting, if the split-target block ended up as a heading (either because it
+                // was already a heading or because a slash command in the same batch promoted it),
+                // demote the newly created successor block to paragraph.
                 let didSplit = structural.contains { if case .splitBlock = $0 { return true }; return false }
-                var headingIDBeforeSplit: String? = nil
-                if didSplit,
-                   let idx = DocumentLayoutController.blockIndex(at: selectedLocation, blocks: parent.document.metadata.blocks),
-                   parent.document.metadata.blocks[idx].type == .heading {
-                    headingIDBeforeSplit = parent.document.metadata.blocks[idx].id
-                }
+                // Capture the ID of the block that will be split (regardless of its current type).
+                // We check its type *after* the commands run so that slash-command promotions are included.
+                let splitTargetBlockID: String? = didSplit
+                    ? DocumentLayoutController.blockIndexMatchingTextEngineInsertion(
+                        at: selectedLocation,
+                        blocks: parent.document.metadata.blocks
+                      ).map { parent.document.metadata.blocks[$0].id }
+                    : nil
 
                 let targetSelection = NSRange(location: affectedCharRange.location + replacement.utf16.count, length: 0)
                 let afterSplit = runCommandSession(
@@ -775,8 +779,9 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
                     pendingSelection: targetSelection
                 )
 
-                if let headingID = headingIDBeforeSplit,
-                   let origIndex = afterSplit.metadata.blocks.firstIndex(where: { $0.id == headingID }),
+                if let splitID = splitTargetBlockID,
+                   let origIndex = afterSplit.metadata.blocks.firstIndex(where: { $0.id == splitID }),
+                   afterSplit.metadata.blocks[origIndex].type == .heading,
                    origIndex + 1 < afterSplit.metadata.blocks.count {
                     let newBlock = afterSplit.metadata.blocks[origIndex + 1]
                     if newBlock.type == .heading {

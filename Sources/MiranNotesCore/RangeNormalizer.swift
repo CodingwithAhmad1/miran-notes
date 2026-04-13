@@ -90,10 +90,27 @@ public enum RangeNormalizer {
     }
 
     private static func closeBlockGaps(_ blocks: [Block], totalLength: Int, warnings: inout [String]) -> [Block] {
+        // Zero-length interior blocks are transient artifacts of adjustBlocks (which preserves them
+        // so same-batch changeBlockType can find the block by ID). When normalize runs as a safety
+        // net, these should be stripped to avoid producing two blocks at the same start offset.
+        var filtered: [Block]
+        if blocks.count > 1 {
+            let before = blocks.count
+            filtered = blocks.filter { $0.range.length > 0 }
+            if filtered.isEmpty {
+                filtered = [blocks[0]]
+            }
+            if filtered.count < before {
+                warnings.append("Removed \(before - filtered.count) zero-length interior block(s).")
+            }
+        } else {
+            filtered = blocks
+        }
+
         var normalized: [Block] = []
         var cursor = 0
 
-        for var block in blocks {
+        for var block in filtered {
             if block.range.start > cursor {
                 warnings.append("Found a block gap. Expanded previous block coverage.")
                 if var last = normalized.popLast() {

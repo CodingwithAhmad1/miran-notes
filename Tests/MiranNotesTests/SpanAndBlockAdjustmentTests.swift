@@ -80,8 +80,11 @@ final class SpanAndBlockAdjustmentTests: XCTestCase {
         XCTAssertTrue(NoteIntegrity.check(document: NoteDocument(text: "ab", metadata: meta)).isValid)
     }
 
-    func testSingleBlockDeletionToZeroLengthMergesWithPredecessor() {
-        // Block A (0,5) "Hello" + Block B (5,3) "end"; delete all of B → "Hello" (len 5)
+    func testSingleBlockDeletionToZeroLengthPreservesEmptyBlock() {
+        // Block A (0,5) "Hello" + Block B (5,3) "end"; delete all of B → "Hello" (len 5).
+        // adjustBlocks intentionally preserves the now-empty Block B so that a subsequent
+        // changeBlockType command in the same batch can still find it by ID.
+        // Callers that need to remove an empty block (e.g. deleteBlock) do so explicitly.
         let blocks = [
             Block(id: "a", type: .paragraph, range: TextRange(start: 0, length: 5), level: nil, icon: nil),
             Block(id: "b", type: .heading, range: TextRange(start: 5, length: 3), level: 2, icon: nil)
@@ -94,11 +97,11 @@ final class SpanAndBlockAdjustmentTests: XCTestCase {
             text: "Hello",
             contextMetadata: ctx
         )
-        XCTAssertEqual(out.count, 1)
+        XCTAssertEqual(out.count, 2)
         XCTAssertEqual(out[0].id, "a")
         XCTAssertEqual(out[0].range, TextRange(start: 0, length: 5))
-        let meta = NoteMetadata(schemaVersion: 2, noteID: ctx.noteID, blocks: out, spans: [])
-        XCTAssertTrue(NoteIntegrity.check(document: NoteDocument(text: "Hello", metadata: meta)).isValid)
+        XCTAssertEqual(out[1].id, "b")
+        XCTAssertEqual(out[1].range, TextRange(start: 5, length: 0))
     }
 
     func testMultiBlockReplacementWithNonEmptyReplacementProducesSingleBlock() {

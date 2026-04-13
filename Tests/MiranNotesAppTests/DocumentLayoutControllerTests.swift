@@ -182,4 +182,114 @@ final class DocumentLayoutControllerTests: XCTestCase {
         XCTAssertEqual(type, .paragraph)
         XCTAssertNil(level)
     }
+
+    // MARK: - Newline-commit slash commands
+
+    func testNewlineCommitSlashH1ProducesSlashAndStructuralCommands() {
+        // "/h1" (3 chars) + Enter at offset 3 should produce:
+        //   1. replaceText(delete token "/h1")
+        //   2. changeBlockType(heading 1)
+        //   3. replaceText(insert "\n" at block start, since token was removed leaving block empty)
+        //   4. splitBlock at block start + 1
+        let doc = singleBlockDocument(text: "/h1")
+        let cmds = DocumentLayoutController.commandsForEdit(
+            document: doc,
+            affectedRange: NSRange(location: 3, length: 0),
+            replacement: "\n",
+            selectedLocation: 3
+        )
+        XCTAssertNotNil(cmds, "Should produce slash + structural commands")
+        guard let cmds else { return }
+        XCTAssertEqual(cmds.count, 4, "Expected [deleteToken, changeBlockType, insertNewline, splitBlock]")
+
+        guard case let .replaceText(deleteRange, deleteRep) = cmds[0] else {
+            XCTFail("Expected replaceText to delete token"); return
+        }
+        XCTAssertEqual(deleteRange, TextRange(start: 0, length: 3))
+        XCTAssertEqual(deleteRep, "")
+
+        guard case let .changeBlockType(blockID, type, level) = cmds[1] else {
+            XCTFail("Expected changeBlockType"); return
+        }
+        XCTAssertEqual(blockID, "b0")
+        XCTAssertEqual(type, .heading)
+        XCTAssertEqual(level, 1)
+
+        guard case let .replaceText(nlRange, nlRep) = cmds[2] else {
+            XCTFail("Expected replaceText for newline"); return
+        }
+        XCTAssertEqual(nlRange, TextRange(start: 0, length: 0))
+        XCTAssertEqual(nlRep, "\n")
+
+        guard case let .splitBlock(splitID, splitAt) = cmds[3] else {
+            XCTFail("Expected splitBlock"); return
+        }
+        XCTAssertEqual(splitID, "b0")
+        XCTAssertEqual(splitAt, 1)
+    }
+
+    func testNewlineCommitSlashH1InSecondBlockUsesCorrectBlockID() {
+        let text = "Hello\n/h2"
+        let noteID = UUID()
+        let doc = NoteDocument(
+            text: text,
+            metadata: NoteMetadata(
+                schemaVersion: NoteMetadata.currentSchemaVersion,
+                noteID: noteID,
+                blocks: [
+                    Block(id: "first", type: .paragraph, range: TextRange(start: 0, length: 6), level: nil, icon: nil),
+                    Block(id: "second", type: .paragraph, range: TextRange(start: 6, length: 3), level: nil, icon: nil)
+                ],
+                spans: []
+            )
+        )
+        let cmds = DocumentLayoutController.commandsForEdit(
+            document: doc,
+            affectedRange: NSRange(location: 9, length: 0),
+            replacement: "\n",
+            selectedLocation: 9
+        )
+        XCTAssertNotNil(cmds)
+        guard let cmds else { return }
+        XCTAssertEqual(cmds.count, 4)
+
+        guard case let .replaceText(deleteRange, _) = cmds[0] else {
+            XCTFail("Expected replaceText to delete token"); return
+        }
+        XCTAssertEqual(deleteRange, TextRange(start: 6, length: 3), "Token range should be within the second block")
+
+        guard case let .changeBlockType(blockID, type, level) = cmds[1] else {
+            XCTFail("Expected changeBlockType"); return
+        }
+        XCTAssertEqual(blockID, "second")
+        XCTAssertEqual(type, .heading)
+        XCTAssertEqual(level, 2)
+
+        guard case let .splitBlock(splitID, _) = cmds[3] else {
+            XCTFail("Expected splitBlock"); return
+        }
+        XCTAssertEqual(splitID, "second")
+    }
+
+    func testNewlineCommitUnknownSlashTokenProducesNormalStructuralCommands() {
+        let doc = singleBlockDocument(text: "/xyz")
+        let cmds = DocumentLayoutController.commandsForEdit(
+            document: doc,
+            affectedRange: NSRange(location: 4, length: 0),
+            replacement: "\n",
+            selectedLocation: 4
+        )
+        XCTAssertNotNil(cmds)
+        guard let cmds else { return }
+        // Unrecognized token: normal newline insert + split (no slash handling).
+        XCTAssertEqual(cmds.count, 2)
+        guard case let .replaceText(r, rep) = cmds[0] else {
+            XCTFail("Expected replaceText"); return
+        }
+        XCTAssertEqual(r, TextRange(start: 4, length: 0))
+        XCTAssertEqual(rep, "\n")
+        guard case .splitBlock = cmds[1] else {
+            XCTFail("Expected splitBlock"); return
+        }
+    }
 }
