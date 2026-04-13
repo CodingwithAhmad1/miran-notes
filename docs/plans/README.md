@@ -26,6 +26,7 @@ Tools such as Cursor may create plans under **`.cursor/plans/`** on a developer 
 
 | Plan | Role |
 |------|------|
+| [longevity-and-migration-analysis.md](longevity-and-migration-analysis.md) | Platform longevity assessment and migration plans for TextKit 2, @Observable, Swift 6 concurrency |
 | [vault-write-paths-audit.md](vault-write-paths-audit.md) | Vault write path audit notes |
 | [constraints-touchpoint-map.md](constraints-touchpoint-map.md) | Constraints touchpoint mapping |
 | [editor-interaction-scenarios.md](editor-interaction-scenarios.md) | Manual QA checklist (ongoing) |

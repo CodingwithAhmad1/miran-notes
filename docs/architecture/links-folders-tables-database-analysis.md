@@ -1,5 +1,7 @@
 # Links, Folders, Tables, and Database Infrastructure Analysis
 
+> **Superseded (Apr 2026):** This analysis informed the implementation of nested folders ([ADR 0003](../adr/0003-folders-paths-and-manifest-v2.md)), vault-level databases ([ADR 0004](../adr/0004-vault-level-databases-and-planning.md)), and external bookmark handling. The features described are now shipped. Retained for historical context.
+
 ## Scope and assumptions
 
 - This analysis is aligned to current repository constraints and architecture, with two explicit product directions:

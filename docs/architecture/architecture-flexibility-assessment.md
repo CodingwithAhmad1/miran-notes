@@ -1,5 +1,7 @@
 # Miran Notes: Architecture, Flexibility, and Product Fit Assessment
 
+> **Superseded (Apr 2026):** This assessment was produced during an earlier phase. Its recommendations (hardening boundaries, performance budgets, conflict/repair UX, schema lifecycle) have been substantially implemented — see [Constraints.md](../../Constraints.md), the [engineering brief](../investor-and-engineering-brief.md), and completed plans in [plans/README.md](../plans/README.md). Retained for historical context.
+
 ## Purpose
 
 This document evaluates Miran Notes from two lenses:

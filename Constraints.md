@@ -43,6 +43,7 @@ Apple ships two related layout stacks. **Classic TextKit** centers on **`NSLayou
 - **Do not** treat “migrate the entire `NSTextView` typing pipeline to TextKit 2” as a default or prerequisite for product work. It is a **major project** justified only by a **concrete** need (a TextKit 2–only API, measured performance/layout requirements beyond the **1 MB UTF-16** note cap, or future platform direction for supported OS versions).
 - **Do** keep a **small boundary** for layout measurement (UTF-16 range → CGRect in view coordinates) so chrome and anchors can move to **`NSTextLayoutManager`**-based measurement **later** without rewriting domain editing.
 - **Chrome and overlays** may continue to use **`NSLayoutManager`** until that boundary is implemented and tested; misalignment under resize/theme is managed by **disciplined invalidation**, not by assuming a single layout stack will eliminate all cost.
+- **Migration plan:** See [`docs/plans/longevity-and-migration-analysis.md`](docs/plans/longevity-and-migration-analysis.md) Part 4 for the concrete TextKit 2 migration plan, glyph-API audit, and phased approach.
 
 ## Editor representation
 

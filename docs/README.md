@@ -22,15 +22,16 @@ The [root README](../README.md) summarizes build commands, module layout, and fe
 | [architecture/extension-registry-and-interceptors.md](architecture/extension-registry-and-interceptors.md) | `ExtensionRegistry` vs closure interceptors and apply order |
 | [architecture/slash-command-framework.md](architecture/slash-command-framework.md) | Slash contracts, discovery UX, extension pattern |
 | [architecture/block-chrome-interaction-model.md](architecture/block-chrome-interaction-model.md) | Block chrome design for future interactive handles |
-| [architecture/user-and-technical-priorities.md](architecture/user-and-technical-priorities.md) | User and technical priorities brief |
-| [architecture/architecture-flexibility-assessment.md](architecture/architecture-flexibility-assessment.md) | Flexibility and product-fit assessment |
-| [architecture/links-folders-tables-database-analysis.md](architecture/links-folders-tables-database-analysis.md) | Links, folders, tables analysis |
+| [architecture/user-and-technical-priorities.md](architecture/user-and-technical-priorities.md) | User and technical priorities brief *(superseded — recommendations implemented)* |
+| [architecture/architecture-flexibility-assessment.md](architecture/architecture-flexibility-assessment.md) | Flexibility and product-fit assessment *(superseded — recommendations implemented)* |
+| [architecture/links-folders-tables-database-analysis.md](architecture/links-folders-tables-database-analysis.md) | Links, folders, tables analysis *(superseded — features shipped via ADRs 0003/0004)* |
 | [architecture/vault-data-layer.md](architecture/vault-data-layer.md) | Repository, on-disk layout, text hash vs revision token, TOCTOU |
 | [architecture/planning-integration.md](architecture/planning-integration.md) | Miran Planning architecture: databases, PlanningModel, UI, migration *(deactivated — preserved for reference)* |
 | **ADRs** | |
 | [adr/README.md](adr/README.md) | Architecture Decision Records index |
 | **Plans and QA** | |
 | [plans/README.md](plans/README.md) | Planning docs index and completed plans |
+| [plans/longevity-and-migration-analysis.md](plans/longevity-and-migration-analysis.md) | Platform longevity assessment and migration plans (TextKit 2, @Observable, Swift 6) |
 | [plans/editor-interaction-scenarios.md](plans/editor-interaction-scenarios.md) | Manual QA checklist (typing, blocks, IME, large notes) |
 | [plans/hybrid-undo-appmodel-wiring.md](plans/hybrid-undo-appmodel-wiring.md) | Hybrid undo implementation (completed) |
 | **Testing** | |

@@ -1,5 +1,7 @@
 # User and Technical Architecture Priorities Brief
 
+> **Superseded (Apr 2026):** The priorities and folder/link architecture proposed here have been implemented — folders landed via [ADR 0003](../adr/0003-folders-paths-and-manifest-v2.md), the risk register items are addressed in [Constraints.md](../../Constraints.md), and extension contracts are documented in [extension-registry-and-interceptors.md](extension-registry-and-interceptors.md). Current product direction is in the [engineering brief](../investor-and-engineering-brief.md). Retained for historical context.
+
 ## 1) Executive Perspective (User-Facing)
 
 ### Product priorities users should feel every day
