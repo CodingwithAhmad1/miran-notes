@@ -106,6 +106,20 @@ final class AppModelNavigationTests: XCTestCase {
         XCTAssertEqual(onDiskB, "")
     }
 
+    func testChangeSelectionResolvesOutlineNoteTokenToRelativePath() async throws {
+        let vault = try tempVaultURL()
+        let repo = NoteRepository(vaultURL: vault)
+        try await repo.ensureVault()
+        let (doc, relPath) = try await repo.createNote(named: "token-test")
+        let id = doc.metadata.noteID
+
+        let model = AppModel(repository: repo)
+        await model.refreshNotes()
+        model.changeSelection(baseName: "n:\(id.uuidString)")
+        try await waitForAsync { model.selectedBaseName == relPath && model.activeDocument?.metadata.noteID == id }
+        XCTAssertNil(model.lastError)
+    }
+
     func testEditorCursorOffsetResetOnNoteSwitch() async throws {
         let vault = try tempVaultURL()
         let repo = NoteRepository(vaultURL: vault)

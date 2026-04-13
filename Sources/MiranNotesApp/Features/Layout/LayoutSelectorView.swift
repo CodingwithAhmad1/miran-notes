@@ -7,47 +7,19 @@ struct LayoutSelectorView: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        HStack(alignment: .top, spacing: 0) {
-            savedLayoutsColumn
+        VStack(spacing: 0) {
+            // Saved layouts (empty for now — placeholder row area)
+            Color.clear.frame(height: 4)
             Divider()
-            availableLayoutsColumn
-        }
-        .frame(minWidth: 360, minHeight: 180)
-        .padding(16)
-    }
-
-    // MARK: - Saved layouts
-
-    private var savedLayoutsColumn: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            columnHeading("Saved Layouts")
-            Text("No saved layouts yet.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Spacer()
-        }
-        .frame(minWidth: 130, maxWidth: 160, alignment: .topLeading)
-        .padding(.trailing, 16)
-    }
-
-    // MARK: - Available layouts
-
-    private var availableLayoutsColumn: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            columnHeading("Available Layouts")
-            LazyVGrid(
-                columns: [GridItem(.adaptive(minimum: 60), spacing: 8)],
-                alignment: .leading,
-                spacing: 8
-            ) {
+            // Available layouts — icons only, no labels
+            VStack(spacing: 2) {
                 ForEach(PaneLayout.allCases, id: \.self) { layout in
                     layoutButton(for: layout)
                 }
             }
-            Spacer()
+            .padding(6)
         }
-        .frame(maxWidth: .infinity, alignment: .topLeading)
-        .padding(.leading, 16)
+        .frame(width: 52)
     }
 
     private func layoutButton(for layout: PaneLayout) -> some View {
@@ -56,23 +28,13 @@ struct LayoutSelectorView: View {
             model.setLayout(layout)
             dismiss()
         } label: {
-            VStack(spacing: 5) {
-                LayoutIconView(layout: layout, isSelected: isSelected)
-                Text(layout.displayName)
-                    .font(.caption2)
-                    .foregroundStyle(isSelected ? Color.accentColor : Color.primary)
-                    .multilineTextAlignment(.center)
-                    .lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .frame(width: 60)
+            LayoutIconView(layout: layout, isSelected: isSelected)
+                .padding(4)
+                .background(
+                    isSelected ? Color.accentColor.opacity(0.08) : Color.clear,
+                    in: RoundedRectangle(cornerRadius: 5)
+                )
         }
         .buttonStyle(.plain)
-    }
-
-    private func columnHeading(_ title: String) -> some View {
-        Text(title)
-            .font(.subheadline)
-            .fontWeight(.semibold)
     }
 }

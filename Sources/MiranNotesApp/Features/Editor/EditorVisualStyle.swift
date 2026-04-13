@@ -43,8 +43,11 @@ enum EditorVisualStyle {
 
         textView.font = bodyFont
         var typing = textView.typingAttributes
-        typing[.font] = bodyFont
         typing[.foregroundColor] = bodyColor
+        // Use the block font at the cursor position so newly typed characters match the heading/body style.
+        let cursorLoc = textView.selectedRange().location
+        let cursorBlock = document.metadata.blocks.first { $0.range.contains(cursorLoc) || $0.range.end == cursorLoc }
+        typing[.font] = cursorBlock.map { fontForBlock($0) } ?? bodyFont
         textView.typingAttributes = typing
 
         storage.beginEditing()

@@ -147,97 +147,49 @@ struct EditorRootView: View {
     var body: some View {
         Group {
             if let current = model.activeDocument {
-                HSplitView {
-                    VStack(spacing: 0) {
-                        if let diskHint = model.diskActivityBanner {
-                            DiskActivityBanner(text: diskHint, onDismiss: { model.dismissDiskActivityBanner() })
-                        }
-                        if let advisory = model.repairAdvisory {
-                            RepairNoticeBanner(
-                                advisory: advisory,
-                                onDismiss: { model.dismissRepairAdvisory() },
-                                onShowInFinder: { model.revealSelectedNoteFileInFinder() },
-                                onDetails: {
-                                    repairDetailsPresented = true
-                                },
-                                showDetailsButton: advisory.detailsPlainText != nil
-                            )
-                            .sheet(isPresented: $repairDetailsPresented) {
-                                RepairAdvisoryDetailsSheet(
-                                    detailsText: advisory.detailsPlainText ?? "",
-                                    onDone: { repairDetailsPresented = false }
-                                )
-                            }
-                        }
-                        SingleSurfaceNoteEditor(
-                            document: Binding(
-                                get: { model.activeDocument ?? current },
-                                set: { model.activeDocument = $0 }
-                            ),
-                            cursorOffset: $model.editorCursorOffset,
-                            editorTextSelection: $model.editorTextSelection,
-                            pendingEditorScroll: model.pendingEditorScroll,
-                            onPendingEditorScrollConsumed: { model.clearPendingEditorScroll() },
-                            onCommands: { commands in model.apply(commands) },
-                            onWikiLinkClick: { targetID in
-                                model.openNote(noteID: targetID)
+                VStack(spacing: 0) {
+                    if let diskHint = model.diskActivityBanner {
+                        DiskActivityBanner(text: diskHint, onDismiss: { model.dismissDiskActivityBanner() })
+                    }
+                    if let advisory = model.repairAdvisory {
+                        RepairNoticeBanner(
+                            advisory: advisory,
+                            onDismiss: { model.dismissRepairAdvisory() },
+                            onShowInFinder: { model.revealSelectedNoteFileInFinder() },
+                            onDetails: {
+                                repairDetailsPresented = true
                             },
-                            onFullReplaceWarning: {
-                                model.presentFullBufferAdvisory()
-                            },
-                            onSizeLimitExceeded: {
-                                model.presentSizeLimitAdvisory()
-                            }
+                            showDetailsButton: advisory.detailsPlainText != nil
                         )
-                    }
-                    .frame(minWidth: 320)
-                    .navigationTitle("Editor")
-
-                    VStack(alignment: .leading, spacing: 8) {
-                        if let planning = model.planningModel {
-                            VStack(alignment: .leading, spacing: 6) {
-                                Text("Planning")
-                                    .font(.headline)
-                                InlineTaskListView(model: planning, noteID: current.metadata.noteID)
-                                Divider()
-                                InlineSessionListView(model: planning, noteID: current.metadata.noteID)
-                            }
-                            .padding(.bottom, 8)
-                        }
-
-                        Text("Backlinks")
-                            .font(.headline)
-                        if model.backlinks.isEmpty {
-                            Text("No notes link here yet")
-                                .foregroundStyle(.secondary)
-                                .font(.caption)
-                        } else {
-                            List(model.backlinks, id: \.sourceNoteID) { item in
-                                Button {
-                                    model.openBacklinkSource(item)
-                                } label: {
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text(item.title)
-                                            .font(.body)
-                                            .multilineTextAlignment(.leading)
-                                        if !item.snippet.isEmpty {
-                                            Text(item.snippet)
-                                                .font(.caption)
-                                                .foregroundStyle(.secondary)
-                                                .lineLimit(3)
-                                                .multilineTextAlignment(.leading)
-                                        }
-                                    }
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                }
-                                .buttonStyle(.plain)
-                            }
-                            .listStyle(.sidebar)
+                        .sheet(isPresented: $repairDetailsPresented) {
+                            RepairAdvisoryDetailsSheet(
+                                detailsText: advisory.detailsPlainText ?? "",
+                                onDone: { repairDetailsPresented = false }
+                            )
                         }
                     }
-                    .frame(minWidth: 160, idealWidth: 200, maxWidth: 280)
-                    .padding(.horizontal, 8)
+                    SingleSurfaceNoteEditor(
+                        document: Binding(
+                            get: { model.activeDocument ?? current },
+                            set: { model.activeDocument = $0 }
+                        ),
+                        cursorOffset: $model.editorCursorOffset,
+                        editorTextSelection: $model.editorTextSelection,
+                        pendingEditorScroll: model.pendingEditorScroll,
+                        onPendingEditorScrollConsumed: { model.clearPendingEditorScroll() },
+                        onCommands: { commands in model.apply(commands) },
+                        onWikiLinkClick: { targetID in
+                            model.openNote(noteID: targetID)
+                        },
+                        onFullReplaceWarning: {
+                            model.presentFullBufferAdvisory()
+                        },
+                        onSizeLimitExceeded: {
+                            model.presentSizeLimitAdvisory()
+                        }
+                    )
                 }
+                .navigationTitle("Editor")
                 .toolbar {
                     ToolbarItemGroup {
                         Menu("Link") {

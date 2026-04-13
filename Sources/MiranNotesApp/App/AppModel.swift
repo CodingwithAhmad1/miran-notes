@@ -810,6 +810,12 @@ final class AppModel: ObservableObject {
     func loadSelectedNote() async {
         editorCursorOffset = 0
         editorTextSelection = MiranNotesCore.TextRange(start: 0, length: 0)
+        if let raw = selectedBaseName {
+            let resolved = await resolvedSelectionPath(from: raw)
+            if resolved != raw {
+                selectedBaseName = resolved
+            }
+        }
         guard let path = selectedBaseName else {
             pendingEditorScroll = nil
             activeDocument = nil
@@ -1114,22 +1120,40 @@ final class AppModel: ObservableObject {
         return "Edit"
     }
 
+    /// Sidebar rows use ``SidebarOutlineEntry`` identities (`n:<noteID>`, `f:<folderID>`). `List(selection:)`
+    /// can occasionally pass those tokens instead of the manifest ``NoteSummary/relativePath`` used in `.tag`.
+    /// Valid vault paths never contain `:`, so we normalize tokens here before loading.
+    private func resolvedSelectionPath(from token: String?) async -> String? {
+        guard let token else { return nil }
+        if token.hasPrefix("f:") {
+            return nil
+        }
+        if token.hasPrefix("n:") {
+            let rest = String(token.dropFirst(2))
+            guard let id = UUID(uuidString: rest) else { return nil }
+            guard let manifest = try? await repository.loadManifest() else { return nil }
+            return manifest.entry(noteID: id)?.relativePath
+        }
+        return token
+    }
+
     func changeSelection(baseName: String?) {
         externalEditConflictAlert = nil
         diskActivityBanner = nil
         externalTextCompare = nil
         Task { @MainActor in
-            if selectedBaseName == baseName { return }
-            if let p = pendingEditorScroll, let path = baseName {
+            let resolved = await resolvedSelectionPath(from: baseName)
+            if selectedBaseName == resolved { return }
+            if let p = pendingEditorScroll, let path = resolved {
                 let manifest = try? await repository.loadManifest()
                 let newID = manifest?.entry(relativePath: path)?.noteID
                 if newID != p.noteID { pendingEditorScroll = nil }
-            } else if baseName == nil {
+            } else if resolved == nil {
                 pendingEditorScroll = nil
             }
             await flushCurrentNoteToDiskIfDirty()
             navigationGeneration += 1
-            selectedBaseName = baseName
+            selectedBaseName = resolved
             syncActivePaneBaseName()
             await loadSelectedNote()
         }

@@ -6,7 +6,7 @@ struct LayoutIconView: View {
     let layout: PaneLayout
     let isSelected: Bool
 
-    private let size: CGFloat = 44
+    private let size: CGFloat = 28
     private let strokeWidth: CGFloat = 1.5
     private let cornerRadius: CGFloat = 4
 

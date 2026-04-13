@@ -526,9 +526,9 @@ actor NoteRepository {
             blocks: [
                 Block(
                     id: UUID().uuidString,
-                    type: .paragraph,
+                    type: .heading,
                     range: TextRange(start: 0, length: 0),
-                    level: nil,
+                    level: 1,
                     icon: nil
                 )
             ],

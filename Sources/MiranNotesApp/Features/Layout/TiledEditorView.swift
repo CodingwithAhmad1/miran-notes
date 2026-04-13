@@ -52,7 +52,7 @@ struct TiledEditorView: View {
                     Image(systemName: "rectangle.split.2x2")
                 }
                 .help("Change layout")
-                .popover(isPresented: $layoutSelectorVisible, arrowEdge: .top) {
+                .popover(isPresented: $layoutSelectorVisible, arrowEdge: .bottom) {
                     LayoutSelectorView(model: model)
                 }
             }

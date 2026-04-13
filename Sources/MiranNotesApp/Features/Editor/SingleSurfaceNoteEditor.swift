@@ -164,7 +164,7 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
         textView.importsGraphics = false
         textView.usesAdaptiveColorMappingForDarkAppearance = true
         textView.usesFontPanel = false
-        textView.textContainerInset = NSSize(width: 8, height: 10)
+        textView.textContainerInset = NSSize(width: 48, height: 24)
         // Document-level undo is handled by the window `UndoManager` in `AppModel`; disable `NSTextView`'s separate stack.
         textView.allowsUndo = false
         textView.delegate = context.coordinator
@@ -758,12 +758,33 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
                 replacement: replacement,
                 selectedLocation: selectedLocation
             ) {
+                // If we're splitting a heading block, find the newly created block and demote it to paragraph.
+                let didSplit = structural.contains { if case .splitBlock = $0 { return true }; return false }
+                var headingIDBeforeSplit: String? = nil
+                if didSplit,
+                   let idx = DocumentLayoutController.blockIndex(at: selectedLocation, blocks: parent.document.metadata.blocks),
+                   parent.document.metadata.blocks[idx].type == .heading {
+                    headingIDBeforeSplit = parent.document.metadata.blocks[idx].id
+                }
+
                 let targetSelection = NSRange(location: affectedCharRange.location + replacement.utf16.count, length: 0)
-                _ = runCommandSession(
+                let afterSplit = runCommandSession(
                     textView: textView,
                     commands: structural,
                     pendingSelection: targetSelection
                 )
+
+                if let headingID = headingIDBeforeSplit,
+                   let origIndex = afterSplit.metadata.blocks.firstIndex(where: { $0.id == headingID }),
+                   origIndex + 1 < afterSplit.metadata.blocks.count {
+                    let newBlock = afterSplit.metadata.blocks[origIndex + 1]
+                    if newBlock.type == .heading {
+                        _ = runCommandSession(textView: textView, commands: [
+                            .changeBlockType(blockID: newBlock.id, type: .paragraph, headingLevel: nil)
+                        ])
+                    }
+                }
+
                 return false
             }
 
@@ -783,6 +804,21 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
             }
             refreshSlashMenuState(for: tv)
             refreshBlockChrome()
+            syncTypingFont(textView: tv)
+        }
+
+        /// Keeps `typingAttributes` font in sync with the block at the cursor so characters
+        /// typed into an empty or newly-created block appear at the correct size immediately.
+        private func syncTypingFont(textView: NSTextView) {
+            let loc = textView.selectedRange().location
+            let blocks = parent.document.metadata.blocks
+            guard let idx = DocumentLayoutController.blockIndex(at: loc, blocks: blocks) else { return }
+            let desired = EditorVisualStyle.fontForBlock(blocks[idx])
+            var attrs = textView.typingAttributes
+            if (attrs[.font] as? NSFont) != desired {
+                attrs[.font] = desired
+                textView.typingAttributes = attrs
+            }
         }
 
         @discardableResult
