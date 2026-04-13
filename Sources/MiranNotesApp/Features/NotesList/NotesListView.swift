@@ -4,13 +4,16 @@ import SwiftUI
 private struct SidebarOutlineRows: View {
     let entries: [SidebarOutlineEntry]
     @ObservedObject var model: AppModel
+    let selectedPath: String?
+
+    @State private var hoveredPath: String?
 
     var body: some View {
         ForEach(entries) { entry in
             switch entry {
             case let .folder(folder, children):
                 DisclosureGroup {
-                    SidebarOutlineRows(entries: children, model: model)
+                    SidebarOutlineRows(entries: children, model: model, selectedPath: selectedPath)
                 } label: {
                     Text(folder.name)
                 }
@@ -34,8 +37,24 @@ private struct SidebarOutlineRows: View {
                     }
                 }
                 .tag(Optional(note.relativePath))
+                .listRowBackground(
+                    RoundedRectangle(cornerRadius: 5)
+                        .fill(rowColor(for: note.relativePath))
+                )
+                .onHover { isHovered in
+                    hoveredPath = isHovered ? note.relativePath : nil
+                }
             }
         }
+    }
+
+    private func rowColor(for path: String) -> Color {
+        if path == selectedPath {
+            return Color.primary.opacity(0.10)
+        } else if path == hoveredPath {
+            return Color.primary.opacity(0.05)
+        }
+        return Color.clear
     }
 }
 
@@ -61,7 +80,7 @@ struct NotesListView: View {
 
     var body: some View {
         List(selection: selectionBinding) {
-            SidebarOutlineRows(entries: model.sidebarOutline, model: model)
+            SidebarOutlineRows(entries: model.sidebarOutline, model: model, selectedPath: model.selectedBaseName)
         }
         .searchable(text: $model.noteQuery, prompt: Text("Search notes"))
         .overlay {

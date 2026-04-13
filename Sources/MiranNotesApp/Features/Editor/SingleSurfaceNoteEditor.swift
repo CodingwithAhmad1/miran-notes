@@ -810,7 +810,9 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
         /// Keeps `typingAttributes` font in sync with the block at the cursor so characters
         /// typed into an empty or newly-created block appear at the correct size immediately.
         private func syncTypingFont(textView: NSTextView) {
-            let loc = textView.selectedRange().location
+            let docLength = (parent.document.text as NSString).length
+            let rawLoc = textView.selectedRange().location
+            let loc = min(rawLoc, docLength)
             let blocks = parent.document.metadata.blocks
             guard let idx = DocumentLayoutController.blockIndex(at: loc, blocks: blocks) else { return }
             let desired = EditorVisualStyle.fontForBlock(blocks[idx])
