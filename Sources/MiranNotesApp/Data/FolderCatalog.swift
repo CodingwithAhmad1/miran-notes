@@ -72,6 +72,14 @@ struct PathIndex: Codable, Equatable, Sendable {
             isDirty = true
         }
     }
+
+    /// Updates the row for `relativePath` when manifest/note identity was repaired (e.g. sidecar overrode a stale manifest `noteID`).
+    mutating func replaceNoteID(forRelativePath relativePath: String, newNoteID: UUID) {
+        guard let i = entries.firstIndex(where: { $0.relativePath == relativePath }) else { return }
+        guard entries[i].noteID != newNoteID else { return }
+        entries[i].noteID = newNoteID
+        isDirty = true
+    }
 }
 
 struct PathIndexEntry: Codable, Equatable, Hashable, Sendable {

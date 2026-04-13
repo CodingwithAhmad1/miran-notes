@@ -113,6 +113,47 @@ final class AppModel {
     /// Cached folder tree for outline UI (kept in sync with `refreshNotes()`).
     var folderCatalog: FolderCatalog = FolderCatalog()
 
+    // MARK: - Workspace compatibility & folder-page UI
+
+    enum WorkspaceGateState: Equatable {
+        case checking
+        case ready
+        case incompatible(CompatibilityReport)
+    }
+
+    /// Blocks the main shell until the workspace passes ``WorkspaceCompatibilityScanner``.
+    var workspaceGateState: WorkspaceGateState = .checking
+
+    /// Selected topic folder (or vault root) for the folder-page column.
+    var selectedFolderID: UUID?
+
+    /// In-memory buffers for every note shown on the current folder page (parallel editing).
+    private(set) var folderPageDocuments: [UUID: NoteDocument] = [:]
+    private var folderPageLastPersisted: [UUID: NoteDocument] = [:]
+    private var folderPageSaveTasks: [UUID: Task<Void, Never>] = [:]
+
+    var topLevelFolderEntries: [FolderEntry] {
+        folderCatalog.childFolders(of: FolderCatalog.rootFolderID).sorted {
+            $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+        }
+    }
+
+    var selectedFolderDisplayTitle: String {
+        guard let id = selectedFolderID else { return "" }
+        return folderCatalog.folder(id: id)?.name ?? ""
+    }
+
+    var folderPageNoteSummaries: [NoteSummary] {
+        guard let id = selectedFolderID else { return [] }
+        return noteSummaries.filter { $0.folderID == id }.sorted {
+            $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
+        }
+    }
+
+    var hasRootLevelNotes: Bool {
+        noteSummaries.contains { $0.folderID == FolderCatalog.rootFolderID }
+    }
+
     // MARK: - Layout state
 
     /// Active pane layout selection. Defaults to single-pane (the original behaviour).
@@ -203,6 +244,14 @@ final class AppModel {
 
     func loadVault() {
         Task { @MainActor in
+            workspaceGateState = .checking
+            let outcome = WorkspaceCompatibilityScanner.scan(vaultRoot: repository.vaultURL)
+            if case .incompatible(let report) = outcome {
+                workspaceGateState = .incompatible(report)
+                return
+            }
+            workspaceGateState = .ready
+
             do {
                 let recovery = try await repository.performStartupRecovery()
                 if recovery.resumedAndCompletedCount > 0 || recovery.discardedStagingCount > 0 {
@@ -214,10 +263,9 @@ final class AppModel {
             await reconcileVaultState(invalidateCaches: false)
             await refreshNotes()
             await runStartupLinkGraphSync()
-            if selectedBaseName == nil {
-                selectedBaseName = noteSummaries.first?.relativePath
-                selectedNoteID = noteSummaries.first?.noteID
-            }
+            selectedBaseName = nil
+            selectedNoteID = nil
+            activeDocument = nil
             await loadSelectedNote()
             await refreshBacklinks()
             startVaultWatcher()
@@ -331,6 +379,134 @@ final class AppModel {
         } catch {
             lastError = "Failed to list notes: \(error.localizedDescription)"
         }
+        if workspaceGateState == .ready {
+            await syncFolderSelectionAfterRefresh()
+        }
+    }
+
+    private func syncFolderSelectionAfterRefresh() async {
+        if !isSelectedFolderStillValid() {
+            selectedFolderID = pickDefaultFolderID()
+        }
+        await loadFolderPageDocuments()
+    }
+
+    private func isSelectedFolderStillValid() -> Bool {
+        guard let id = selectedFolderID else { return false }
+        if id == FolderCatalog.rootFolderID {
+            return true
+        }
+        return folderCatalog.folder(id: id) != nil
+    }
+
+    private func pickDefaultFolderID() -> UUID? {
+        let children = topLevelFolderEntries
+        if let first = children.first {
+            return first.id
+        }
+        if hasRootLevelNotes {
+            return FolderCatalog.rootFolderID
+        }
+        return nil
+    }
+
+    func selectFolderForPage(_ folderID: UUID?) async {
+        selectedFolderID = folderID
+        selectedBaseName = nil
+        selectedNoteID = nil
+        activeDocument = nil
+        lastPersistedDocument = nil
+        clearUndoStack()
+        await loadFolderPageDocuments()
+    }
+
+    func loadFolderPageDocuments() async {
+        cancelFolderPageSaveTasks()
+        folderPageDocuments.removeAll()
+        folderPageLastPersisted.removeAll()
+        guard let fid = selectedFolderID else { return }
+        let notes = noteSummaries.filter { $0.folderID == fid }
+        for n in notes {
+            do {
+                let result = try await repository.loadNote(noteID: n.noteID)
+                let doc = result.document
+                folderPageDocuments[n.noteID] = doc
+                folderPageLastPersisted[n.noteID] = doc
+            } catch {
+                lastError = "Failed to load note: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    func bindingForFolderPageNoteText(noteID: UUID) -> Binding<String> {
+        Binding(
+            get: {
+                self.folderPageDocuments[noteID]?.text ?? ""
+            },
+            set: { newText in
+                guard var doc = self.folderPageDocuments[noteID] else { return }
+                doc.text = newText
+                self.folderPageDocuments[noteID] = doc
+                self.scheduleFolderPageSave(noteID: noteID)
+            }
+        )
+    }
+
+    private func scheduleFolderPageSave(noteID: UUID) {
+        folderPageSaveTasks[noteID]?.cancel()
+        folderPageSaveTasks[noteID] = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(self.autosaveDebounceMilliseconds))
+            guard !Task.isCancelled else { return }
+            await self.flushFolderPageNoteIfDirty(noteID: noteID)
+        }
+    }
+
+    private func flushFolderPageNoteIfDirty(noteID: UUID) async {
+        guard let doc = folderPageDocuments[noteID] else { return }
+        guard let summary = noteSummaries.first(where: { $0.noteID == noteID }) else { return }
+        guard doc != folderPageLastPersisted[noteID] else { return }
+        do {
+            let integrity = try await repository.save(
+                doc,
+                asRelativePath: summary.relativePath,
+                folderID: summary.folderID
+            )
+            applyVaultIntegrityAfterSave(integrity)
+            folderPageLastPersisted[noteID] = doc
+        } catch {
+            lastError = "Autosave failed: \(error.localizedDescription)"
+        }
+    }
+
+    private func flushAllFolderPageNotesIfDirty() async {
+        for id in Array(folderPageDocuments.keys) {
+            await flushFolderPageNoteIfDirty(noteID: id)
+        }
+    }
+
+    private func cancelFolderPageSaveTasks() {
+        for task in folderPageSaveTasks.values {
+            task.cancel()
+        }
+        folderPageSaveTasks.removeAll()
+    }
+
+    private func applyIncompatibleWorkspaceReport(_ report: CompatibilityReport) {
+        vaultWatcher?.cancel()
+        workspaceGateState = .incompatible(report)
+        noteSummaries = []
+        folderCatalog = FolderCatalog()
+        selectedFolderID = nil
+        selectedNoteID = nil
+        selectedBaseName = nil
+        activeDocument = nil
+        lastPersistedDocument = nil
+        cancelFolderPageSaveTasks()
+        folderPageDocuments = [:]
+        folderPageLastPersisted = [:]
+        backlinks = []
+        repairAdvisory = nil
+        clearUndoStack()
     }
 
     private func scheduleBodySearchIndexRebuild() {
@@ -425,8 +601,10 @@ final class AppModel {
     func createFolder(parentID: UUID = FolderCatalog.rootFolderID, name: String = "New Folder") {
         Task { @MainActor in
             do {
-                _ = try await repository.createFolder(parentID: parentID, name: name)
+                let id = try await repository.createFolder(parentID: parentID, name: name)
                 await refreshNotes()
+                selectedFolderID = id
+                await loadFolderPageDocuments()
             } catch {
                 lastError = error.localizedDescription
             }
@@ -576,18 +754,45 @@ final class AppModel {
     func createNote() {
         Task { @MainActor in
             await flushCurrentNoteToDiskIfDirty()
+            await flushAllFolderPageNotesIfDirty()
             navigationGeneration += 1
+            let targetFolder = selectedFolderID ?? FolderCatalog.rootFolderID
             do {
-                let (document, relPath) = try await repository.createNote(named: "untitled-note")
+                _ = try await repository.createNote(named: "untitled-note", folderID: targetFolder)
                 await refreshNotes()
-                selectedBaseName = relPath
-                selectedNoteID = document.metadata.noteID
-                activeDocument = document
-                lastPersistedDocument = document
-                await refreshOnDiskFingerprints(for: relPath)
+                selectedFolderID = targetFolder
+                await loadFolderPageDocuments()
+                selectedBaseName = nil
+                selectedNoteID = nil
+                activeDocument = nil
+                lastPersistedDocument = nil
                 clearUndoStack()
             } catch {
                 lastError = "Failed to create note: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    func renameFolder(id: UUID, newName: String) {
+        Task { @MainActor in
+            await flushAllFolderPageNotesIfDirty()
+            do {
+                try await repository.renameFolder(id: id, newName: newName)
+                await refreshNotes()
+            } catch {
+                lastError = error.localizedDescription
+            }
+        }
+    }
+
+    func deleteNoteFromFolder(noteID: UUID) {
+        Task { @MainActor in
+            await flushAllFolderPageNotesIfDirty()
+            do {
+                try await repository.deleteNote(noteID: noteID)
+                await refreshNotes()
+            } catch {
+                lastError = error.localizedDescription
             }
         }
     }
@@ -1056,6 +1261,11 @@ final class AppModel {
 
     /// Test helper: mirrors what the vault watcher closure does without relying on filesystem events.
     func simulateWatcherEvent() async {
+        let outcome = WorkspaceCompatibilityScanner.scan(vaultRoot: repository.vaultURL)
+        if case .incompatible(let report) = outcome {
+            applyIncompatibleWorkspaceReport(report)
+            return
+        }
         await reconcileVaultState(invalidateCaches: true)
         pendingExternalDiskCheck = true
         await runPendingExternalDiskReconciliationIfNeeded()
@@ -1072,6 +1282,11 @@ final class AppModel {
                 guard let self else { return }
                 Task { @MainActor [weak self] in
                     guard let self else { return }
+                    let outcome = WorkspaceCompatibilityScanner.scan(vaultRoot: self.repository.vaultURL)
+                    if case .incompatible(let report) = outcome {
+                        self.applyIncompatibleWorkspaceReport(report)
+                        return
+                    }
                     await self.reconcileVaultState(invalidateCaches: true)
                     self.pendingExternalDiskCheck = true
                     await self.runPendingExternalDiskReconciliationIfNeeded()

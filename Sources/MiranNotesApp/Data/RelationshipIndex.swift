@@ -61,4 +61,24 @@ struct RelationshipIndex: Codable, Equatable, Sendable {
             isDirty = true
         }
     }
+
+    mutating func remapNoteID(from oldID: UUID, to newID: UUID) {
+        guard oldID != newID else { return }
+        for i in relationships.indices {
+            if relationships[i].sourceNoteID == oldID {
+                relationships[i].sourceNoteID = newID
+                isDirty = true
+            }
+            switch relationships[i].target {
+            case .note(let id) where id == oldID:
+                relationships[i].target = .note(noteID: newID)
+                isDirty = true
+            case .artifact(let nid, let artifactID, let kind) where nid == oldID:
+                relationships[i].target = .artifact(noteID: newID, artifactID: artifactID, kind: kind)
+                isDirty = true
+            default:
+                break
+            }
+        }
+    }
 }

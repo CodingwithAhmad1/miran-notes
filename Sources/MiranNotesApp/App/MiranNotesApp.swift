@@ -26,7 +26,7 @@ struct MiranNotesApp: App {
 
     var body: some Scene {
         WindowGroup {
-            notesContentView
+            workspaceRootView
             .task {
                 model.loadVault()
             }
@@ -102,6 +102,12 @@ struct MiranNotesApp: App {
             )
         }
         .commands {
+            CommandGroup(after: .newItem) {
+                Button("Open Workspace…") {
+                    presentOpenWorkspacePanel()
+                }
+                .keyboardShortcut("o", modifiers: [.command, .shift])
+            }
             CommandMenu("Format") {
                 Button("Bold") {
                     NSApp.sendAction(Selector(("toggleBold:")), to: nil, from: nil)
@@ -119,16 +125,42 @@ struct MiranNotesApp: App {
         }
     }
 
-    private var notesContentView: some View {
-        NavigationSplitView {
-            NotesListView(model: model)
-                .navigationTitle("Notes")
-        } detail: {
-            TiledEditorView(model: model)
+    private var workspaceRootView: some View {
+        Group {
+            switch model.workspaceGateState {
+            case .checking:
+                VStack(spacing: 12) {
+                    ProgressView()
+                    Text("Checking workspace…")
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            case .incompatible(let report):
+                WorkspaceIncompatibleView(report: report, onChooseDifferentFolder: presentOpenWorkspacePanel)
+            case .ready:
+                NavigationSplitView {
+                    WorkspaceFolderSidebarView(model: model)
+                } detail: {
+                    FolderPageView(model: model)
+                }
+            }
         }
     }
 
+    private func presentOpenWorkspacePanel() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = true
+        panel.prompt = "Open"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        model = AppModel(repository: NoteRepository(vaultURL: url))
+        model.loadVault()
+    }
+
 }
+
 
 struct EditorRootView: View {
     @Bindable var model: AppModel

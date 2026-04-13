@@ -52,16 +52,18 @@ final class AppModelStartupSyncTests: XCTestCase {
         let model = AppModel(repository: repo, largeVaultLinkGraphSyncThreshold: 0)
         model.loadVault()
 
-        // Deferred sync should not block initial selection and note loading.
+        // Deferred sync should not block initial folder-page load for root-level notes.
         var loaded = false
         for _ in 0..<100 {
-            if model.selectedBaseName != nil, model.activeDocument != nil {
+            if case .ready = model.workspaceGateState,
+               model.selectedFolderID == FolderCatalog.rootFolderID,
+               model.folderPageDocuments.count == 1 {
                 loaded = true
                 break
             }
             try await Task.sleep(for: .milliseconds(25))
         }
-        XCTAssertTrue(loaded, "loadVault should load initial note even when link graph sync is deferred")
+        XCTAssertTrue(loaded, "loadVault should load the folder page for root notes even when link graph sync is deferred")
         XCTAssertNil(model.lastError)
     }
 }

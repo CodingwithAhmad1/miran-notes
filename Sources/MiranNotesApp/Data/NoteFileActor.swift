@@ -21,7 +21,9 @@ actor NoteFileActor {
         vaultEnsured = true
     }
 
-    func loadNote(relativePath: String) throws -> NoteLoadResult {
+    /// Loads note text + metadata. When `.meta.json` is missing or invalid, uses `fallbackNoteID` (from manifest / registration).
+    /// When the sidecar decodes successfully, `fallbackNoteID` is ignored.
+    func loadNote(relativePath: String, fallbackNoteID: UUID?) throws -> NoteLoadResult {
         try VaultPath.validateRelativePath(relativePath)
         let textURL = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: relativePath, extension: "txt")
         let metaURL = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: relativePath, extension: "meta.json")
@@ -37,9 +39,12 @@ actor NoteFileActor {
            let decoded = try? decoder.decode(NoteMetadata.self, from: data) {
             metadata = MetadataSchema.migrate(decoded)
         } else {
+            guard let fid = fallbackNoteID else {
+                throw NoteRepositoryError.unresolvedNoteIdentity(relativePath)
+            }
             metadata = NoteMetadata(
                 schemaVersion: NoteMetadata.currentSchemaVersion,
-                noteID: UUID(),
+                noteID: fid,
                 blocks: [
                     Block(
                         id: UUID().uuidString,
