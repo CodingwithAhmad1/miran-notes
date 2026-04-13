@@ -547,6 +547,7 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
         }
 
         private func showOrUpdateSlashMenu(relativeTo textView: NSTextView, hasQuery: Bool) {
+            guard textView.window != nil else { return }
             ensureSlashMenuInitialized()
             refreshSlashMenuUI(hasQuery: hasQuery)
             guard let popover = slashMenuPopover else { return }

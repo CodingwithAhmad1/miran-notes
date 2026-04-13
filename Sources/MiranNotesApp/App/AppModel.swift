@@ -93,6 +93,9 @@ final class AppModel: ObservableObject {
     @Published var noteSummaries: [NoteSummary] = []
     /// Manifest `relativePath` for the open note (stable selection for tests and shell).
     @Published var selectedBaseName: String?
+    /// Stable UUID identity of the selected note. This is the canonical UI selection key;
+    /// `selectedBaseName` is the companion disk-I/O key kept in sync alongside it.
+    @Published var selectedNoteID: UUID?
     @Published var activeDocument: NoteDocument?
     @Published var backlinks: [BacklinkItem] = []
     /// When set, the editor scrolls to this range once that note is loaded.
@@ -220,6 +223,7 @@ final class AppModel: ObservableObject {
             await runStartupLinkGraphSync()
             if selectedBaseName == nil {
                 selectedBaseName = noteSummaries.first?.relativePath
+                selectedNoteID = noteSummaries.first?.noteID
             }
             await loadSelectedNote()
             await refreshBacklinks()
@@ -631,8 +635,10 @@ final class AppModel: ObservableObject {
                 await refreshNotes()
                 if noteSummaries.isEmpty {
                     selectedBaseName = nil
+                    selectedNoteID = nil
                 } else {
                     selectedBaseName = noteSummaries.first?.relativePath
+                    selectedNoteID = noteSummaries.first?.noteID
                 }
                 await loadSelectedNote()
             } catch {
@@ -795,6 +801,7 @@ final class AppModel: ObservableObject {
                 let (document, relPath) = try await repository.createNote(named: "untitled-note")
                 await refreshNotes()
                 selectedBaseName = relPath
+                selectedNoteID = document.metadata.noteID
                 activeDocument = document
                 lastPersistedDocument = document
                 await refreshOnDiskFingerprints(for: relPath)
@@ -819,6 +826,7 @@ final class AppModel: ObservableObject {
         guard let path = selectedBaseName else {
             pendingEditorScroll = nil
             activeDocument = nil
+            selectedNoteID = nil
             tableEditorPayload = nil
             lastPersistedDocument = nil
             lastKnownDiskDate = nil
@@ -834,6 +842,7 @@ final class AppModel: ObservableObject {
         do {
             let result = try await repository.loadNote(baseName: path)
             activeDocument = result.document
+            selectedNoteID = result.document.metadata.noteID
             lastPersistedDocument = result.document
             repairAdvisory = RepairDiagnosticsBuilder.buildLoadAdvisory(result: result)
             await refreshOnDiskFingerprints(for: path)
@@ -1154,6 +1163,7 @@ final class AppModel: ObservableObject {
             await flushCurrentNoteToDiskIfDirty()
             navigationGeneration += 1
             selectedBaseName = resolved
+            selectedNoteID = noteSummaries.first(where: { $0.relativePath == resolved })?.noteID
             syncActivePaneBaseName()
             await loadSelectedNote()
         }
@@ -1163,6 +1173,7 @@ final class AppModel: ObservableObject {
         externalEditConflictAlert = nil
         diskActivityBanner = nil
         externalTextCompare = nil
+        selectedNoteID = noteID
         Task { @MainActor in
             let path: String?
             if let id = noteID {

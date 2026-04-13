@@ -4,16 +4,16 @@ import SwiftUI
 private struct SidebarOutlineRows: View {
     let entries: [SidebarOutlineEntry]
     @ObservedObject var model: AppModel
-    let selectedPath: String?
+    let selectedNoteID: UUID?
 
-    @State private var hoveredPath: String?
+    @State private var hoveredNoteID: UUID?
 
     var body: some View {
         ForEach(entries) { entry in
             switch entry {
             case let .folder(folder, children):
                 DisclosureGroup {
-                    SidebarOutlineRows(entries: children, model: model, selectedPath: selectedPath)
+                    SidebarOutlineRows(entries: children, model: model, selectedNoteID: selectedNoteID)
                 } label: {
                     Text(folder.name)
                 }
@@ -36,22 +36,22 @@ private struct SidebarOutlineRows: View {
                             .multilineTextAlignment(.leading)
                     }
                 }
-                .tag(Optional(note.relativePath))
+                .tag(Optional(note.noteID))
                 .listRowBackground(
                     RoundedRectangle(cornerRadius: 5)
-                        .fill(rowColor(for: note.relativePath))
+                        .fill(rowColor(for: note.noteID))
                 )
                 .onHover { isHovered in
-                    hoveredPath = isHovered ? note.relativePath : nil
+                    hoveredNoteID = isHovered ? note.noteID : nil
                 }
             }
         }
     }
 
-    private func rowColor(for path: String) -> Color {
-        if path == selectedPath {
+    private func rowColor(for noteID: UUID) -> Color {
+        if noteID == selectedNoteID {
             return Color.primary.opacity(0.10)
-        } else if path == hoveredPath {
+        } else if noteID == hoveredNoteID {
             return Color.primary.opacity(0.05)
         }
         return Color.clear
@@ -71,16 +71,16 @@ struct NotesListView: View {
         return "No notes yet"
     }
 
-    private var selectionBinding: Binding<String?> {
+    private var selectionBinding: Binding<UUID?> {
         Binding(
-            get: { model.selectedBaseName },
-            set: { model.changeSelection(baseName: $0) }
+            get: { model.selectedNoteID },
+            set: { model.changeSelection(noteID: $0) }
         )
     }
 
     var body: some View {
         List(selection: selectionBinding) {
-            SidebarOutlineRows(entries: model.sidebarOutline, model: model, selectedPath: model.selectedBaseName)
+            SidebarOutlineRows(entries: model.sidebarOutline, model: model, selectedNoteID: model.selectedNoteID)
         }
         .searchable(text: $model.noteQuery, prompt: Text("Search notes"))
         .overlay {
@@ -106,7 +106,7 @@ struct NotesListView: View {
                 } label: {
                     Label("Delete Note", systemImage: "trash")
                 }
-                .disabled(model.selectedBaseName == nil)
+                .disabled(model.selectedNoteID == nil)
             }
         }
     }
