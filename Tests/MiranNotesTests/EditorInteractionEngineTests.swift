@@ -230,7 +230,7 @@ final class EditorInteractionEngineTests: XCTestCase {
             replacement: "a\nb"
         )
         let afterReplace = EditCommandEngine.apply(replaceCmd, to: doc)
-        let reconciled = EditCommandEngine.reconcileBlocksFromText(document: afterReplace, oldBlocks: oldBlocks)
+        let reconciled = EditCommandEngine.reconcileBlocksFromText(document: afterReplace, oldText: doc.text, oldBlocks: oldBlocks)
         var commands: [EditCommand] = [replaceCmd]
         if reconciled.metadata.blocks != afterReplace.metadata.blocks {
             commands.append(.replaceMetadataBlocks(blocks: reconciled.metadata.blocks))
@@ -238,6 +238,170 @@ final class EditorInteractionEngineTests: XCTestCase {
         let merged = applyAll(commands, to: doc)
         XCTAssertTrue(NoteIntegrity.check(document: merged).isValid)
         XCTAssertEqual(merged.text, "a\nb")
+    }
+
+    // MARK: - reconcileBlocksFromText
+
+    func testReconcileRecoversSingleHeadingAfterIdentityReplace() {
+        let noteID = UUID()
+        let doc = NoteDocument(
+            text: "Title\nBody",
+            metadata: NoteMetadata(
+                schemaVersion: NoteMetadata.currentSchemaVersion,
+                noteID: noteID,
+                blocks: [
+                    Block(id: "h1", type: .heading, range: TextRange(start: 0, length: 6), level: 1, icon: nil),
+                    Block(id: "p1", type: .paragraph, range: TextRange(start: 6, length: 4), level: nil, icon: nil)
+                ],
+                spans: []
+            )
+        )
+        let oldBlocks = doc.metadata.blocks
+        let replaceCmd = EditCommand.replaceText(
+            range: TextRange(start: 0, length: doc.text.utf16.count),
+            replacement: "Title\nBody"
+        )
+        let afterReplace = EditCommandEngine.apply(replaceCmd, to: doc)
+        let reconciled = EditCommandEngine.reconcileBlocksFromText(document: afterReplace, oldText: doc.text, oldBlocks: oldBlocks)
+
+        XCTAssertEqual(reconciled.metadata.blocks.count, 2)
+        XCTAssertEqual(reconciled.metadata.blocks[0].type, .heading)
+        XCTAssertEqual(reconciled.metadata.blocks[0].level, 1)
+        XCTAssertEqual(reconciled.metadata.blocks[0].id, "h1", "Stable ID preserved via content match")
+        XCTAssertEqual(reconciled.metadata.blocks[1].type, .paragraph)
+        XCTAssertTrue(NoteIntegrity.check(document: reconciled).isValid)
+    }
+
+    func testReconcileWithPastedExtraLines() {
+        let noteID = UUID()
+        let doc = NoteDocument(
+            text: "A\nB",
+            metadata: NoteMetadata(
+                schemaVersion: NoteMetadata.currentSchemaVersion,
+                noteID: noteID,
+                blocks: [
+                    Block(id: "a", type: .heading, range: TextRange(start: 0, length: 2), level: 2, icon: nil),
+                    Block(id: "b", type: .callout, range: TextRange(start: 2, length: 1), level: nil, icon: nil)
+                ],
+                spans: []
+            )
+        )
+        let oldBlocks = doc.metadata.blocks
+        let newText = "A\nX\nY\nB"
+        let replaceCmd = EditCommand.replaceText(
+            range: TextRange(start: 0, length: doc.text.utf16.count),
+            replacement: newText
+        )
+        let afterReplace = EditCommandEngine.apply(replaceCmd, to: doc)
+        let reconciled = EditCommandEngine.reconcileBlocksFromText(document: afterReplace, oldText: doc.text, oldBlocks: oldBlocks)
+
+        XCTAssertEqual(reconciled.metadata.blocks.count, 4)
+        XCTAssertEqual(reconciled.metadata.blocks[0].type, .heading, "First line content matches old heading")
+        XCTAssertEqual(reconciled.metadata.blocks[3].type, .callout, "Last line content matches old callout")
+        XCTAssertEqual(reconciled.metadata.blocks[1].type, .paragraph, "New line X defaults to paragraph")
+        XCTAssertEqual(reconciled.metadata.blocks[2].type, .paragraph, "New line Y defaults to paragraph")
+        XCTAssertTrue(NoteIntegrity.check(document: reconciled).isValid)
+    }
+
+    func testReconcileWithRemovedLines() {
+        let noteID = UUID()
+        let doc = NoteDocument(
+            text: "H\nA\nB\nC",
+            metadata: NoteMetadata(
+                schemaVersion: NoteMetadata.currentSchemaVersion,
+                noteID: noteID,
+                blocks: [
+                    Block(id: "h", type: .heading, range: TextRange(start: 0, length: 2), level: 1, icon: nil),
+                    Block(id: "a", type: .paragraph, range: TextRange(start: 2, length: 2), level: nil, icon: nil),
+                    Block(id: "b", type: .code, range: TextRange(start: 4, length: 2), level: nil, icon: nil),
+                    Block(id: "c", type: .paragraph, range: TextRange(start: 6, length: 1), level: nil, icon: nil)
+                ],
+                spans: []
+            )
+        )
+        let oldBlocks = doc.metadata.blocks
+        let newText = "H\nC"
+        let replaceCmd = EditCommand.replaceText(
+            range: TextRange(start: 0, length: doc.text.utf16.count),
+            replacement: newText
+        )
+        let afterReplace = EditCommandEngine.apply(replaceCmd, to: doc)
+        let reconciled = EditCommandEngine.reconcileBlocksFromText(document: afterReplace, oldText: doc.text, oldBlocks: oldBlocks)
+
+        XCTAssertEqual(reconciled.metadata.blocks.count, 2)
+        XCTAssertEqual(reconciled.metadata.blocks[0].type, .heading)
+        XCTAssertEqual(reconciled.metadata.blocks[0].id, "h")
+        XCTAssertEqual(reconciled.metadata.blocks[1].id, "c")
+        XCTAssertTrue(NoteIntegrity.check(document: reconciled).isValid)
+    }
+
+    func testReconcileEmptyText() {
+        let noteID = UUID()
+        let doc = NoteDocument(
+            text: "",
+            metadata: NoteMetadata(
+                schemaVersion: NoteMetadata.currentSchemaVersion,
+                noteID: noteID,
+                blocks: [
+                    Block(id: "b0", type: .paragraph, range: TextRange(start: 0, length: 0), level: nil, icon: nil)
+                ],
+                spans: []
+            )
+        )
+        let reconciled = EditCommandEngine.reconcileBlocksFromText(document: doc, oldText: doc.text, oldBlocks: doc.metadata.blocks)
+        XCTAssertEqual(reconciled.metadata.blocks.count, 1)
+        XCTAssertEqual(reconciled.metadata.blocks[0].range, TextRange(start: 0, length: 0))
+        XCTAssertTrue(NoteIntegrity.check(document: reconciled).isValid)
+    }
+
+    func testReconcileSingleLineNoNewline() {
+        let noteID = UUID()
+        let doc = NoteDocument(
+            text: "Hello",
+            metadata: NoteMetadata(
+                schemaVersion: NoteMetadata.currentSchemaVersion,
+                noteID: noteID,
+                blocks: [
+                    Block(id: "b0", type: .heading, range: TextRange(start: 0, length: 5), level: 1, icon: nil)
+                ],
+                spans: []
+            )
+        )
+        let reconciled = EditCommandEngine.reconcileBlocksFromText(document: doc, oldText: doc.text, oldBlocks: doc.metadata.blocks)
+        XCTAssertEqual(reconciled.metadata.blocks.count, 1)
+        XCTAssertEqual(reconciled.metadata.blocks[0].type, .heading)
+        XCTAssertEqual(reconciled.metadata.blocks[0].id, "b0")
+        XCTAssertTrue(NoteIntegrity.check(document: reconciled).isValid)
+    }
+
+    func testReconcileMultipleHeadingTypes() {
+        let noteID = UUID()
+        let doc = NoteDocument(
+            text: "H1\nH2\nH3",
+            metadata: NoteMetadata(
+                schemaVersion: NoteMetadata.currentSchemaVersion,
+                noteID: noteID,
+                blocks: [
+                    Block(id: "a", type: .heading, range: TextRange(start: 0, length: 3), level: 1, icon: nil),
+                    Block(id: "b", type: .heading, range: TextRange(start: 3, length: 3), level: 2, icon: nil),
+                    Block(id: "c", type: .heading, range: TextRange(start: 6, length: 2), level: 3, icon: nil)
+                ],
+                spans: []
+            )
+        )
+        let oldBlocks = doc.metadata.blocks
+        let replaceCmd = EditCommand.replaceText(
+            range: TextRange(start: 0, length: doc.text.utf16.count),
+            replacement: "H1\nH2\nH3"
+        )
+        let afterReplace = EditCommandEngine.apply(replaceCmd, to: doc)
+        let reconciled = EditCommandEngine.reconcileBlocksFromText(document: afterReplace, oldText: doc.text, oldBlocks: oldBlocks)
+
+        XCTAssertEqual(reconciled.metadata.blocks.count, 3)
+        XCTAssertEqual(reconciled.metadata.blocks[0].level, 1)
+        XCTAssertEqual(reconciled.metadata.blocks[1].level, 2)
+        XCTAssertEqual(reconciled.metadata.blocks[2].level, 3)
+        XCTAssertTrue(NoteIntegrity.check(document: reconciled).isValid)
     }
 
     // MARK: - Large document

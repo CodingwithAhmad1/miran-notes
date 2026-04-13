@@ -475,7 +475,7 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
                     replacement: storageString
                 )
                 let afterReplace = EditCommandEngine.apply(replaceCmd, to: parent.document)
-                let reconciled = EditCommandEngine.reconcileBlocksFromText(document: afterReplace, oldBlocks: oldBlocks)
+                let reconciled = EditCommandEngine.reconcileBlocksFromText(document: afterReplace, oldText: previous, oldBlocks: oldBlocks)
                 var commands: [EditCommand] = [replaceCmd]
                 if reconciled.metadata.blocks != afterReplace.metadata.blocks {
                     commands.append(.replaceMetadataBlocks(blocks: reconciled.metadata.blocks))

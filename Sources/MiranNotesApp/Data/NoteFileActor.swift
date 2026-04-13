@@ -216,21 +216,18 @@ actor NoteFileActor {
 
         if !NoteIntegrity.check(document: document).isValid {
             let total = RangeNormalizer.utf16Length(of: text)
-            let noteID = document.metadata.noteID
-            let fallback = NoteMetadata(
-                schemaVersion: NoteMetadata.currentSchemaVersion,
-                noteID: noteID,
-                blocks: [
-                    Block(
-                        id: UUID().uuidString,
-                        type: .paragraph,
-                        range: TextRange(start: 0, length: total),
-                        level: nil,
-                        icon: nil
-                    )
-                ],
-                spans: []
-            )
+            var fallback = document.metadata
+            fallback.schemaVersion = NoteMetadata.currentSchemaVersion
+            fallback.blocks = [
+                Block(
+                    id: UUID().uuidString,
+                    type: .paragraph,
+                    range: TextRange(start: 0, length: total),
+                    level: nil,
+                    icon: nil
+                )
+            ]
+            fallback.spans = []
             let pass3 = RangeNormalizer.normalize(metadata: fallback, for: text)
             allWarnings.append(contentsOf: pass3.warnings)
             allWarnings.append("Metadata was too corrupt to repair incrementally; rebuilt as single paragraph block.")

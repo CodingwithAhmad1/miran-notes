@@ -5,7 +5,11 @@ public enum RangeNormalizer {
         text.utf16.count
     }
 
-    public static func normalize(metadata: NoteMetadata, for text: String) -> MetadataValidationResult {
+    /// - Parameter stripZeroLengthBlocks: When `true` (the default), zero-length interior blocks are
+    ///   removed during gap-closing. Persistence and load paths pass `true`. Safety-net calls inside
+    ///   `EditCommandEngine` pass `false` so that transient empty blocks survive for same-batch
+    ///   `changeBlockType` lookups.
+    public static func normalize(metadata: NoteMetadata, for text: String, stripZeroLengthBlocks: Bool = true) -> MetadataValidationResult {
         let totalLength = utf16Length(of: text)
         var warnings: [String] = []
 
@@ -29,7 +33,7 @@ public enum RangeNormalizer {
             ]
             warnings.append("No blocks found. Inserted one paragraph block.")
         } else {
-            blocks = closeBlockGaps(blocks, totalLength: totalLength, warnings: &warnings)
+            blocks = closeBlockGaps(blocks, totalLength: totalLength, stripZeroLength: stripZeroLengthBlocks, warnings: &warnings)
         }
 
         var spans = metadata.spans.map { span -> Span in
@@ -48,15 +52,11 @@ public enum RangeNormalizer {
         }
         links.removeAll { $0.range.isEmpty }
 
-        let normalized = NoteMetadata(
-            schemaVersion: max(metadata.schemaVersion, NoteMetadata.currentSchemaVersion),
-            noteID: metadata.noteID,
-            blocks: blocks,
-            spans: spans,
-            links: links,
-            artifacts: metadata.artifacts,
-            properties: metadata.properties
-        )
+        var normalized = metadata
+        normalized.schemaVersion = max(metadata.schemaVersion, NoteMetadata.currentSchemaVersion)
+        normalized.blocks = blocks
+        normalized.spans = spans
+        normalized.links = links
         return MetadataValidationResult(normalizedMetadata: normalized, warnings: warnings)
     }
 
@@ -89,12 +89,9 @@ public enum RangeNormalizer {
         return true
     }
 
-    private static func closeBlockGaps(_ blocks: [Block], totalLength: Int, warnings: inout [String]) -> [Block] {
-        // Zero-length interior blocks are transient artifacts of adjustBlocks (which preserves them
-        // so same-batch changeBlockType can find the block by ID). When normalize runs as a safety
-        // net, these should be stripped to avoid producing two blocks at the same start offset.
+    private static func closeBlockGaps(_ blocks: [Block], totalLength: Int, stripZeroLength: Bool, warnings: inout [String]) -> [Block] {
         var filtered: [Block]
-        if blocks.count > 1 {
+        if stripZeroLength, blocks.count > 1 {
             let before = blocks.count
             filtered = blocks.filter { $0.range.length > 0 }
             if filtered.isEmpty {

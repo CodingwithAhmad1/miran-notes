@@ -76,4 +76,80 @@ final class NoteIntegrityTests: XCTestCase {
             return false
         })
     }
+
+    func testDetectsNoBlocks() {
+        let doc = NoteDocument(
+            text: "abc",
+            metadata: NoteMetadata(
+                schemaVersion: 2,
+                noteID: UUID(),
+                blocks: [],
+                spans: []
+            )
+        )
+        let report = NoteIntegrity.check(document: doc)
+        XCTAssertFalse(report.isValid)
+        XCTAssertTrue(report.issues.contains(.noBlocks))
+    }
+
+    func testDetectsBlockOutOfBounds() {
+        let doc = NoteDocument(
+            text: "ab",
+            metadata: NoteMetadata(
+                schemaVersion: 2,
+                noteID: UUID(),
+                blocks: [
+                    Block(id: "a", type: .paragraph, range: TextRange(start: 0, length: 10), level: nil, icon: nil)
+                ],
+                spans: []
+            )
+        )
+        let report = NoteIntegrity.check(document: doc)
+        XCTAssertFalse(report.isValid)
+        XCTAssertTrue(report.issues.contains { issue in
+            if case .blockOutOfBounds = issue { return true }
+            return false
+        })
+    }
+
+    func testDetectsBlocksDoNotCoverText() {
+        let doc = NoteDocument(
+            text: "abcde",
+            metadata: NoteMetadata(
+                schemaVersion: 2,
+                noteID: UUID(),
+                blocks: [
+                    Block(id: "a", type: .paragraph, range: TextRange(start: 0, length: 3), level: nil, icon: nil)
+                ],
+                spans: []
+            )
+        )
+        let report = NoteIntegrity.check(document: doc)
+        XCTAssertFalse(report.isValid)
+        XCTAssertTrue(report.issues.contains { issue in
+            if case .blocksDoNotCoverText = issue { return true }
+            return false
+        })
+    }
+
+    func testDetectsLinkOutOfBounds() {
+        let doc = NoteDocument(
+            text: "hi",
+            metadata: NoteMetadata(
+                schemaVersion: 2,
+                noteID: UUID(),
+                blocks: [
+                    Block(id: "a", type: .paragraph, range: TextRange(start: 0, length: 2), level: nil, icon: nil)
+                ],
+                spans: [],
+                links: [NoteLink(range: TextRange(start: 0, length: 10), targetNoteID: UUID())]
+            )
+        )
+        let report = NoteIntegrity.check(document: doc)
+        XCTAssertFalse(report.isValid)
+        XCTAssertTrue(report.issues.contains { issue in
+            if case .linkOutOfBounds = issue { return true }
+            return false
+        })
+    }
 }

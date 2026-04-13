@@ -144,6 +144,93 @@ final class SpanAndBlockAdjustmentTests: XCTestCase {
         XCTAssertEqual(out[0].range, TextRange(start: 0, length: 0))
     }
 
+    func testAdjustBlocksMultiBlockCollapseThreeBlocks() {
+        let blocks = [
+            Block(id: "a", type: .heading, range: TextRange(start: 0, length: 3), level: 1, icon: nil),
+            Block(id: "b", type: .paragraph, range: TextRange(start: 3, length: 3), level: nil, icon: nil),
+            Block(id: "c", type: .code, range: TextRange(start: 6, length: 3), level: nil, icon: nil)
+        ]
+        let ctx = NoteMetadata(schemaVersion: 2, noteID: UUID(), blocks: blocks, spans: [])
+        let out = EditCommandEngine.adjustBlocks(
+            blocks: blocks,
+            replacedRange: TextRange(start: 1, length: 7),
+            replacementUTF16Length: 1,
+            text: "aXc",
+            contextMetadata: ctx
+        )
+        XCTAssertEqual(out.count, 1)
+        XCTAssertEqual(out[0].id, "a", "First intersecting block's ID preserved")
+        XCTAssertEqual(out[0].type, .heading, "First intersecting block's type preserved")
+        XCTAssertEqual(out[0].range, TextRange(start: 0, length: 3))
+        let meta = NoteMetadata(schemaVersion: 2, noteID: ctx.noteID, blocks: out, spans: [])
+        XCTAssertTrue(NoteIntegrity.check(document: NoteDocument(text: "aXc", metadata: meta)).isValid)
+    }
+
+    func testInsertionAtBlockBoundaryGoesToFirstBlock() {
+        let blocks = [
+            Block(id: "a", type: .paragraph, range: TextRange(start: 0, length: 3), level: nil, icon: nil),
+            Block(id: "b", type: .paragraph, range: TextRange(start: 3, length: 3), level: nil, icon: nil)
+        ]
+        let ctx = NoteMetadata(schemaVersion: 2, noteID: UUID(), blocks: blocks, spans: [])
+        let out = EditCommandEngine.adjustBlocks(
+            blocks: blocks,
+            replacedRange: TextRange(start: 3, length: 0),
+            replacementUTF16Length: 1,
+            text: "abcXdef",
+            contextMetadata: ctx
+        )
+        XCTAssertEqual(out.count, 2)
+        XCTAssertEqual(out[0].range, TextRange(start: 0, length: 4), "Insertion attributed to first block (end == insertion point)")
+        XCTAssertEqual(out[1].range, TextRange(start: 4, length: 3))
+    }
+
+    func testZeroLengthBlockSurvivesSafetyNetWithStripFalse() {
+        let text = "Hello"
+        let noteID = UUID()
+        var doc = NoteDocument(
+            text: "Hello---",
+            metadata: NoteMetadata(
+                schemaVersion: NoteMetadata.currentSchemaVersion,
+                noteID: noteID,
+                blocks: [
+                    Block(id: "a", type: .paragraph, range: TextRange(start: 0, length: 5), level: nil, icon: nil),
+                    Block(id: "b", type: .paragraph, range: TextRange(start: 5, length: 3), level: nil, icon: nil)
+                ],
+                spans: []
+            )
+        )
+        doc = EditCommandEngine.apply(
+            .replaceText(range: TextRange(start: 5, length: 3), replacement: ""),
+            to: doc
+        )
+        XCTAssertEqual(doc.text, text)
+        XCTAssertEqual(doc.metadata.blocks.count, 2, "Empty block preserved after deletion")
+        XCTAssertEqual(doc.metadata.blocks[1].id, "b")
+        XCTAssertEqual(doc.metadata.blocks[1].range.length, 0)
+
+        doc = EditCommandEngine.apply(
+            .changeBlockType(blockID: "b", type: .divider, headingLevel: nil),
+            to: doc
+        )
+        XCTAssertEqual(doc.metadata.blocks[1].type, .divider, "changeBlockType succeeds on zero-length block")
+    }
+
+    func testNormalizePersistenceStripsZeroLengthBlock() {
+        let m = NoteMetadata(
+            schemaVersion: NoteMetadata.currentSchemaVersion,
+            noteID: UUID(),
+            blocks: [
+                Block(id: "a", type: .paragraph, range: TextRange(start: 0, length: 5), level: nil, icon: nil),
+                Block(id: "b", type: .divider, range: TextRange(start: 5, length: 0), level: nil, icon: nil)
+            ],
+            spans: []
+        )
+        let result = RangeNormalizer.normalize(metadata: m, for: "Hello", stripZeroLengthBlocks: true)
+        XCTAssertEqual(result.normalizedMetadata.blocks.count, 1, "Persistence normalize strips zero-length block")
+        XCTAssertEqual(result.normalizedMetadata.blocks[0].id, "a")
+        XCTAssertTrue(RangeNormalizer.isValid(metadata: result.normalizedMetadata, for: "Hello"))
+    }
+
     // MARK: - splitBlock span/link constraining
 
     func testSplitBlockSplitsBoldSpanAtSplitPoint() {

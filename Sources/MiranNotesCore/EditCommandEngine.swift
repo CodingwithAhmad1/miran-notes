@@ -63,7 +63,7 @@ public struct EditCommandEngine {
         next.metadata.spans = SpanAdjuster.constrainToBlocks(spans: next.metadata.spans, blocks: blocks)
         next.metadata.links = LinkAdjuster.constrainToBlocks(links: next.metadata.links, blocks: blocks)
         if !RangeNormalizer.isValid(metadata: next.metadata, for: next.text) {
-            let repaired = RangeNormalizer.normalize(metadata: next.metadata, for: next.text)
+            let repaired = RangeNormalizer.normalize(metadata: next.metadata, for: next.text, stripZeroLengthBlocks: false)
             next.metadata = repaired.normalizedMetadata
         }
         return next
@@ -106,7 +106,7 @@ public struct EditCommandEngine {
             let logger = Logger(subsystem: "app.miran.notes", category: "EditEngine")
             let issues = NoteIntegrity.check(document: next).issues
             logger.error("adjustBlocks fallback triggered — \(issues.map { String(describing: $0) }.joined(separator: "; "), privacy: .public)")
-            let repaired = RangeNormalizer.normalize(metadata: next.metadata, for: next.text)
+            let repaired = RangeNormalizer.normalize(metadata: next.metadata, for: next.text, stripZeroLengthBlocks: false)
             next.metadata = repaired.normalizedMetadata
         }
 
@@ -192,7 +192,7 @@ public struct EditCommandEngine {
         let safeRange = range.clamped(to: utf16Length)
         if safeRange.isEmpty {
             if !RangeNormalizer.isValid(metadata: next.metadata, for: next.text) {
-                let repaired = RangeNormalizer.normalize(metadata: next.metadata, for: next.text)
+                let repaired = RangeNormalizer.normalize(metadata: next.metadata, for: next.text, stripZeroLengthBlocks: false)
                 next.metadata = repaired.normalizedMetadata
             }
             return next
@@ -205,7 +205,7 @@ public struct EditCommandEngine {
         }
 
         if !RangeNormalizer.isValid(metadata: next.metadata, for: next.text) {
-            let repaired = RangeNormalizer.normalize(metadata: next.metadata, for: next.text)
+            let repaired = RangeNormalizer.normalize(metadata: next.metadata, for: next.text, stripZeroLengthBlocks: false)
             next.metadata = repaired.normalizedMetadata
         }
         return next
@@ -223,7 +223,7 @@ public struct EditCommandEngine {
         let linkRange = TextRange(start: safeOffset, length: token.utf16.count)
         next.metadata.links.append(NoteLink(range: linkRange, targetNoteID: targetNoteID, label: displayText))
         if !RangeNormalizer.isValid(metadata: next.metadata, for: next.text) {
-            let repaired = RangeNormalizer.normalize(metadata: next.metadata, for: next.text)
+            let repaired = RangeNormalizer.normalize(metadata: next.metadata, for: next.text, stripZeroLengthBlocks: false)
             next.metadata = repaired.normalizedMetadata
         }
         return next
@@ -305,45 +305,85 @@ public struct EditCommandEngine {
         return ns.substring(with: NSRange(location: safe.start, length: safe.length))
     }
 
-    /// Best-effort recovery after a full-buffer replacement. Walks the new text and attempts to re-assign
-    /// block types from `oldBlocks` where the line content is unambiguously the same heading line.
-    /// Returns a document whose block types are partially recovered — structural integrity is still
-    /// guaranteed by the existing `RangeNormalizer` guard in the caller.
-    public static func reconcileBlocksFromText(document: NoteDocument, oldBlocks: [Block]) -> NoteDocument {
+    /// Deterministic re-parser after a full-buffer replacement. Produces a valid block partition by
+    /// splitting on newlines (pass 1), then recovers block types and stable IDs from `oldBlocks`
+    /// using content matching against `oldText` (pass 2).
+    public static func reconcileBlocksFromText(document: NoteDocument, oldText: String, oldBlocks: [Block]) -> NoteDocument {
         var next = document
-        let lines = next.text.components(separatedBy: "\n")
-        var offset = 0
-        var recovered: [Block] = []
-        var consumedBlockIDs: Set<String> = []
+        let text = next.text
+        let ns = text as NSString
+        let oldNS = oldText as NSString
 
+        // --- Pass 1: structural line split → always-valid partition ---
+        let lines = text.components(separatedBy: "\n")
+        var lineRanges: [TextRange] = []
+        var offset = 0
         for (i, line) in lines.enumerated() {
             let length = line.utf16.count
-            let range = TextRange(start: offset, length: i < lines.count - 1 ? length + 1 : length)
+            let includesNewline = i < lines.count - 1
+            let range = TextRange(start: offset, length: includesNewline ? length + 1 : length)
+            lineRanges.append(range)
+            offset += range.length
+        }
 
-            let matchedType = oldBlocks.first { old in
-                old.range.contains(offset) && old.type != .paragraph
+        // --- Build content lookup from old blocks using the old text ---
+        struct OldBlockEntry {
+            let block: Block
+            let content: String
+        }
+        let oldEntries: [OldBlockEntry] = oldBlocks.map { block in
+            let safe = block.range.clamped(to: oldNS.length)
+            let content = safe.length > 0
+                ? oldNS.substring(with: NSRange(location: safe.start, length: safe.length))
+                : ""
+            return OldBlockEntry(block: block, content: content)
+        }
+        var consumedOldIndices: Set<Int> = []
+
+        // --- Pass 2: type recovery + stable ID assignment ---
+        var recovered: [Block] = []
+        for range in lineRanges {
+            let lineContent = range.length > 0
+                ? ns.substring(with: NSRange(location: range.start, length: range.length))
+                : ""
+
+            // Try to find an old block with matching text content (non-paragraph types first).
+            var matchedOldIndex: Int?
+            for (idx, entry) in oldEntries.enumerated() where !consumedOldIndices.contains(idx) {
+                if entry.content == lineContent && entry.block.type != .paragraph {
+                    matchedOldIndex = idx
+                    break
+                }
+            }
+            // Fall back to paragraph matches for stable ID reuse.
+            if matchedOldIndex == nil {
+                for (idx, entry) in oldEntries.enumerated() where !consumedOldIndices.contains(idx) {
+                    if entry.content == lineContent {
+                        matchedOldIndex = idx
+                        break
+                    }
+                }
             }
 
-            if var block = next.metadata.blocks.first(where: {
-                $0.range.intersects(range) && !consumedBlockIDs.contains($0.id)
-            }) {
-                consumedBlockIDs.insert(block.id)
-                if let matched = matchedType, block.type == .paragraph {
-                    block.type = matched.type
-                    block.level = matched.level
-                }
-                recovered.append(block)
+            if let idx = matchedOldIndex {
+                consumedOldIndices.insert(idx)
+                let old = oldEntries[idx].block
+                recovered.append(Block(
+                    id: old.id,
+                    type: old.type,
+                    range: range,
+                    level: old.level,
+                    icon: old.icon
+                ))
             } else {
                 recovered.append(Block(
                     id: UUID().uuidString,
-                    type: matchedType?.type ?? .paragraph,
+                    type: .paragraph,
                     range: range,
-                    level: matchedType?.level,
+                    level: nil,
                     icon: nil
                 ))
             }
-
-            offset += (i < lines.count - 1) ? length + 1 : length
         }
 
         if !recovered.isEmpty {
