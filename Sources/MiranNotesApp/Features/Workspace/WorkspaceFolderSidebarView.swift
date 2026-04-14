@@ -10,7 +10,7 @@ struct WorkspaceFolderSidebarView: View {
             List(selection: folderSelection) {
                 Label(model.sidebarNotesTrayTitle, systemImage: "tray.full")
                     .tag(Optional(model.sidebarNotesTrayFolderID))
-                ForEach(model.topLevelFolderEntries, id: \.id) { folder in
+                ForEach(model.visibleTopLevelFolderEntries, id: \.id) { folder in
                     Text(folder.name)
                         .tag(Optional(folder.id))
                         .contextMenu {

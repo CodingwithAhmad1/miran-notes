@@ -130,15 +130,34 @@ final class AppModel {
     private(set) var hasDismissedVaultWelcome = false
 
     var topLevelFolderEntries: [FolderEntry] {
-        let parent: UUID
-        switch workspaceScope {
-        case .fullVault:
-            parent = FolderCatalog.rootFolderID
-        case .folderSubtree(let rootFolderID):
-            parent = rootFolderID
-        }
+        let parent = scopeParentIDForTopLevelFolders
         return folderCatalog.childFolders(of: parent).sorted {
             $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+        }
+    }
+
+    /// Top-level folders under the current scope that are not hidden from the sidebar.
+    var visibleTopLevelFolderEntries: [FolderEntry] {
+        topLevelFolderEntries.filter { !hiddenTopLevelFolderIDs.contains($0.id) }
+    }
+
+    /// Top-level folders under the current scope that the user hid from the sidebar (still on disk).
+    var hiddenTopLevelFolderEntries: [FolderEntry] {
+        topLevelFolderEntries.filter { hiddenTopLevelFolderIDs.contains($0.id) }
+    }
+
+    /// Client preference: hidden top-level folder IDs (per vault; see ``VaultHiddenFoldersStore``).
+    private(set) var hiddenTopLevelFolderIDs: Set<UUID> = []
+
+    /// Present the Folder Management sheet (window-local toolbar).
+    var isFolderManagementPresented = false
+
+    private var scopeParentIDForTopLevelFolders: UUID {
+        switch workspaceScope {
+        case .fullVault:
+            FolderCatalog.rootFolderID
+        case .folderSubtree(let rootFolderID):
+            rootFolderID
         }
     }
 
@@ -321,6 +340,7 @@ final class AppModel {
             }
             workspaceGateState = .ready
             hasDismissedVaultWelcome = VaultWelcomeDismissalStore.isDismissed(vaultURL: repository.vaultURL)
+            hiddenTopLevelFolderIDs = VaultHiddenFoldersStore.load(vaultURL: repository.vaultURL)
 
             await runStartupRecoveryIfPossible()
             await reconcileVaultState(invalidateCaches: false)
@@ -456,8 +476,40 @@ final class AppModel {
             )
         }
         if workspaceGateState == .ready {
+            reconcileHiddenFoldersWithCatalogIfNeeded()
             await syncFolderSelectionAfterRefresh()
         }
+    }
+
+    private func reconcileHiddenFoldersWithCatalogIfNeeded() {
+        let parent = scopeParentIDForTopLevelFolders
+        let pruned = VaultHiddenFoldersStore.pruned(
+            hiddenTopLevelFolderIDs,
+            folderCatalog: folderCatalog,
+            parentFolderID: parent
+        )
+        guard pruned != hiddenTopLevelFolderIDs else { return }
+        hiddenTopLevelFolderIDs = pruned
+        VaultHiddenFoldersStore.save(pruned, vaultURL: repository.vaultURL)
+    }
+
+    private func persistHiddenTopLevelFolderIDs() {
+        VaultHiddenFoldersStore.save(hiddenTopLevelFolderIDs, vaultURL: repository.vaultURL)
+    }
+
+    func hideTopLevelFolders(ids: Set<UUID>) {
+        guard !ids.isEmpty else { return }
+        hiddenTopLevelFolderIDs.formUnion(ids)
+        persistHiddenTopLevelFolderIDs()
+        if let selected = selectedFolderID, ids.contains(selected) {
+            selectedFolderID = pickDefaultFolderID()
+        }
+    }
+
+    func unhideTopLevelFolders(ids: Set<UUID>) {
+        guard !ids.isEmpty else { return }
+        hiddenTopLevelFolderIDs.subtract(ids)
+        persistHiddenTopLevelFolderIDs()
     }
 
     private func syncFolderSelectionAfterRefresh() async {
@@ -488,11 +540,13 @@ final class AppModel {
         case .folderSubtree(let rootFolderID):
             if id == rootFolderID { return true }
         }
-        return folderCatalog.folder(id: id) != nil
+        guard folderCatalog.folder(id: id) != nil else { return false }
+        if hiddenTopLevelFolderIDs.contains(id) { return false }
+        return true
     }
 
     private func pickDefaultFolderID() -> UUID? {
-        let children = topLevelFolderEntries
+        let children = visibleTopLevelFolderEntries
         if let first = children.first {
             return first.id
         }
@@ -527,6 +581,7 @@ final class AppModel {
         lastPersistedDocument = nil
         backlinks = []
         repairAdvisory = nil
+        isFolderManagementPresented = false
         clearUndoStack()
         bodySearchIndexController.cancel()
         bodySearchIndex = [:]
@@ -656,6 +711,8 @@ final class AppModel {
         Task { @MainActor in
             do {
                 try await repository.deleteFolder(id: id)
+                hiddenTopLevelFolderIDs.remove(id)
+                persistHiddenTopLevelFolderIDs()
                 await refreshNotes()
             } catch {
                 userAlert = .recoverable(
@@ -663,6 +720,32 @@ final class AppModel {
                     kind: .retryRefreshNotesAndFolderUI
                 )
             }
+        }
+    }
+
+    /// Deletes several folders in order; refreshes once after all succeed. On first failure, refreshes and sets ``userAlert``.
+    func deleteTopLevelFolders(ids: Set<UUID>, onSuccess: @escaping @MainActor (_ deletedCount: Int) -> Void) {
+        guard !ids.isEmpty else { return }
+        Task { @MainActor in
+            var deleted = 0
+            for id in ids {
+                do {
+                    try await repository.deleteFolder(id: id)
+                    hiddenTopLevelFolderIDs.remove(id)
+                    deleted += 1
+                } catch {
+                    persistHiddenTopLevelFolderIDs()
+                    await refreshNotes()
+                    userAlert = .recoverable(
+                        message: error.localizedDescription,
+                        kind: .retryRefreshNotesAndFolderUI
+                    )
+                    return
+                }
+            }
+            persistHiddenTopLevelFolderIDs()
+            await refreshNotes()
+            onSuccess(deleted)
         }
     }
 

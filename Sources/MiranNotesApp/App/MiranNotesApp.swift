@@ -79,8 +79,9 @@ struct MiranNotesApp: App {
                 }
             }
             .toolbar {
-                ToolbarItem(placement: .primaryAction) {
+                ToolbarItemGroup(placement: .primaryAction) {
                     LayoutToolbarItem(model: model, vaultSessionRegistry: sessionRegistry)
+                    FolderManagementToolbarButton(model: model)
                 }
             }
             .environment(sessionRegistry)
@@ -189,6 +190,9 @@ private struct MiranNotesMainWindowContent: View {
                 EditingHelpSheet {
                     editingHelpPresented = false
                 }
+            }
+            .sheet(isPresented: $model.isFolderManagementPresented) {
+                FolderManagementDashboardView(model: model)
             }
             .sheet(isPresented: $conflictDetailsPresented) {
                 NavigationStack {
@@ -578,8 +582,9 @@ private struct SecondaryVaultWindowRoot: View {
             }
         }
         .toolbar {
-            ToolbarItem(placement: .primaryAction) {
+            ToolbarItemGroup(placement: .primaryAction) {
                 LayoutToolbarItem(model: model, vaultSessionRegistry: vaultSessionRegistry)
+                FolderManagementToolbarButton(model: model)
             }
         }
         .task(id: payload) {
