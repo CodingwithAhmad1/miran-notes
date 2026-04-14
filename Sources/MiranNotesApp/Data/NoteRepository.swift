@@ -221,7 +221,7 @@ actor NoteRepository {
         let pathIndex = try await index.loadPathIndex()
         let folderByNote = Dictionary(uniqueKeysWithValues: pathIndex.entries.map { ($0.noteID, $0.folderID) })
 
-        let summaries = manifest.entries
+        return manifest.entries
             .sorted { $0.relativePath.lowercased() < $1.relativePath.lowercased() }
             .map { entry -> NoteSummary in
                 let displayTitle = entry.title ?? VaultPath.displayTitle(forRelativePath: entry.relativePath)
@@ -232,16 +232,6 @@ actor NoteRepository {
                     folderID: folderByNote[entry.noteID] ?? FolderCatalog.rootFolderID
                 )
             }
-        let titleBuckets = Dictionary(grouping: summaries, by: { $0.title.lowercased() })
-        return summaries.map { summary in
-            guard titleBuckets[summary.title.lowercased()]?.count ?? 0 > 1 else { return summary }
-            return NoteSummary(
-                noteID: summary.noteID,
-                title: VaultPath.disambiguatedListTitle(relativePath: summary.relativePath),
-                relativePath: summary.relativePath,
-                folderID: summary.folderID
-            )
-        }
     }
 
     func loadManifest() async throws -> VaultManifest {

@@ -33,6 +33,7 @@ struct FolderPageView: View {
                         ForEach(model.folderPageNoteSummaries) { summary in
                             NoteLinkRow(
                                 title: summary.title,
+                                pathTooltip: summary.relativePath,
                                 onTap: { model.openNote(noteID: summary.noteID) },
                                 onDelete: {
                                     model.deleteNoteFromFolder(noteID: summary.noteID)
@@ -75,7 +76,7 @@ struct FolderPageView: View {
                 ForEach(matches) { summary in
                     NoteLinkRow(
                         title: summary.title,
-                        subtitle: model.vaultSearchResultSubtitle(for: summary),
+                        pathTooltip: summary.relativePath,
                         onTap: { model.openNote(noteID: summary.noteID) },
                         onDelete: {
                             model.deleteNoteFromFolder(noteID: summary.noteID)

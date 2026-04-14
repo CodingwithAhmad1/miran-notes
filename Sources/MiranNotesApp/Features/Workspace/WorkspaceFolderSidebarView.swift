@@ -67,7 +67,13 @@ struct WorkspaceFolderSidebarView: View {
     }
 
     private var sidebarActionsFooter: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 6) {
+            Text("Miran Notes")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+
+            Spacer(minLength: 0)
+
             Button {
                 onClearToolbarSearchFocus()
                 model.createFolder()
@@ -76,8 +82,6 @@ struct WorkspaceFolderSidebarView: View {
             }
             .buttonStyle(.plain)
             .help("New Folder")
-
-            Spacer(minLength: 0)
 
             Button {
                 onClearToolbarSearchFocus()

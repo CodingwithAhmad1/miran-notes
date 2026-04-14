@@ -5,15 +5,14 @@ struct NoteEditorTitleHeader: View {
     @Bindable var model: AppModel
     var onRequestFocusNoteBody: () -> Void
 
+    @Environment(\.scenePhase) private var scenePhase
+
     @State private var titleDraft = ""
     @FocusState private var titleFocused: Bool
     /// Suppresses duplicate renames while `selectedBaseName` is still updating after submit.
     @State private var pendingDisplayedTitleUntilPathUpdates: String?
 
-    private var pathDisplayTitle: String {
-        guard let path = model.selectedBaseName else { return "" }
-        return VaultPath.displayTitle(forRelativePath: path)
-    }
+    private var canonicalTitle: String { model.selectedNoteHeaderTitle }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -46,14 +45,19 @@ struct NoteEditorTitleHeader: View {
                 commitTitle(moveCaretToBody: false)
             }
         }
+        .onChange(of: scenePhase) { _, phase in
+            if phase != .active, titleFocused {
+                commitTitle(moveCaretToBody: false)
+            }
+        }
     }
 
     private func syncDraftFromModel() {
-        titleDraft = pathDisplayTitle
+        titleDraft = canonicalTitle
     }
 
     private func commitTitle(moveCaretToBody: Bool) {
-        let current = pathDisplayTitle
+        let current = canonicalTitle
         let trimmed = titleDraft.trimmingCharacters(in: .whitespacesAndNewlines)
 
         if let pending = pendingDisplayedTitleUntilPathUpdates, pending == trimmed {

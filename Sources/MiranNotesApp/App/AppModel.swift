@@ -166,6 +166,15 @@ final class AppModel {
         return folderCatalog.folder(id: id)?.name ?? ""
     }
 
+    /// Title shown in the note header and aligned with list rows (manifest-backed when available).
+    var selectedNoteHeaderTitle: String {
+        if let id = selectedNoteID, let summary = noteSummaries.first(where: { $0.noteID == id }) {
+            return summary.title
+        }
+        guard let path = selectedBaseName else { return "" }
+        return VaultPath.displayTitle(forRelativePath: path)
+    }
+
     var folderPageNoteSummaries: [NoteSummary] {
         guard let id = selectedFolderID else { return [] }
         return noteSummaries.filter { $0.folderID == id }

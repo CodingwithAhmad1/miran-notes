@@ -96,7 +96,7 @@ final class VaultStructureTests: XCTestCase {
         XCTAssertNotEqual(summaries[0].relativePath, oldPath)
     }
 
-    func testListNotesDisambiguatesSameDisplayTitleInDifferentFolders() async throws {
+    func testListNotesKeepsSameDisplayTitleForNotesInDifferentFolders() async throws {
         let vault = try tempVaultURL()
         let repo = NoteRepository(vaultURL: vault)
         try await repo.ensureVault()
@@ -107,9 +107,9 @@ final class VaultStructureTests: XCTestCase {
         let summaries = try await repo.listNotes()
         XCTAssertEqual(summaries.count, 2)
         let titles = Set(summaries.map(\.title))
-        XCTAssertEqual(titles.count, 2, "Duplicate sidebar titles should be disambiguated with folder context")
-        XCTAssertTrue(titles.contains(where: { $0.contains("Root") }))
-        XCTAssertTrue(titles.contains(where: { $0.contains("Inbox") }))
+        XCTAssertEqual(titles.count, 1, "UI uses the same primary title; paths differ for disambiguation")
+        let paths = Set(summaries.map(\.relativePath))
+        XCTAssertEqual(paths.count, 2)
     }
 
     func testCreateFolderAllowsDuplicateDisplayNamesWithDistinctPaths() async throws {

@@ -26,14 +26,24 @@ private struct SidebarOutlineRows: View {
                     }
                 }
             case let .note(note, searchSnippet):
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(note.title)
-                    if let searchSnippet, !searchSnippet.isEmpty {
-                        Text(searchSnippet)
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(note.title)
+                        if let searchSnippet, !searchSnippet.isEmpty {
+                            Text(searchSnippet)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(2)
+                                .multilineTextAlignment(.leading)
+                        }
+                    }
+                    Spacer(minLength: 0)
+                    if !note.relativePath.isEmpty {
+                        Image(systemName: "info.circle")
                             .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(2)
-                            .multilineTextAlignment(.leading)
+                            .foregroundStyle(.tertiary)
+                            .accessibilityLabel("Note path")
+                            .help(note.relativePath)
                     }
                 }
                 .tag(Optional(note.noteID))

@@ -4,11 +4,13 @@ import SwiftUI
 struct NoteLinkRow: View {
     let title: String
     var subtitle: String? = nil
+    /// Shown in the system help tooltip (e.g. vault-relative path).
+    var pathTooltip: String? = nil
     let onTap: () -> Void
     var onDelete: (() -> Void)?
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline) {
+        HStack(alignment: .center) {
             Button(action: onTap) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title)
@@ -27,6 +29,14 @@ struct NoteLinkRow: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+
+            if let pathTooltip, !pathTooltip.isEmpty {
+                Image(systemName: "info.circle")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .accessibilityLabel("Note path")
+                    .help(pathTooltip)
+            }
 
             if let onDelete {
                 Button(role: .destructive, action: onDelete) {
