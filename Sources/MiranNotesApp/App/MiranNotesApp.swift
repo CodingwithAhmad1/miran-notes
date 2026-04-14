@@ -290,36 +290,26 @@ private struct MiranNotesMainWindowContent: View {
                 }
                 .toolbar {
                     ToolbarItem(placement: .navigation) {
-                        HStack(spacing: 8) {
-                            if model.isFolderManagementPresented {
-                                Button {
-                                    isToolbarSearchFocused = false
-                                    model.isFolderManagementPresented = false
-                                } label: {
-                                    Image(systemName: "chevron.left")
-                                }
-                                .buttonStyle(.borderless)
-                                .help("Back to vault")
-                                .accessibilityLabel("Back to vault")
-                            } else if model.selectedNoteID != nil {
-                                Button {
-                                    clearToolbarSearchFocus()
-                                    model.closeToFolderPage()
-                                } label: {
-                                    Image(systemName: "chevron.left")
-                                }
-                                .buttonStyle(.borderless)
-                                .help("Back to folder")
-                                .accessibilityLabel("Back to folder")
+                        if model.isFolderManagementPresented {
+                            Button {
+                                isToolbarSearchFocused = false
+                                model.isFolderManagementPresented = false
+                            } label: {
+                                Image(systemName: "chevron.left")
                             }
-                            let title = vaultWorkspaceToolbarTitle
-                            if !title.isEmpty {
-                                Text(title)
-                                    .font(.headline)
-                                    .lineLimit(1)
-                                    .truncationMode(.tail)
-                                    .frame(maxWidth: Self.toolbarTitleMaxWidth, alignment: .leading)
+                            .buttonStyle(.borderless)
+                            .help("Back to vault")
+                            .accessibilityLabel("Back to vault")
+                        } else if model.selectedNoteID != nil {
+                            Button {
+                                clearToolbarSearchFocus()
+                                model.closeToFolderPage()
+                            } label: {
+                                Image(systemName: "chevron.left")
                             }
+                            .buttonStyle(.borderless)
+                            .help("Back to folder")
+                            .accessibilityLabel("Back to folder")
                         }
                     }
                     ToolbarItem(placement: .principal) {
@@ -357,7 +347,6 @@ private struct MiranNotesMainWindowContent: View {
         }
     }
 
-    private static let toolbarTitleMaxWidth: CGFloat = 220
     private static let toolbarSearchFieldMinWidth: CGFloat = 400
     private static let toolbarSearchFieldIdealWidth: CGFloat = 500
     private static let toolbarSearchFieldMaxWidth: CGFloat = 600
@@ -381,26 +370,6 @@ private struct MiranNotesMainWindowContent: View {
                 idealWidth: Self.toolbarSearchFieldIdealWidth,
                 maxWidth: Self.toolbarSearchFieldMaxWidth
             )
-    }
-
-    private var vaultWorkspaceToolbarTitle: String {
-        if model.isFolderManagementPresented {
-            return "Folder Management"
-        }
-        if model.selectedNoteID != nil {
-            if let path = model.selectedBaseName, !path.isEmpty {
-                return VaultPath.displayTitle(forRelativePath: path)
-            }
-            if let id = model.selectedNoteID,
-               let summary = model.noteSummaries.first(where: { $0.noteID == id }) {
-                return summary.title
-            }
-            return ""
-        }
-        if model.selectedFolderID != nil {
-            return model.selectedFolderDisplayTitle
-        }
-        return ""
     }
 
     private var workspaceSearchBinding: Binding<String> {
