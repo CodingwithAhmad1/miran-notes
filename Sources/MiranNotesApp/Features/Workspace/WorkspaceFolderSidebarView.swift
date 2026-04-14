@@ -79,12 +79,11 @@ struct WorkspaceFolderSidebarView: View {
     @ViewBuilder
     private func sidebarFooterChrome(width: CGFloat, footerHeight: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            Divider()
+            Spacer(minLength: 0)
             sidebarActionsFooter
             workspaceLocationFooter
         }
-        .frame(width: width, height: footerHeight, alignment: .topLeading)
-        .background(.regularMaterial)
+        .frame(width: width, height: footerHeight, alignment: .bottomLeading)
     }
 
     private var sidebarActionsFooter: some View {
@@ -121,7 +120,7 @@ struct WorkspaceFolderSidebarView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 10)
         .padding(.top, 8)
-        .padding(.bottom, 4)
+        .padding(.bottom, 2)
     }
 
     private var workspaceLocationFooter: some View {
@@ -138,7 +137,8 @@ struct WorkspaceFolderSidebarView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 10)
-        .padding(.vertical, 6)
+        .padding(.top, 2)
+        .padding(.bottom, 6)
     }
 
     /// Middle ellipsis when the path is long; keeps start and end visible for Finder-style paths.
@@ -160,7 +160,7 @@ struct WorkspaceFolderSidebarView: View {
 
     /// Non-scrolling footer band; grows slightly on narrow sidebars if the path may wrap.
     private static func footerChromeHeight(forSidebarWidth width: CGFloat) -> CGFloat {
-        let base: CGFloat = 108
+        let base: CGFloat = 96
         guard width.isFinite, width > 0, width < 210 else { return base }
         return base + 18
     }
