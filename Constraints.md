@@ -138,7 +138,7 @@ The app uses **document-level undo** via the window `UndoManager`: each user edi
 
 **Command interceptor lifecycle:** `AppModel.registerCommandInterceptor` returns a `UUID` token. Callers deregister via `removeCommandInterceptor(_:)` to prevent unbounded interceptor accumulation across note navigation.
 
-**Batch size guard:** `AppModel.apply(_:recordUndo:)` asserts at `assertionFailure` level and logs an error (category `EditEngine`) when a command batch exceeds `maxBatch` before truncation, making runaway batch growth visible during development.
+**Batch size guard:** `AppModel.apply(_:recordUndo:)` enforces `CommandPipelineContract.maxCommandsPerBatch` by taking only the command prefix, logging an error (category `EditEngine`), and showing a dismissible **`RepairAdvisory`** when the batch was truncated—unless a repair banner is already visible, so load-time advisories are not replaced. Truncation is the safe Release behavior (no oversized engine work).
 
 **Backlink refresh debounce:** `AppModel` debounces backlink refreshes by **1 500 ms** via a cancellable `Task`. **`VaultIndexActor`** keeps in-memory caches for `LinkGraph` and the other `.miran/` indexes after load and refreshes them after successful commits; `NoteRepository.invalidateIndexCaches()` clears those caches (e.g. after startup recovery, manifest reconciliation that changed entries, or vault filesystem watch events). This avoids re-reading every index JSON on each autosave while keeping external edits coherent.
 

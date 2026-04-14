@@ -79,6 +79,11 @@ struct WorkspaceNoteFileMetadata: Hashable, Sendable {
     var fsModifiedAt: Date?
 }
 
+/// Structural gate for the vault root before the main shell loads.
+///
+/// Implements the **flat topic-folder** layout: top-level directories (except `.miran` / `_aux`) are topic folders; each topic folder’s **immediate** children must be note files or ignored noise—**not** nested directories or symbolic links. This aligns with ``NoteRepository/createFolder``, which only adds folders under the catalog root. Canonical multi-segment note paths and indexes follow ADR 0003 (`docs/adr/0003-folders-paths-and-manifest-v2.md`).
+///
+/// **Symlinks:** Reported as ``IssueCode/symlinkNotAllowed`` at scanned levels. The scanner does not walk every manifest path to re-validate symlinks on each segment.
 enum WorkspaceCompatibilityScanner {
     private static let resourceKeys: Set<URLResourceKey> = [
         .isRegularFileKey,

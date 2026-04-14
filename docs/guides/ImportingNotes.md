@@ -1,5 +1,7 @@
 # Importing notes into a Miran workspace
 
+**See also:** [VaultSafety.md](VaultSafety.md) — sync folders, backups, and external changes.
+
 ## Layout
 
 - Notes are `.txt` files. Each note has a sibling `.meta.json` sidecar that stores stable `noteID`, block structure, and links.

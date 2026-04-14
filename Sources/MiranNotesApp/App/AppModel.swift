@@ -211,7 +211,7 @@ final class AppModel {
             return sum + mat.estimatedUndoMemoryBytes + cmdOverhead
         }
     }
-    private let commandPipelineContract = CommandPipelineContract()
+    private let commandPipelineContract: CommandPipelineContract
     /// Public registration API for typed extensions; runs before ``localCommandInterceptors`` (see `ExtensionRegistry` docs).
     let extensionRegistry = ExtensionRegistry()
     private var localCommandInterceptors: [UUID: ([EditCommand], NoteDocument, CommandContext) -> [EditCommand]] = [:]
@@ -231,7 +231,8 @@ final class AppModel {
         undoPolicy: UndoPolicy = .defaultPolicy,
         largeVaultLinkGraphSyncThreshold: Int = 2_000,
         startupLinkGraphSyncBudgetMs: Double = 120,
-        startupLinkGraphSyncHistoryWeight: Double = 0.3
+        startupLinkGraphSyncHistoryWeight: Double = 0.3,
+        commandPipelineContract: CommandPipelineContract = CommandPipelineContract()
     ) {
         self.repository = repository
         self.autosaveDebounceMilliseconds = autosaveDebounceMilliseconds
@@ -239,6 +240,7 @@ final class AppModel {
         self.largeVaultLinkGraphSyncThreshold = largeVaultLinkGraphSyncThreshold
         self.startupLinkGraphSyncBudgetMs = startupLinkGraphSyncBudgetMs
         self.startupLinkGraphSyncHistoryWeight = startupLinkGraphSyncHistoryWeight
+        self.commandPipelineContract = commandPipelineContract
     }
 
     func setUndoManager(_ manager: UndoManager?) {
@@ -985,8 +987,10 @@ final class AppModel {
         guard var doc = activeDocument else { return activeDocument ?? NoteDocument(text: "", metadata: .empty) }
         let maxBatch = commandPipelineContract.maxCommandsPerBatch
         if commands.count > maxBatch {
-            assertionFailure("Command batch of \(commands.count) exceeds contract limit \(maxBatch); tail silently dropped")
             Logger.editEngine.error("Command batch truncated from \(commands.count, privacy: .public) to \(maxBatch, privacy: .public)")
+            if repairAdvisory == nil {
+                repairAdvisory = RepairAdvisory.commandBatchTruncated(originalCount: commands.count, appliedCap: maxBatch)
+            }
         }
         let sanitized = Array(commands.prefix(maxBatch))
         let context = CommandContext(trigger: "appModel.apply", selectionRange: editorTextSelection)

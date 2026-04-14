@@ -229,7 +229,7 @@ Treat the items below as **out of scope for the current product phase** unless a
 
 **Structural validation:** `NoteIntegrity.check` validates block coverage, ordering, and bounds for spans and links (`Sources/MiranNotesCore/NoteIntegrity.swift`).
 
-**Bounds:** Editor enforces a **1 MB UTF-16** size limit with user-visible feedback (`SingleSurfaceNoteEditor`, README). Command batches have contract limits; violations are handled with assertions in development paths—review **Release** behavior for graceful degradation.
+**Bounds:** Editor enforces a **1 MB UTF-16** size limit with user-visible feedback (`SingleSurfaceNoteEditor`, README). Command batches are capped per `CommandPipelineContract`; overflow is truncated with logging and a dismissible `RepairAdvisory` when no other repair banner is showing (`AppModel.apply`).
 
 **Gaps:** Sync folders (Dropbox, iCloud), symlinks, and permission errors can produce **surprising conflicts** or partial writes outside the app’s control; **sandboxing** and encryption-at-rest are not described as core guarantees in the brief.
 
@@ -259,6 +259,13 @@ Treat the items below as **out of scope for the current product phase** unless a
 - **Expected impact:** Path to Mac App Store or notarized distribution without architectural surprise.
 - **Constraints / dependencies:** Major UX change (security-scoped bookmarks); treat as a **project**, not a quick fix.
 
+#### Completed (§6 — 2026-04-14)
+
+- **P1:** [VaultSafety.md](../guides/VaultSafety.md) — sync-folder expectations, backup guidance, pointer to external-edit conflict UX; linked from [ImportingNotes.md](../guides/ImportingNotes.md) and [docs/README.md](../README.md).
+- **P2:** [vault-data-layer.md](../architecture/vault-data-layer.md) — “Path containment and symlinks”; file documentation on [`WorkspaceCompatibilityScanner`](../../Sources/MiranNotesApp/Data/WorkspaceCompatibility.swift) / [`WorkspaceCompatibilityPolicy`](../../Sources/MiranNotesApp/Data/WorkspaceCompatibilityPolicy.swift).
+- **P3:** `AppModel.apply` batch truncation — `RepairAdvisory.commandBatchTruncated`, optional `commandPipelineContract` on `AppModel` init; [Constraints.md](../../Constraints.md) batch guard; [`AppModelCommandBatchLimitTests`](../../Tests/MiranNotesAppTests/AppModelCommandBatchLimitTests.swift).
+- **P4 (assessment):** [app-sandbox-readiness.md](../guides/app-sandbox-readiness.md) — bookmarks, entitlements, UX and testing considerations; **no** sandbox code in this pass.
+
 ---
 
 ## Revision history
@@ -273,3 +280,4 @@ Treat the items below as **out of scope for the current product phase** unless a
 | 2026-04-14 | §4 Usability P1–P3 shipped: vault path onboarding + sidebar footer, Editing help sheet, `userAlert` with retry for body search index (see Completed under §4). |
 | 2026-04-14 | §4 follow-up: all `AppModel` error alerts use `UserAlertRecoveryKind` with context-specific Retry (manifest, link graph, backlinks, autosave, watcher, etc.; see Completed §4 P3). |
 | 2026-04-14 | §5 Performance P1–P3 shipped: full-stack perf doc checklist, CI vs local statistical thresholds, body-search indexing UI + `isBodySearchIndexBuilding` (see Completed under §5). |
+| 2026-04-14 | §6 Security P1–P4 shipped: VaultSafety doc; path/symlink audit; batch-limit `RepairAdvisory` + tests; App Sandbox readiness assessment doc (see Completed under §6). |

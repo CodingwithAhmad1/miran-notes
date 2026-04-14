@@ -1,7 +1,10 @@
 import Foundation
 
 /// Deterministic rules for whether a directory tree is a valid Miran **flat workspace**
-/// (workspace → top-level folders → `.txt` notes). See ``WorkspaceCompatibilityScanner``.
+/// (vault root → top-level topic folders → `.txt` notes only inside each folder).
+///
+/// Symlinks and nested directories inside topic folders fail the scan; see ``WorkspaceCompatibilityScanner``.
+/// For manifest-relative paths and indexes, see `docs/adr/0003-folders-paths-and-manifest-v2.md`.
 enum WorkspaceCompatibilityPolicy {
     /// App-internal directories at the vault root (not shown as folder pages).
     static let appRootDirectoryNames: Set<String> = [".miran", "_aux"]

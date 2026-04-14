@@ -22,6 +22,8 @@ The [root README](../README.md) summarizes build commands, module layout, and fe
 | [CHANGELOG.md](CHANGELOG.md) | Documentation milestones (1.0 baseline, 1.1 workspace compatibility — not app bundle versions) |
 | **Guides** | |
 | [guides/ImportingNotes.md](guides/ImportingNotes.md) | Importing `.txt` into a workspace: identity rules, bulk import, drift checks |
+| [guides/VaultSafety.md](guides/VaultSafety.md) | Sync folders, backups, and expectations when the vault lives in cloud sync |
+| [guides/app-sandbox-readiness.md](guides/app-sandbox-readiness.md) | Assessment: what App Sandbox would imply (bookmarks, UX, testing); no implementation in this phase |
 | **Architecture** | |
 | [architecture/architectural-refinements.md](architecture/architectural-refinements.md) | Editor sync, extension wiring, vault index notes, undo / external-edit context |
 | [architecture/extension-registry-and-interceptors.md](architecture/extension-registry-and-interceptors.md) | `ExtensionRegistry` vs closure interceptors and apply order |

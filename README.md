@@ -50,7 +50,7 @@ A simple, minimalistic, Mac-native knowledge storer. Local-first, plain-text sto
 - [~] Miran Planning: dashboard, calendar, task/session databases — **deactivated** during pivot.
 - [~] Zora vault migration engine and CSV export — **deactivated** during pivot.
 - [~] `/task` and `/session` slash commands — **deactivated** during pivot.  
-- [x] Project builds; `swift test` passes (204 tests).
+- [x] Project builds; `swift test` passes (255 tests).
 
 ## Run
 

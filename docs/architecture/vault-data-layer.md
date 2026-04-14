@@ -31,6 +31,12 @@ This note summarizes how on-disk vault state, the repository, and `AppModel` fit
 - Backlinks use `repository.loadLinkGraph()`; the graph is served from **`VaultIndexActor`** cache after the first load in a session, not a separate `AppModel` field.
 - When reconciling external changes, if a full load is required, the model performs **two consecutive** `noteTextFileSHA256` reads; a mismatch logs `VaultTelemetry.logToctouTextHashDrift()` and still proceeds to `loadNote`, which remains the authority for semantic comparison to the buffer.
 
+## Path containment and symlinks
+
+- **User-chosen root:** All vault I/O is rooted at the directory the user opens. `NoteRepository` and `VaultPath` build URLs from that root plus manifest-relative paths (see [ADR 0003](../adr/0003-folders-paths-and-manifest-v2.md) for canonical `relativePath` rules).
+- **Workspace gate:** On vault load and on vault watch refresh, `WorkspaceCompatibilityScanner` (`Sources/MiranNotesApp/Data/WorkspaceCompatibility.swift`) performs a **structural** scan of the vault root. It **rejects symbolic links** at the root and inside each top-level topic folder, and it **rejects nested directories** inside those topic folders (flat topic layout). That keeps the gate aligned with how the app creates folders today (`NoteRepository.createFolder` only adds children of the catalog root). Paths that appear only after reconcile (e.g. from external tools) still flow through normal file APIs; the app does not treat symlink targets as a separate security boundary.
+- **Environmental risk:** If the vault lives in a cloud-sync folder or contains items created outside Miran, containment is ultimately **filesystem + user process** behavior. Prefer normal directories for vault data; see [VaultSafety.md](../guides/VaultSafety.md).
+
 ## Telemetry
 
 - Vault-scoped logging uses `Logger` (`Vault` category) and `VaultTelemetry` helpers for conflicts, autosave latency, manifest reconcile, repair warnings, and TOCTOU drift.

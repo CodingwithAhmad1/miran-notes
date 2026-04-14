@@ -14,6 +14,8 @@ enum RepairAdvisoryKind: String, Equatable, Sendable {
     case vaultRecoveryCompleted
     /// Post-save or post-rebuild consistency check found index / manifest drift.
     case vaultDataConsistency
+    /// A single `apply` batch exceeded ``CommandPipelineContract/maxCommandsPerBatch``; the tail was dropped.
+    case commandBatchTruncated
 }
 
 struct RepairAdvisory: Equatable, Sendable {
@@ -61,6 +63,18 @@ struct RepairAdvisory: Equatable, Sendable {
 
     static let sizeLimitDetails =
         "This note has a maximum size. Extra text was not added."
+
+    /// User-visible notice when an edit batch is truncated to the pipeline limit (Release-safe; complements `Logger.editEngine`).
+    static func commandBatchTruncated(originalCount: Int, appliedCap: Int) -> RepairAdvisory {
+        let dropped = max(0, originalCount - appliedCap)
+        return RepairAdvisory(
+            kind: .commandBatchTruncated,
+            title: "Part of this edit couldn’t be applied",
+            explanation:
+                "One step tried to make \(originalCount) separate changes. Only the first \(appliedCap) could be applied safely; \(dropped) were skipped. What you see reflects the applied part.",
+            detailsPlainText: nil
+        )
+    }
 }
 
 // MARK: - External edit conflict (alert copy)
