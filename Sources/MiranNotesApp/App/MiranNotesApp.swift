@@ -150,6 +150,14 @@ struct MiranNotesApp: App {
 
 // MARK: - Main window (vault open)
 
+private struct DetailColumnWidthPreferenceKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
 private struct MiranNotesMainWindowContent: View {
     @Bindable var model: AppModel
     @Environment(VaultSessionRegistry.self) private var vaultSessionRegistry
@@ -160,6 +168,9 @@ private struct MiranNotesMainWindowContent: View {
     @Binding var conflictDetailsDiskDate: Date?
     @Binding var editingHelpPresented: Bool
     @FocusState private var isToolbarSearchFocused: Bool
+    /// Width of the split view’s detail column (where the unified toolbar lays out). Drives compact search sizing
+    /// so AppKit never inserts the toolbar overflow chevron.
+    @State private var measuredDetailColumnWidth: CGFloat = 0
 
     private func clearToolbarSearchFocus() {
         isToolbarSearchFocused = false
@@ -295,12 +306,19 @@ private struct MiranNotesMainWindowContent: View {
     /// overflow chevron would absorb them on narrow windows.
     @ViewBuilder
     private func readyWorkspaceShell(windowContentWidth: CGFloat) -> some View {
+        let toolbarLayoutWidth = Self.effectiveToolbarLayoutWidth(
+            detail: measuredDetailColumnWidth,
+            window: windowContentWidth
+        )
+        let showsBackNavigation =
+            model.isFolderManagementPresented || model.selectedNoteID != nil
         NavigationSplitView {
             WorkspaceFolderSidebarView(model: model, onClearToolbarSearchFocus: clearToolbarSearchFocus)
                 .toolbar(removing: .sidebarToggle)
         } detail: {
             WorkspaceDetailColumnView(model: model, onClearToolbarSearchFocus: clearToolbarSearchFocus)
         }
+        .onPreferenceChange(DetailColumnWidthPreferenceKey.self) { measuredDetailColumnWidth = $0 }
         .toolbar {
             ToolbarItem(placement: .navigation) {
                 HStack(spacing: 8) {
@@ -346,12 +364,15 @@ private struct MiranNotesMainWindowContent: View {
             ToolbarItem(placement: .principal) {
                 HStack {
                     Spacer(minLength: 0)
-                    vaultToolbarSearchField
+                    vaultToolbarSearchField(
+                        toolbarLayoutWidth: toolbarLayoutWidth,
+                        showsBackNavigation: showsBackNavigation
+                    )
                     Spacer(minLength: 0)
                 }
                 .frame(maxWidth: .infinity)
             }
-            if !Self.shouldHideTrailingToolbarControls(width: windowContentWidth) {
+            if !Self.shouldHideTrailingToolbarControls(width: toolbarLayoutWidth) {
                 ToolbarItemGroup(placement: .primaryAction) {
                     LayoutToolbarItem(
                         model: model,
@@ -364,8 +385,14 @@ private struct MiranNotesMainWindowContent: View {
         }
     }
 
-    /// Hide layout + folder-management toolbar items when the window is too narrow for the principal search
-    /// field’s minimum width plus leading navigation and trailing controls, so AppKit does not move them
+    /// Prefer the measured detail column width (toolbar row); fall back to full window width before first layout.
+    private static func effectiveToolbarLayoutWidth(detail: CGFloat, window: CGFloat) -> CGFloat {
+        if detail.isFinite, detail > 1 { return detail }
+        return window
+    }
+
+    /// Hide layout + folder-management toolbar items when the detail column is too narrow for the principal search
+    /// field’s usual minimum width plus leading navigation and trailing controls, so AppKit does not move items
     /// into the overflow menu.
     private static func shouldHideTrailingToolbarControls(width: CGFloat) -> Bool {
         guard width.isFinite, width > 1 else { return true }
@@ -375,14 +402,38 @@ private struct MiranNotesMainWindowContent: View {
     /// Space reserved for back/navigation column, trailing icon buttons, and unified-toolbar insets.
     private static let toolbarChromeReserveForTrailingItems: CGFloat = 300
 
+    /// Horizontal space reserved in the detail toolbar for the back control and unified bar insets when sizing search.
+    private static let toolbarSearchLeadingChromeWhenBackVisible: CGFloat = 120
+    private static let toolbarSearchLeadingChromeWhenNoBack: CGFloat = 56
+
     private static let toolbarSearchFieldMinWidth: CGFloat = 400
     private static let toolbarSearchFieldIdealWidth: CGFloat = 500
     private static let toolbarSearchFieldMaxWidth: CGFloat = 600
 
+    private static func toolbarSearchFieldFrameWidths(
+        toolbarLayoutWidth: CGFloat,
+        showsBackNavigation: Bool
+    ) -> (min: CGFloat, ideal: CGFloat, max: CGFloat) {
+        let chrome =
+            showsBackNavigation ? toolbarSearchLeadingChromeWhenBackVisible : toolbarSearchLeadingChromeWhenNoBack
+        let budget = max(96, toolbarLayoutWidth - chrome)
+        let minW = min(toolbarSearchFieldMinWidth, budget)
+        let idealW = min(toolbarSearchFieldIdealWidth, max(minW, budget))
+        let maxW = min(toolbarSearchFieldMaxWidth, max(idealW, budget))
+        return (minW, idealW, maxW)
+    }
+
     @ViewBuilder
-    private var vaultToolbarSearchField: some View {
+    private func vaultToolbarSearchField(
+        toolbarLayoutWidth: CGFloat,
+        showsBackNavigation: Bool
+    ) -> some View {
         let showsSearchRing = isToolbarSearchFocused && controlActiveState == .active
         let outlineOpacity = showsSearchRing ? 0.42 : 0.18
+        let frames = Self.toolbarSearchFieldFrameWidths(
+            toolbarLayoutWidth: toolbarLayoutWidth,
+            showsBackNavigation: showsBackNavigation
+        )
         TextField("", text: workspaceSearchBinding, prompt: workspaceSearchPrompt)
             .textFieldStyle(.plain)
             .focused($isToolbarSearchFocused)
@@ -393,11 +444,7 @@ private struct MiranNotesMainWindowContent: View {
                 Capsule().strokeBorder(Color.primary.opacity(outlineOpacity), lineWidth: 1)
             )
             .focusEffectDisabled()
-            .frame(
-                minWidth: Self.toolbarSearchFieldMinWidth,
-                idealWidth: Self.toolbarSearchFieldIdealWidth,
-                maxWidth: Self.toolbarSearchFieldMaxWidth
-            )
+            .frame(minWidth: frames.min, idealWidth: frames.ideal, maxWidth: frames.max)
     }
 
     private var workspaceSearchBinding: Binding<String> {
@@ -462,6 +509,11 @@ private struct WorkspaceDetailColumnView: View {
                 onClearToolbarSearchFocus()
             }
         )
+        .background {
+            GeometryReader { geo in
+                Color.clear.preference(key: DetailColumnWidthPreferenceKey.self, value: geo.size.width)
+            }
+        }
     }
 }
 
