@@ -78,12 +78,6 @@ struct MiranNotesApp: App {
                         }
                 }
             }
-            .toolbar {
-                ToolbarItemGroup(placement: .primaryAction) {
-                    LayoutToolbarItem(model: model, vaultSessionRegistry: sessionRegistry)
-                    FolderManagementToolbarButton(model: model)
-                }
-            }
             .environment(sessionRegistry)
         }
         .commands { appCommands }
@@ -273,25 +267,88 @@ private struct MiranNotesMainWindowContent: View {
             case .ready:
                 NavigationSplitView {
                     WorkspaceFolderSidebarView(model: model)
+                        .toolbar(removing: .sidebarToggle)
                 } detail: {
                     WorkspaceDetailColumnView(model: model)
+                }
+                .toolbar {
+                    ToolbarItem(placement: .navigation) {
+                        HStack(spacing: 8) {
+                            if model.selectedNoteID != nil {
+                                Button {
+                                    model.closeToFolderPage()
+                                } label: {
+                                    Image(systemName: "chevron.left")
+                                }
+                                .buttonStyle(.borderless)
+                                .help("Back to folder")
+                                .accessibilityLabel("Back to folder")
+                            }
+                            let title = vaultWorkspaceToolbarTitle
+                            if !title.isEmpty {
+                                Text(title)
+                                    .font(.headline)
+                                    .lineLimit(1)
+                                    .truncationMode(.tail)
+                                    .frame(maxWidth: Self.toolbarTitleMaxWidth, alignment: .leading)
+                            }
+                        }
+                    }
+                    ToolbarItem(placement: .principal) {
+                        HStack {
+                            Spacer(minLength: 0)
+                            TextField(
+                                "",
+                                text: workspaceSearchBinding,
+                                prompt: workspaceSearchPrompt
+                            )
+                            .textFieldStyle(.roundedBorder)
+                            .frame(maxWidth: Self.toolbarSearchFieldMaxWidth)
+                            Spacer(minLength: 0)
+                        }
+                        .frame(maxWidth: .infinity)
+                    }
+                    ToolbarItemGroup(placement: .primaryAction) {
+                        LayoutToolbarItem(model: model, vaultSessionRegistry: vaultSessionRegistry)
+                        Button {
+                            model.createNote()
+                        } label: {
+                            Label("New Note", systemImage: "plus")
+                        }
+                        .disabled(!model.allowsToolbarNewNote)
+                        .help(
+                            model.allowsToolbarNewNote
+                                ? "Create a new note in the selected folder"
+                                : "Select a folder (not Vault) to create a note"
+                        )
+                        FolderManagementToolbarButton(model: model)
+                    }
                 }
             }
         }
     }
-}
 
-// MARK: - Workspace detail (folder list vs note editor)
+    private static let toolbarTitleMaxWidth: CGFloat = 220
+    private static let toolbarSearchFieldMaxWidth: CGFloat = 320
 
-private struct WorkspaceDetailColumnView: View {
-    @Bindable var model: AppModel
-
-    private var showsLoadedEditor: Bool {
-        guard let doc = model.activeDocument, let id = model.selectedNoteID else { return false }
-        return doc.metadata.noteID == id
+    private var vaultWorkspaceToolbarTitle: String {
+        if model.selectedNoteID != nil {
+            if let path = model.selectedBaseName, !path.isEmpty {
+                return VaultPath.displayTitle(forRelativePath: path)
+            }
+            if let id = model.selectedNoteID,
+               let summary = model.noteSummaries.first(where: { $0.noteID == id }) {
+                return summary.title
+            }
+            return ""
+        }
+        if model.selectedFolderID != nil {
+            return model.selectedFolderDisplayTitle
+        }
+        return ""
     }
 
-    private var detailSearchBinding: Binding<String> {
+    private var workspaceSearchBinding: Binding<String> {
         Binding(
             get: {
                 model.selectedNoteID != nil ? model.editorFindQuery : model.vaultSearchQuery
@@ -306,8 +363,19 @@ private struct WorkspaceDetailColumnView: View {
         )
     }
 
-    private var detailSearchPrompt: Text {
+    private var workspaceSearchPrompt: Text {
         model.selectedNoteID != nil ? Text("Find in note…") : Text("Search vault…")
+    }
+}
+
+// MARK: - Workspace detail (folder list vs note editor)
+
+private struct WorkspaceDetailColumnView: View {
+    @Bindable var model: AppModel
+
+    private var showsLoadedEditor: Bool {
+        guard let doc = model.activeDocument, let id = model.selectedNoteID else { return false }
+        return doc.metadata.noteID == id
     }
 
     var body: some View {
@@ -325,21 +393,6 @@ private struct WorkspaceDetailColumnView: View {
                 FolderPageView(model: model)
             }
         }
-        .searchable(text: detailSearchBinding, prompt: detailSearchPrompt)
-        .toolbar {
-            if model.selectedNoteID != nil {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button {
-                        model.closeToFolderPage()
-                    } label: {
-                        Image(systemName: "chevron.left")
-                    }
-                    .buttonStyle(.borderless)
-                    .help("Back to folder")
-                    .accessibilityLabel("Back to folder")
-                }
-            }
-        }
     }
 }
 
@@ -349,11 +402,6 @@ struct EditorRootView: View {
     @Environment(\.undoManager) private var undoManager
     @State private var repairDetailsPresented = false
     @State private var editorBodyFocusNonce = 0
-
-    private var noteNavigationTitle: String {
-        guard let path = model.selectedBaseName else { return "Note" }
-        return VaultPath.displayTitle(forRelativePath: path)
-    }
 
     var body: some View {
         Group {
@@ -405,7 +453,7 @@ struct EditorRootView: View {
                         focusBodyNonce: editorBodyFocusNonce
                     )
                 }
-                .navigationTitle(noteNavigationTitle)
+                .navigationTitle("")
             }
         }
         .onAppear {
