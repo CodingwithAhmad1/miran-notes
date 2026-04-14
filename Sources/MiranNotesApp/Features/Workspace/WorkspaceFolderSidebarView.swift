@@ -1,4 +1,3 @@
-import AppKit
 import SwiftUI
 
 struct WorkspaceFolderSidebarView: View {
@@ -8,42 +7,36 @@ struct WorkspaceFolderSidebarView: View {
     @State private var renameFieldText = ""
 
     var body: some View {
-        // Sidebar `List` is backed by AppKit `NSTableView` inside an `NSScrollView`. In sparse lists,
-        // that scroll view can paint (and hit-test) through the SwiftUI stack until something forces
-        // a relayout (e.g. toggling Folder Management / the unified toolbar). Pinning `masksToBounds`
-        // on the enclosing scroll view keeps the table from swallowing the footer below this list.
-        VStack(spacing: 0) {
-            List(selection: folderSelection) {
-                Label(model.sidebarNotesTrayTitle, systemImage: "tray.full")
-                    .tag(Optional(model.sidebarNotesTrayFolderID))
-                ForEach(model.visibleTopLevelFolderEntries, id: \.id) { folder in
-                    Text(folder.name)
-                        .tag(Optional(folder.id))
-                        .contextMenu {
-                            Button("Rename…") {
-                                renamingFolder = folder
-                                renameFieldText = folder.name
-                            }
-                            Button("Delete Folder", role: .destructive) {
-                                model.deleteFolder(id: folder.id)
-                            }
-                        }
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .overlay {
-                ListEnclosingScrollViewClip()
-                    .allowsHitTesting(false)
-            }
+        GeometryReader { geometry in
+            let heights = Self.partitionListAndFooterHeights(
+                totalHeight: geometry.size.height,
+                sidebarWidth: geometry.size.width
+            )
 
             VStack(spacing: 0) {
-                Divider()
-                sidebarActionsFooter
-                workspaceLocationFooter
+                List(selection: folderSelection) {
+                    Label(model.sidebarNotesTrayTitle, systemImage: "tray.full")
+                        .tag(Optional(model.sidebarNotesTrayFolderID))
+                    ForEach(model.visibleTopLevelFolderEntries, id: \.id) { folder in
+                        Text(folder.name)
+                            .tag(Optional(folder.id))
+                            .contextMenu {
+                                Button("Rename…") {
+                                    renamingFolder = folder
+                                    renameFieldText = folder.name
+                                }
+                                Button("Delete Folder", role: .destructive) {
+                                    model.deleteFolder(id: folder.id)
+                                }
+                            }
+                    }
+                }
+                .frame(width: geometry.size.width, height: heights.list, alignment: .top)
+                .clipped()
+
+                sidebarFooterChrome(width: geometry.size.width, footerHeight: heights.footer)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .fixedSize(horizontal: false, vertical: true)
-            .background(.regularMaterial)
+            .frame(width: geometry.size.width, height: geometry.size.height, alignment: .top)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .simultaneousGesture(
@@ -81,6 +74,17 @@ struct WorkspaceFolderSidebarView: View {
             get: { renamingFolder != nil },
             set: { if !$0 { renamingFolder = nil } }
         )
+    }
+
+    @ViewBuilder
+    private func sidebarFooterChrome(width: CGFloat, footerHeight: CGFloat) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Divider()
+            sidebarActionsFooter
+            workspaceLocationFooter
+        }
+        .frame(width: width, height: footerHeight, alignment: .topLeading)
+        .background(.regularMaterial)
     }
 
     private var sidebarActionsFooter: some View {
@@ -153,60 +157,34 @@ struct WorkspaceFolderSidebarView: View {
         }
         return String(path[s..<headEnd]) + "…" + String(path[tailStart..<e])
     }
-}
 
-// MARK: - AppKit clip fix (SwiftUI List / NSTableView)
-
-private final class ListClipAnchorView: NSView {
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        MainActor.assumeIsolated {
-            ListScrollViewClip.applyEnclosingScrollViewClipping(anchor: self)
-        }
+    /// Non-scrolling footer band; grows slightly on narrow sidebars if the path may wrap.
+    private static func footerChromeHeight(forSidebarWidth width: CGFloat) -> CGFloat {
+        let base: CGFloat = 108
+        guard width.isFinite, width > 0, width < 210 else { return base }
+        return base + 18
     }
 
-    override func viewDidMoveToSuperview() {
-        super.viewDidMoveToSuperview()
-        MainActor.assumeIsolated {
-            ListScrollViewClip.applyEnclosingScrollViewClipping(anchor: self)
-        }
-    }
+    private static let minListHeight: CGFloat = 72
 
-    override func layout() {
-        super.layout()
-        MainActor.assumeIsolated {
-            ListScrollViewClip.applyEnclosingScrollViewClipping(anchor: self)
+    private static func partitionListAndFooterHeights(totalHeight: CGFloat, sidebarWidth: CGFloat)
+        -> (list: CGFloat, footer: CGFloat)
+    {
+        let desiredFooter = footerChromeHeight(forSidebarWidth: sidebarWidth)
+        let listMin = minListHeight
+        let footerMin: CGFloat = 56
+        guard totalHeight.isFinite, totalHeight > 1 else {
+            return (listMin, desiredFooter)
         }
-    }
-}
-
-@MainActor
-private enum ListScrollViewClip {
-    static func applyEnclosingScrollViewClipping(anchor: NSView) {
-        var current: NSView? = anchor
-        while let view = current {
-            if let scroll = view as? NSScrollView {
-                scroll.clipsToBounds = true
-                scroll.wantsLayer = true
-                scroll.layer?.masksToBounds = true
-                let clipView = scroll.contentView
-                clipView.wantsLayer = true
-                clipView.layer?.masksToBounds = true
-                return
-            }
-            current = view.superview
+        if totalHeight >= desiredFooter + listMin {
+            let footer = desiredFooter
+            return (totalHeight - footer, footer)
         }
-    }
-}
-
-private struct ListEnclosingScrollViewClip: NSViewRepresentable {
-    func makeNSView(context: Context) -> ListClipAnchorView {
-        ListClipAnchorView()
-    }
-
-    func updateNSView(_ nsView: ListClipAnchorView, context: Context) {
-        Task { @MainActor in
-            ListScrollViewClip.applyEnclosingScrollViewClipping(anchor: nsView)
+        if totalHeight >= listMin + footerMin {
+            let list = listMin
+            return (list, totalHeight - list)
         }
+        let footer = min(footerMin, totalHeight)
+        return (max(0, totalHeight - footer), footer)
     }
 }
