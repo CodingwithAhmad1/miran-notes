@@ -7,33 +7,40 @@ struct WorkspaceFolderSidebarView: View {
     @State private var renameFieldText = ""
 
     var body: some View {
-        ZStack(alignment: .bottom) {
-            List(selection: folderSelection) {
-                Label(model.sidebarNotesTrayTitle, systemImage: "tray.full")
-                    .tag(Optional(model.sidebarNotesTrayFolderID))
-                ForEach(model.visibleTopLevelFolderEntries, id: \.id) { folder in
-                    Text(folder.name)
-                        .tag(Optional(folder.id))
-                        .contextMenu {
-                            Button("Rename…") {
-                                renamingFolder = folder
-                                renameFieldText = folder.name
-                            }
-                            Button("Delete Folder", role: .destructive) {
-                                model.deleteFolder(id: folder.id)
-                            }
-                        }
-                }
-            }
-            .padding(.bottom, 56)
-
+        // Keep the footer outside the List’s scroll/table surface. On macOS, an almost-empty sidebar
+        // List can otherwise expand its NSTableView in ways that swallow sibling stacks/overlays.
+        GeometryReader { geometry in
+            let listHeight = max(0, geometry.size.height - Self.sidebarFooterReserveHeight)
             VStack(spacing: 0) {
-                sidebarActionsFooter
-                workspaceLocationFooter
+                List(selection: folderSelection) {
+                    Label(model.sidebarNotesTrayTitle, systemImage: "tray.full")
+                        .tag(Optional(model.sidebarNotesTrayFolderID))
+                    ForEach(model.visibleTopLevelFolderEntries, id: \.id) { folder in
+                        Text(folder.name)
+                            .tag(Optional(folder.id))
+                            .contextMenu {
+                                Button("Rename…") {
+                                    renamingFolder = folder
+                                    renameFieldText = folder.name
+                                }
+                                Button("Delete Folder", role: .destructive) {
+                                    model.deleteFolder(id: folder.id)
+                                }
+                            }
+                    }
+                }
+                .frame(width: geometry.size.width, height: listHeight)
+
+                VStack(spacing: 0) {
+                    Divider()
+                    sidebarActionsFooter
+                    workspaceLocationFooter
+                }
+                .frame(width: geometry.size.width, height: Self.sidebarFooterReserveHeight, alignment: .top)
+                .background(.regularMaterial)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.regularMaterial)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .simultaneousGesture(
             TapGesture().onEnded { _ in
                 onClearToolbarSearchFocus()
@@ -141,4 +148,7 @@ struct WorkspaceFolderSidebarView: View {
         }
         return String(path[s..<headEnd]) + "…" + String(path[tailStart..<e])
     }
+
+    /// Reserved height for the non-scrolling footer (actions + path + shortcut). Sized for caption text + padding.
+    private static let sidebarFooterReserveHeight: CGFloat = 104
 }

@@ -167,7 +167,7 @@ private struct MiranNotesMainWindowContent: View {
     @Binding var conflictDetailsPresented: Bool
     @Binding var conflictDetailsDiskDate: Date?
     @Binding var editingHelpPresented: Bool
-    @FocusState private var isToolbarSearchFocused: Bool
+    @State private var isToolbarSearchFocused = false
     /// Width of the split view’s detail column (where the unified toolbar lays out). Drives compact search sizing
     /// so AppKit never inserts the toolbar overflow chevron.
     @State private var measuredDetailColumnWidth: CGFloat = 0
@@ -429,17 +429,18 @@ private struct MiranNotesMainWindowContent: View {
             toolbarLayoutWidth: toolbarLayoutWidth,
             showsBackNavigation: showsBackNavigation
         )
-        TextField("", text: workspaceSearchBinding, prompt: workspaceSearchPrompt)
-            .textFieldStyle(.plain)
-            .focused($isToolbarSearchFocused)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .background(Capsule().fill(Color(nsColor: .quaternarySystemFill)))
-            .overlay(
-                Capsule().strokeBorder(Color.primary.opacity(outlineOpacity), lineWidth: 1)
-            )
-            .focusEffectDisabled()
-            .frame(minWidth: frames.min, idealWidth: frames.ideal, maxWidth: frames.max)
+        ToolbarSearchField(
+            text: workspaceSearchBinding,
+            isFocused: $isToolbarSearchFocused,
+            placeholder: workspaceSearchPlaceholder
+        )
+        .padding(.horizontal, 10)
+        .padding(.vertical, 4)
+        .background(Capsule().fill(Color(nsColor: .quaternarySystemFill)))
+        .overlay(
+            Capsule().strokeBorder(Color.primary.opacity(outlineOpacity), lineWidth: 1)
+        )
+        .frame(minWidth: frames.min, idealWidth: frames.ideal, maxWidth: frames.max)
     }
 
     private var workspaceSearchBinding: Binding<String> {
@@ -462,11 +463,13 @@ private struct MiranNotesMainWindowContent: View {
         )
     }
 
-    private var workspaceSearchPrompt: Text {
+    private var workspaceSearchPlaceholder: String {
         if model.isFolderManagementPresented {
-            return Text("Search vault…")
+            return String(localized: "Search vault…")
         }
-        return model.selectedNoteID != nil ? Text("Find in note…") : Text("Search vault…")
+        return model.selectedNoteID != nil
+            ? String(localized: "Find in note…")
+            : String(localized: "Search vault…")
     }
 
 }
