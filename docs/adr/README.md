@@ -11,6 +11,7 @@ ADRs capture **significant, stable decisions** with context and consequences. Th
 | [0003-folders-paths-and-manifest-v2.md](0003-folders-paths-and-manifest-v2.md) | Nested folders, `relativePath`, manifest v2 |
 | [0004-vault-level-databases-and-planning.md](0004-vault-level-databases-and-planning.md) | Vault-level databases (`_databases/`) and Miran Planning integration |
 | [0005-block-metadata-invariants.md](0005-block-metadata-invariants.md) | Block metadata invariants (gapless UTF-16 partition, normalization contract) |
+| [0006-threat-model-app-sandbox-vault-access.md](0006-threat-model-app-sandbox-vault-access.md) | Threat model, vault-root capability, bookmarks, App Sandbox path |
 
 ## Adding an ADR
 

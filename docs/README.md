@@ -34,7 +34,7 @@ The [root README](../README.md) summarizes build commands, module layout, and fe
 | **Archive** | |
 | [archive/README.md](archive/README.md) | Superseded 2026 briefs (historical context only); live story in ADRs and [CHANGELOG.md](CHANGELOG.md) |
 | **ADRs** | |
-| [adr/README.md](adr/README.md) | Architecture Decision Records index |
+| [adr/README.md](adr/README.md) | Architecture Decision Records index (includes [0006](adr/0006-threat-model-app-sandbox-vault-access.md) threat model / vault bookmarks) |
 | **Plans and QA** | |
 | [plans/README.md](plans/README.md) | Planning docs index, completed plans, and [**Active product surface**](plans/README.md#active-product-surface) (what ships vs preserved modules) |
 | [plans/longevity-and-migration-analysis.md](plans/longevity-and-migration-analysis.md) | Longevity assessment; `@Observable` and Swift 6 language mode **done**; TextKit 2 typing migration still planned |

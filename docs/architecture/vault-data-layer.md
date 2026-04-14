@@ -1,6 +1,6 @@
 # Vault data layer
 
-This note summarizes how on-disk vault state, the repository, and `AppModel` fit together. It complements [architectural-refinements.md](architectural-refinements.md) and [Constraints.md](../../Constraints.md).
+This note summarizes how on-disk vault state, the repository, and `AppModel` fit together. It complements [architectural-refinements.md](architectural-refinements.md) and [Constraints.md](../../Constraints.md). Vault **root** access and security-scoped bookmarks are described in [ADR 0006](../adr/0006-threat-model-app-sandbox-vault-access.md) and [app-sandbox-readiness.md](../guides/app-sandbox-readiness.md).
 
 ## `NoteRepository` (coordinator actor)
 

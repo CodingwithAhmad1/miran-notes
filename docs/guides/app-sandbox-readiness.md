@@ -1,30 +1,38 @@
-# App Sandbox readiness (assessment)
+# App Sandbox readiness
 
-This document is a **readiness assessment** for macOS App Sandbox–style distribution (Mac App Store, hardened runtime expectations, or stricter notarization policies). It is **not** an implementation plan for this repository phase: no entitlements, containers, or security-scoped bookmark code ships here yet.
+This document tracks **macOS App Sandbox–style** distribution (notarized sandboxed app, Mac App Store, or stricter hardened-runtime expectations) and what is already implemented in-repo.
 
-## Current model
+## Threat model and decisions
 
-- The app is built and run as a **non-sandboxed** process with a **user-selected vault directory** (default under the home folder or via **Open Workspace…**).
-- File access is whatever the user’s POSIX permissions and path choice allow. Miran does not implement encryption-at-rest or a custom containment boundary beyond normal macOS file semantics.
+Authoritative write-up: [ADR 0006: Threat model, vault access capability, and App Sandbox path](../adr/0006-threat-model-app-sandbox-vault-access.md).
 
-## What sandboxing would require
+## Implemented in application code (bookmark seam)
 
-1. **Entitlements:** A minimal set aligned with “user documents” access—typically **no broad file access**; instead, **security-scoped bookmarks** (or repeated open-panel grants) for the vault root and any secondary paths the product must read or write.
-2. **UX:** Clear **“Open vault”** (or re-open) flows when bookmarks are stale or missing after relaunch; error copy when access is denied under sandbox rules.
-3. **Testing:** Full test and CI runs would need **bookmark-backed** vault fixtures or host permissions that mirror sandbox constraints; today’s tests assume unrestricted temp directories.
-4. **Auxiliary paths:** Features that touch locations outside the chosen vault (e.g. future exports, helpers, or XPC) would each need explicit entitlements or scoped user consent.
+- **`VaultWorkspaceAccess`** ([`VaultWorkspaceAccess.swift`](../../Sources/MiranNotesApp/Data/VaultWorkspaceAccess.swift)) — resolves the vault root, calls `startAccessingSecurityScopedResource()` / `stopAccessingSecurityScopedResource()` when the OS grants scoped access, and supports **plain URL** behavior when sandboxing is off (typical `swift run` / `swift test`).
+- **`VaultRootBookmarkStore`** ([`VaultRootBookmarkStore.swift`](../../Sources/MiranNotesApp/Data/VaultRootBookmarkStore.swift)) — persists vault-root bookmark **`Data`** under **Application Support** (`MiranNotes/vault-root.bookmark`), separate from wiki **`ExternalBookmarkStore`** data inside the vault.
+- **App shell** ([`MiranNotesApp.swift`](../../Sources/MiranNotesApp/App/MiranNotesApp.swift)) — bootstraps from saved bookmark when valid; otherwise `~/MiranNotesVault`; **Open Workspace…** adopts the panel URL, saves a bookmark, and replaces `NoteRepository` / `AppModel`. Stale or missing on-disk targets clear persistence and fall back to the default path.
+
+**Not implemented yet:** App Sandbox **entitlements**, an **`.app` bundle** product in this repo, or Hardened Runtime flags. `swift test` remains **unsandboxed** by default.
+
+## Optional packaging: `.app` bundle and entitlements
+
+When you need a **sandboxed** notarized build:
+
+1. **Add an Xcode project or wrapper** that produces `MiranNotes.app` (SwiftPM can stay the source of truth; the Xcode target links the same sources or uses a generated project).
+2. **Enable App Sandbox** on the app target and add a minimal **entitlements** plist, for example:
+   - **User Selected File** (read/write) for the folder the user grants via `NSOpenPanel` (vault root).
+   - Avoid **temporary-exception** / broad file access unless you have no alternative.
+3. **Hardened Runtime** as required for notarization; map any JIT or unusual APIs to entitlement reality.
+4. **QA:** Run the `.app` against a fresh user account: pick vault, quit, relaunch (bookmark restore), revoke access in System Settings if applicable, confirm **Open Workspace…** still recovers.
+
+CI can keep **`swift test`** only; sandboxed `.app` verification can be **manual** or a separate job until you invest in automation.
 
 ## Risks and trade-offs
 
-- **Bookmark lifecycle:** Revoked access, restored volumes, and iCloud “placeholder” files interact badly with naive path assumptions; the app already cares about external edits and sync—sandbox adds **permission** churn on top.
-- **Developer ergonomics:** Local `swift test` and debugging remain simple without sandbox; turning on sandbox is a **project-wide** change (targets, CI, manual QA).
-
-## Non-goals (this pass)
-
-- No changes to **Info.plist** entitlements, **Hardened Runtime** flags, or **security-scoped** `URL` handling in app code.
-- No requirement to ship the Mac App Store variant until product and legal posture explicitly target it.
+- **Bookmark lifecycle:** Stale bookmarks (moved/deleted vault) clear storage and fall back to the default vault path; users who relied on a custom location should use **Open Workspace…** again.
+- **Developer ergonomics:** Contributors running `swift run` do not need entitlements; behavior matches unsandboxed desktop apps.
 
 ## Related
 
-- [VaultSafety.md](VaultSafety.md) — user-facing sync and backup expectations (orthogonal to sandbox, but both affect “where files live”).
+- [VaultSafety.md](VaultSafety.md) — sync folders and backups.
 - [vault-data-layer.md](../architecture/vault-data-layer.md) — repository and vault root assumptions.

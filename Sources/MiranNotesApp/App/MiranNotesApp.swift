@@ -12,6 +12,7 @@ private final class MiranNotesAppDelegate: NSObject, NSApplicationDelegate {
 @main
 struct MiranNotesApp: App {
     @NSApplicationDelegateAdaptor(MiranNotesAppDelegate.self) private var appDelegate
+    @State private var vaultAccess: VaultWorkspaceAccess
     @State private var model: AppModel
     @State private var conflictDetailsPresented = false
     @State private var conflictDetailsDiskDate: Date?
@@ -19,10 +20,15 @@ struct MiranNotesApp: App {
 
     init() {
         SlashCommandRegistry.registerBuiltins()
-        let vault = URL(fileURLWithPath: NSHomeDirectory())
+        let defaultVault = Self.defaultVaultDirectoryURL()
+        let access = VaultWorkspaceAccess.bootstrap(defaultVaultURL: defaultVault)
+        _vaultAccess = State(initialValue: access)
+        _model = State(initialValue: AppModel(repository: NoteRepository(vaultURL: access.vaultRootURL)))
+    }
+
+    private static func defaultVaultDirectoryURL() -> URL {
+        URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
             .appendingPathComponent("MiranNotesVault", isDirectory: true)
-        let repository = NoteRepository(vaultURL: vault)
-        _model = State(wrappedValue: AppModel(repository: repository))
     }
 
     var body: some Scene {
@@ -173,8 +179,19 @@ struct MiranNotesApp: App {
         panel.canCreateDirectories = true
         panel.prompt = "Open"
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        model = AppModel(repository: NoteRepository(vaultURL: url))
-        model.loadVault()
+        vaultAccess.stopAccessingIfNeeded()
+        do {
+            vaultAccess = try VaultWorkspaceAccess.adoptUserSelectedVaultRoot(url)
+            model = AppModel(repository: NoteRepository(vaultURL: vaultAccess.vaultRootURL))
+            model.loadVault()
+        } catch {
+            vaultAccess = VaultWorkspaceAccess.bootstrap(defaultVaultURL: Self.defaultVaultDirectoryURL())
+            model = AppModel(repository: NoteRepository(vaultURL: vaultAccess.vaultRootURL))
+            model.loadVault()
+            model.userAlert = .message(
+                "Could not remember access to the folder you chose. Opened the default vault instead. Try again or check disk permissions."
+            )
+        }
     }
 
 }
