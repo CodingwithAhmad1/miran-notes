@@ -143,7 +143,9 @@ private struct ActiveEditorPane: View {
                         pendingEditorScroll: model.pendingEditorScroll,
                         onPendingEditorScrollConsumed: { model.clearPendingEditorScroll() },
                         onCommands: { commands in model.apply(commands) },
-                        onWikiLinkClick: { targetID in model.openNote(noteID: targetID) },
+                        onWikiLinkClick: WikiLinkPresentationPolicy.isFrontendEnabled
+                            ? { targetID in model.openNote(noteID: targetID) }
+                            : nil,
                         onFullReplaceWarning: { model.presentFullBufferAdvisory() },
                         onSizeLimitExceeded: { model.presentSizeLimitAdvisory() }
                     )

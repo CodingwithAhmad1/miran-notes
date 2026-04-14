@@ -85,17 +85,7 @@ struct MiranNotesApp: App {
                 }
             }
             .environment(sessionRegistry)
-        }
-        .commands { appCommands }
-        WindowGroup(for: WorkspaceWindowPayload.self) { $payload in
-            if let payload {
-                SecondaryVaultWindowRoot(
-                    payload: payload,
-                    presentOpenWorkspacePanel: presentOpenWorkspacePanel
-                )
-                .environment(sessionRegistry)
-            }
-        }
+               }
         .commands { appCommands }
     }
 
@@ -388,9 +378,9 @@ struct EditorRootView: View {
                         pendingEditorScroll: model.pendingEditorScroll,
                         onPendingEditorScrollConsumed: { model.clearPendingEditorScroll() },
                         onCommands: { commands in model.apply(commands) },
-                        onWikiLinkClick: { targetID in
-                            model.openNote(noteID: targetID)
-                        },
+                        onWikiLinkClick: WikiLinkPresentationPolicy.isFrontendEnabled
+                            ? { targetID in model.openNote(noteID: targetID) }
+                            : nil,
                         onFullReplaceWarning: {
                             model.presentFullBufferAdvisory()
                         },
@@ -549,58 +539,6 @@ private struct ExternalEditCompareSheet: View {
                     Button("Done", action: onDone)
                 }
             }
-        }
-    }
-}
-
-// MARK: - Secondary vault window (multi-pane layout)
-
-private struct SecondaryVaultWindowRoot: View {
-    let payload: WorkspaceWindowPayload
-    let presentOpenWorkspacePanel: () -> Void
-
-    @Environment(VaultSessionRegistry.self) private var vaultSessionRegistry
-    @State private var model: AppModel?
-    @State private var conflictDetailsPresented = false
-    @State private var conflictDetailsDiskDate: Date?
-    @State private var editingHelpPresented = false
-    @State private var appliedInitialLayout = false
-
-    var body: some View {
-        Group {
-            if let model {
-                MiranNotesMainWindowContent(
-                    model: model,
-                    presentOpenWorkspacePanel: presentOpenWorkspacePanel,
-                    conflictDetailsPresented: $conflictDetailsPresented,
-                    conflictDetailsDiskDate: $conflictDetailsDiskDate,
-                    editingHelpPresented: $editingHelpPresented
-                )
-            } else {
-                ProgressView("Opening workspace…")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-        }
-        .toolbar {
-            ToolbarItemGroup(placement: .primaryAction) {
-                LayoutToolbarItem(model: model, vaultSessionRegistry: vaultSessionRegistry)
-                FolderManagementToolbarButton(model: model)
-            }
-        }
-        .task(id: payload) {
-            appliedInitialLayout = false
-            let url = URL(fileURLWithPath: payload.vaultPath)
-            let m = AppModel(
-                repository: NoteRepository(vaultURL: url),
-                workspaceScope: payload.workspaceScope
-            )
-            model = m
-            m.loadVault()
-        }
-        .onChange(of: model?.workspaceGateState) { _, new in
-            guard new == .ready, let m = model, !appliedInitialLayout else { return }
-            appliedInitialLayout = true
-            m.setLayout(payload.initialLayout)
         }
     }
 }

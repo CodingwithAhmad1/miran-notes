@@ -9,7 +9,7 @@ private enum SlashMenuCommand {
     case close
 }
 
-/// Activates the app on click and routes clicks on wiki-link ranges before editing.
+/// Text view that can route mouse clicks on wiki-link ranges before editing when `WikiLinkPresentationPolicy.isFrontendEnabled` is true.
 private final class WikiLinkTextView: NSTextView {
     var wikiLinks: [NoteLink] = []
     var linkHitHandler: ((UUID) -> Void)?
@@ -750,16 +750,17 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
         }
 
         private func refreshVisualChrome(textView: NSTextView, document: NoteDocument) {
+            let linkOverlay = WikiLinkPresentationPolicy.isFrontendEnabled ? document.metadata.links : []
             if lastStyledDocument == document {
                 if let w = textView as? WikiLinkTextView {
-                    w.wikiLinks = document.metadata.links
+                    w.wikiLinks = linkOverlay
                 }
                 return
             }
             EditorVisualStyle.apply(to: textView, document: document)
             lastStyledDocument = document
             if let w = textView as? WikiLinkTextView {
-                w.wikiLinks = document.metadata.links
+                w.wikiLinks = linkOverlay
             }
         }
 

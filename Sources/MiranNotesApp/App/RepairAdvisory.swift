@@ -126,7 +126,7 @@ enum RepairDiagnosticsBuilder {
 
         if hadWikiLinkAdvisory {
             lines.append(
-                "The text uses wiki-style links, but no link information was found in the saved data. Use the link tools in the editor to make links work again."
+                "The text uses wiki-style link markers, but no link metadata was found in the saved data. Link navigation is not available in the app UI right now; the note text is unchanged."
             )
         }
 
@@ -237,9 +237,9 @@ enum RepairDiagnosticsBuilder {
 
         return RepairAdvisory(
             kind: .wikiLinksMissingMetadata,
-            title: "Some links need to be set up again",
+            title: "Link markers without saved link data",
             explanation:
-                "This text includes link markers, but the saved link list is empty. Add links from the editor to make them work.",
+                "This text includes link markers, but the saved link list is empty. Note links are not editable in the app UI at the moment; you can still edit the text normally.",
             detailsPlainText: details
         )
     }

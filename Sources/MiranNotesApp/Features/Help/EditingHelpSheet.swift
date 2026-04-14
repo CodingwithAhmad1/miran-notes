@@ -16,10 +16,11 @@ enum EditingHelpContent {
         text and tells you—your existing content stays safe.
         """
 
-    static let linksTitle = "Wiki links"
+    static let linksTitle = "Note links (not in UI yet)"
     static let linksBody = """
-        Use wiki-style links to jump between notes. Links are tied to each note’s stable identity, not just its \
-        title, so renaming a note does not break navigation from other notes.
+        Wiki-style links between notes are not shown in the editor right now—there is no click-to-follow or link \
+        highlighting. Your vault can still contain link data from earlier versions or other tools; nothing is deleted. \
+        The editing engine keeps supporting links under the hood for when we turn the UI back on.
         """
 }
 

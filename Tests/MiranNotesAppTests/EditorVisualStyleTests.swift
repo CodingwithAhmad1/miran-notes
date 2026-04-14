@@ -153,7 +153,7 @@ final class EditorVisualStyleTests: XCTestCase {
                       "Code span must use a monospace font")
     }
 
-    func testLinkRangeGetsLinkColor() {
+    func testLinkForegroundColorFollowsWikiPresentationPolicy() {
         let text = "[[link]]"
         let targetID = UUID()
         let doc = makeDocument(
@@ -165,8 +165,11 @@ final class EditorVisualStyleTests: XCTestCase {
         EditorVisualStyle.apply(to: tv, document: doc)
         let color = tv.textStorage?.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor
         XCTAssertNotNil(color, "Link range must have a foreground color attribute")
-        // Verify a non-nil color was applied (specific color is theme-dependent)
-        XCTAssertNotEqual(color, NSColor.textColor, "Link color must differ from default body text color")
+        if WikiLinkPresentationPolicy.isFrontendEnabled {
+            XCTAssertNotEqual(color, NSColor.textColor, "Link color must differ from default body text color")
+        } else {
+            XCTAssertEqual(color, NSColor.textColor, "When wiki link presentation is off, link spans use body color")
+        }
     }
 
     // MARK: - SlashCommandRegistry

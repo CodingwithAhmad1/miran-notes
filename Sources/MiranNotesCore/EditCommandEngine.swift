@@ -9,6 +9,7 @@ public enum EditCommand: Sendable {
     case changeBlockType(blockID: String, type: BlockType, headingLevel: Int?)
     case toggleSpanStyle(range: TextRange, style: SpanStyle)
     /// Inserts `[[displayText]]` at UTF-16 offset and records a wiki link to `targetNoteID` over the inserted token.
+    /// Remains available in the core engine for tests and future UI; the app may omit editor affordances without removing this case.
     case insertWikiLink(utf16Offset: Int, targetNoteID: UUID, displayText: String)
     /// Registers an inline database row reference in note metadata.
     case registerDatabaseRow(databaseID: UUID, rowID: UUID)

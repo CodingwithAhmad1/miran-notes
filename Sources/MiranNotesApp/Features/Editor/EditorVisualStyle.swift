@@ -1,7 +1,7 @@
 import AppKit
 import MiranNotesCore
 
-/// Applies model-driven typography to `NSTextStorage`: block fonts, then span styles, then link color.
+/// Applies model-driven typography to `NSTextStorage`: block fonts, then span styles, then optional wiki-link color when enabled.
 /// Order must stay stable; canonical text lives in `NoteDocument.text`.
 enum EditorVisualStyle {
     static let bodyPointSize: CGFloat = 15
@@ -80,10 +80,12 @@ enum EditorVisualStyle {
             storage.addAttribute(.font, value: font, range: r)
         }
 
-        for link in document.metadata.links {
-            let r = clampedNSRange(link.range, maxUTF16: len)
-            guard r.length > 0 else { continue }
-            storage.addAttribute(.foregroundColor, value: linkColor, range: r)
+        if WikiLinkPresentationPolicy.isFrontendEnabled {
+            for link in document.metadata.links {
+                let r = clampedNSRange(link.range, maxUTF16: len)
+                guard r.length > 0 else { continue }
+                storage.addAttribute(.foregroundColor, value: linkColor, range: r)
+            }
         }
     }
 

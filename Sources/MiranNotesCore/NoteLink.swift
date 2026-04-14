@@ -1,6 +1,9 @@
 import Foundation
 
 /// A wiki-style link: parallel metadata for `[[...]]` (or other) text in the note body. Ranges are UTF-16.
+///
+/// **Persistence / engine:** This type and link adjustment logic stay active regardless of app UI.
+/// The Miran Notes app may hide click-to-follow and link styling while keeping this model on disk (UI deactivation, not deletion).
 public struct NoteLink: Codable, Equatable, Sendable {
     public var range: TextRange
     public var targetNoteID: UUID
