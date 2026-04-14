@@ -102,7 +102,10 @@ struct FolderPageView: View {
                 .fontWeight(.bold)
                 .textFieldStyle(.plain)
                 .focused($isFolderTitleFocused)
-                .onSubmit { commitFolderTitleRename() }
+                .onSubmit {
+                    // Enter should commit rename by ending editing, not keep selected text highlighted.
+                    isFolderTitleFocused = false
+                }
                 .onChange(of: isFolderTitleFocused) { _, focused in
                     if !focused {
                         commitFolderTitleRename()

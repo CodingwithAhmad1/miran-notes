@@ -362,15 +362,10 @@ private struct MiranNotesMainWindowContent: View {
                 }
             }
             ToolbarItem(placement: .principal) {
-                HStack {
-                    Spacer(minLength: 0)
-                    vaultToolbarSearchField(
-                        toolbarLayoutWidth: toolbarLayoutWidth,
-                        showsBackNavigation: showsBackNavigation
-                    )
-                    Spacer(minLength: 0)
-                }
-                .frame(maxWidth: .infinity)
+                vaultToolbarSearchField(
+                    toolbarLayoutWidth: toolbarLayoutWidth,
+                    showsBackNavigation: showsBackNavigation
+                )
             }
             if !Self.shouldHideTrailingToolbarControls(width: toolbarLayoutWidth) {
                 ToolbarItemGroup(placement: .primaryAction) {
