@@ -7,8 +7,7 @@ import XCTest
 
 final class DatabaseRepositoryTests: XCTestCase {
     private func tempVaultURL() throws -> URL {
-        FileManager.default.temporaryDirectory
-            .appendingPathComponent("MiranDB-\(UUID().uuidString)", isDirectory: true)
+        try VaultTestSupport.makeEmptyVaultDirectory()
     }
 
     private func ensureVault(_ url: URL) throws {

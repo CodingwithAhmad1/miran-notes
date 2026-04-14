@@ -21,6 +21,10 @@ struct MiranNotesApp: App {
 
     init() {
         SlashCommandRegistry.registerBuiltins()
+        if ProcessInfo.processInfo.environment["MIRAN_USE_DEFAULT_VAULT"] == "1" {
+            let devVault = Self.defaultVaultDirectoryURL()
+            try? FileManager.default.createDirectory(at: devVault, withIntermediateDirectories: true)
+        }
         let outcome = VaultWorkspaceAccess.bootstrap(defaultVaultURL: Self.bootstrapDefaultVaultURL())
         switch outcome {
         case .resolved(let access):
@@ -117,11 +121,17 @@ struct MiranNotesApp: App {
             vaultAccess = newAccess
             model = AppModel(repository: NoteRepository(vaultURL: newAccess.vaultRootURL))
             model?.loadVault()
+        } catch let adoption as VaultWorkspaceAdoptionError {
+            if let model {
+                model.userAlert = .message(adoption.localizedDescription ?? "This folder cannot be used as a vault.")
+            } else {
+                vaultPickerErrorMessage = adoption.localizedDescription ?? "This folder cannot be used as a vault."
+            }
         } catch {
             let message =
                 "Could not remember access to the folder you chose. Try again or check disk permissions."
             if let model {
-                model.userAlert = .message(message)
+                model.userAlert = .message("\(message) \(error.localizedDescription)")
             } else {
                 vaultPickerErrorMessage = "\(message) \(error.localizedDescription)"
             }

@@ -7,8 +7,7 @@ import XCTest
 @MainActor
 final class AppModelEmptyVaultOnboardingTests: XCTestCase {
     private func tempVaultURL() throws -> URL {
-        FileManager.default.temporaryDirectory
-            .appendingPathComponent("MiranEmptyVaultOnboarding-\(UUID().uuidString)", isDirectory: true)
+        try VaultTestSupport.makeEmptyVaultDirectory()
     }
 
     private func waitUntil(

@@ -7,8 +7,7 @@ import XCTest
 @MainActor
 final class AppModelUndoTests: XCTestCase {
     private func tempVaultURL() throws -> URL {
-        FileManager.default.temporaryDirectory
-            .appendingPathComponent("MiranNotesUndoTests-\(UUID().uuidString)", isDirectory: true)
+        try VaultTestSupport.makeEmptyVaultDirectory()
     }
 
     func testUndoStackHasAtMostMaxStepsAfter201Edits() async throws {

@@ -7,8 +7,7 @@ import XCTest
 @MainActor
 final class AppModelCommandBatchLimitTests: XCTestCase {
     private func tempVaultURL() throws -> URL {
-        FileManager.default.temporaryDirectory
-            .appendingPathComponent("MiranCommandBatch-\(UUID().uuidString)", isDirectory: true)
+        try VaultTestSupport.makeEmptyVaultDirectory()
     }
 
     func testTruncatedBatchMatchesPrefixApplyAndSetsRepairAdvisory() async throws {

@@ -6,8 +6,7 @@ import XCTest
 @MainActor
 final class AppModelStartupSyncTests: XCTestCase {
     private func tempVaultURL() throws -> URL {
-        FileManager.default.temporaryDirectory
-            .appendingPathComponent("MiranNotesStartupSync-\(UUID().uuidString)", isDirectory: true)
+        try VaultTestSupport.makeEmptyVaultDirectory()
     }
 
     func testStartupLinkGraphSyncDecisionImmediateAtThreshold() {

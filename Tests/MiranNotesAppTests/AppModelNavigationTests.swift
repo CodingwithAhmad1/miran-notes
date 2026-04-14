@@ -7,8 +7,7 @@ import XCTest
 @MainActor
 final class AppModelNavigationTests: XCTestCase {
     private func tempVaultURL() throws -> URL {
-        FileManager.default.temporaryDirectory
-            .appendingPathComponent("MiranNotesAppModelNav-\(UUID().uuidString)", isDirectory: true)
+        try VaultTestSupport.makeEmptyVaultDirectory()
     }
 
     private func waitForAsync(_ maxAttempts: Int = 80, _ intervalMs: UInt64 = 25, _ condition: () -> Bool) async throws {

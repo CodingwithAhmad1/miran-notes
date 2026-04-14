@@ -7,8 +7,22 @@ import XCTest
 
 final class NoteRepositoryTests: XCTestCase {
     private func tempVaultURL() throws -> URL {
-        FileManager.default.temporaryDirectory
-            .appendingPathComponent("MiranNotesTests-\(UUID().uuidString)", isDirectory: true)
+        try VaultTestSupport.makeEmptyVaultDirectory()
+    }
+
+    func testEnsureVaultRequiresExistingVaultRootDirectory() async throws {
+        let vault = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MiranMissingRoot-\(UUID().uuidString)", isDirectory: true)
+        let repo = NoteRepository(vaultURL: vault)
+        do {
+            try await repo.ensureVault()
+            XCTFail("expected vaultRootNotDirectory")
+        } catch let error as NoteRepositoryError {
+            guard case .vaultRootNotDirectory = error else {
+                XCTFail("unexpected \(error)")
+                return
+            }
+        }
     }
 
     func testValidateBaseNameRejectsTraversalAndSeparators() throws {

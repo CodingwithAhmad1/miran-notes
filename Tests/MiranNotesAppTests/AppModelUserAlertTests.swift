@@ -6,9 +6,8 @@ import XCTest
 
 @MainActor
 final class AppModelUserAlertTests: XCTestCase {
-    func testPerformUserAlertRecoveryClearsRecoverableAlert() {
-        let vault = FileManager.default.temporaryDirectory
-            .appendingPathComponent("MiranUserAlert-\(UUID().uuidString)", isDirectory: true)
+    func testPerformUserAlertRecoveryClearsRecoverableAlert() throws {
+        let vault = try VaultTestSupport.makeEmptyVaultDirectory()
         let repo = NoteRepository(vaultURL: vault)
         let model = AppModel(repository: repo)
 
@@ -21,9 +20,8 @@ final class AppModelUserAlertTests: XCTestCase {
         XCTAssertEqual(model.userAlert, .none)
     }
 
-    func testPerformUserAlertRecoveryClearsForVariousKinds() {
-        let vault = FileManager.default.temporaryDirectory
-            .appendingPathComponent("MiranUserAlertKinds-\(UUID().uuidString)", isDirectory: true)
+    func testPerformUserAlertRecoveryClearsForVariousKinds() throws {
+        let vault = try VaultTestSupport.makeEmptyVaultDirectory()
         let repo = NoteRepository(vaultURL: vault)
         let model = AppModel(repository: repo)
         let noteID = UUID()

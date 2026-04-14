@@ -7,8 +7,7 @@ import XCTest
 @MainActor
 final class AppModelWatcherRaceTests: XCTestCase {
     private func tempVaultURL() throws -> URL {
-        FileManager.default.temporaryDirectory
-            .appendingPathComponent("MiranNotesWatcherTests-\(UUID().uuidString)", isDirectory: true)
+        try VaultTestSupport.makeEmptyVaultDirectory()
     }
 
     /// While autosave is in flight, a watcher event must be deferred — `processExternalDiskActivity`

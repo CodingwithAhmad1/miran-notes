@@ -35,7 +35,11 @@ actor VaultIndexActor {
 
     private func ensureVault() throws {
         guard !vaultEnsured else { return }
-        try FileManager.default.createDirectory(at: vaultURL, withIntermediateDirectories: true)
+        var isDir: ObjCBool = false
+        let path = vaultURL.path
+        guard FileManager.default.fileExists(atPath: path, isDirectory: &isDir), isDir.boolValue else {
+            throw NoteRepositoryError.vaultRootNotDirectory(path: path)
+        }
         try FileManager.default.createDirectory(at: VaultPaths.miranDirectory(vaultURL: vaultURL), withIntermediateDirectories: true)
         vaultEnsured = true
     }

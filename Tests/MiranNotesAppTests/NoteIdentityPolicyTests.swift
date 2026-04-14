@@ -6,8 +6,7 @@ import XCTest
 
 final class NoteIdentityPolicyTests: XCTestCase {
     private func tempVaultURL() throws -> URL {
-        FileManager.default.temporaryDirectory
-            .appendingPathComponent("MiranNoteIdentity-\(UUID().uuidString)", isDirectory: true)
+        try VaultTestSupport.makeEmptyVaultDirectory()
     }
 
     func testLoadWithoutMetaUsesManifestNoteID() async throws {

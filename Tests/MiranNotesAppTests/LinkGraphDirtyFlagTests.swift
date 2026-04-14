@@ -6,8 +6,7 @@ import XCTest
 
 final class LinkGraphDirtyFlagTests: XCTestCase {
     private func tempVaultURL() throws -> URL {
-        FileManager.default.temporaryDirectory
-            .appendingPathComponent("MiranNotesLinkGraphTests-\(UUID().uuidString)", isDirectory: true)
+        try VaultTestSupport.makeEmptyVaultDirectory()
     }
 
     func testSaveWithUnchangedLinksDoesNotWriteLinkGraph() async throws {

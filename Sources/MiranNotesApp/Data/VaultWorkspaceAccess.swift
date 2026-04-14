@@ -8,6 +8,22 @@ enum VaultBootstrapOutcome {
     case needsUserSelectedVault
 }
 
+/// The chosen folder failed the workspace layout gate (see ``WorkspaceCompatibilityScanner``).
+enum VaultWorkspaceAdoptionError: LocalizedError, Equatable {
+    case incompatibleVault(summary: String)
+
+    init(report: CompatibilityReport) {
+        self = .incompatibleVault(summary: report.summary)
+    }
+
+    var errorDescription: String? {
+        switch self {
+        case .incompatibleVault(let summary):
+            return summary
+        }
+    }
+}
+
 /// Owns the resolved vault root URL and security-scoped access for that directory.
 /// The app shell uses this only on the main thread. See ADR 0006 (`docs/adr/0006-threat-model-app-sandbox-vault-access.md`).
 final class VaultWorkspaceAccess {
@@ -33,27 +49,44 @@ final class VaultWorkspaceAccess {
     static func bootstrap(defaultVaultURL: URL?) -> VaultBootstrapOutcome {
         if let data = VaultRootBookmarkStore.loadBookmarkData() {
             if let restored = resolveBookmarkData(data) {
-                let started = restored.startAccessingSecurityScopedResource()
-                return .resolved(
-                    VaultWorkspaceAccess(vaultRootURL: restored, isSecurityScopedAccessActive: started)
-                )
+                switch WorkspaceCompatibilityScanner.scan(vaultRoot: restored) {
+                case .incompatible:
+                    VaultRootBookmarkStore.clearBookmarkData()
+                case .empty, .compatible:
+                    let started = restored.startAccessingSecurityScopedResource()
+                    return .resolved(
+                        VaultWorkspaceAccess(vaultRootURL: restored, isSecurityScopedAccessActive: started)
+                    )
+                }
+            } else {
+                VaultRootBookmarkStore.clearBookmarkData()
             }
-            VaultRootBookmarkStore.clearBookmarkData()
         }
         guard let defaultVaultURL else {
             return .needsUserSelectedVault
         }
         let url = defaultVaultURL.standardizedFileURL
-        let started = url.startAccessingSecurityScopedResource()
-        return .resolved(
-            VaultWorkspaceAccess(vaultRootURL: url, isSecurityScopedAccessActive: started)
-        )
+        switch WorkspaceCompatibilityScanner.scan(vaultRoot: url) {
+        case .incompatible:
+            return .needsUserSelectedVault
+        case .empty, .compatible:
+            let started = url.startAccessingSecurityScopedResource()
+            return .resolved(
+                VaultWorkspaceAccess(vaultRootURL: url, isSecurityScopedAccessActive: started)
+            )
+        }
     }
 
     /// Call after the user selects a directory from ``NSOpenPanel``. Persists a bookmark for the next launch.
     /// Caller should invoke ``stopAccessingIfNeeded()`` on the previous instance before replacing it.
     static func adoptUserSelectedVaultRoot(_ url: URL) throws -> VaultWorkspaceAccess {
         let standardized = url.standardizedFileURL
+        switch WorkspaceCompatibilityScanner.scan(vaultRoot: standardized) {
+        case .incompatible(let report):
+            throw VaultWorkspaceAdoptionError(report: report)
+        case .empty, .compatible:
+            break
+        }
         let started = standardized.startAccessingSecurityScopedResource()
         let data = try makeBookmarkData(for: standardized)
         try VaultRootBookmarkStore.saveBookmarkData(data)

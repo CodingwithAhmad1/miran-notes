@@ -84,4 +84,64 @@ final class VaultWorkspaceAccessTests: XCTestCase {
             return
         }
     }
+
+    func testBootstrapIncompatibleBookmarkClearsAndUsesDefaultVault() throws {
+        let root = try tempDir()
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let vault = root.appendingPathComponent("Marked", isDirectory: true)
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        let fallback = root.appendingPathComponent("Fallback", isDirectory: true)
+        try FileManager.default.createDirectory(at: fallback, withIntermediateDirectories: true)
+
+        let bookmarkFile = root.appendingPathComponent("vault-root.bookmark")
+        VaultRootBookmarkStore.setBookmarkFileURLForTesting(bookmarkFile)
+
+        let access1 = try VaultWorkspaceAccess.adoptUserSelectedVaultRoot(vault)
+        access1.stopAccessingIfNeeded()
+
+        let junk = vault.appendingPathComponent("disallowed.pdf")
+        try Data().write(to: junk, options: .atomic)
+
+        let outcome = VaultWorkspaceAccess.bootstrap(defaultVaultURL: fallback)
+        guard case let .resolved(access2) = outcome else {
+            XCTFail("expected resolved fallback after incompatible bookmark vault")
+            return
+        }
+        XCTAssertEqual(access2.vaultRootURL.standardizedFileURL.path, fallback.standardizedFileURL.path)
+        XCTAssertNil(VaultRootBookmarkStore.loadBookmarkData(), "incompatible bookmark should be cleared; default vault is not auto-bookmarked")
+        access2.stopAccessingIfNeeded()
+    }
+
+    func testAdoptRejectsIncompatibleVault() throws {
+        let root = try tempDir()
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let bookmarkFile = root.appendingPathComponent("adopt-reject.bm")
+        VaultRootBookmarkStore.setBookmarkFileURLForTesting(bookmarkFile)
+
+        let vault = root.appendingPathComponent("Bad", isDirectory: true)
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        let junk = vault.appendingPathComponent("disallowed.pdf")
+        try Data().write(to: junk, options: .atomic)
+
+        XCTAssertThrowsError(try VaultWorkspaceAccess.adoptUserSelectedVaultRoot(vault)) { error in
+            XCTAssertTrue(error is VaultWorkspaceAdoptionError)
+        }
+        XCTAssertNil(VaultRootBookmarkStore.loadBookmarkData())
+    }
+
+    func testBootstrapRejectsIncompatibleDefaultVaultURL() throws {
+        let root = try tempDir()
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let notADir = root.appendingPathComponent("file-not-folder")
+        try "x".write(to: notADir, atomically: true, encoding: .utf8)
+
+        let bookmarkFile = root.appendingPathComponent("bm")
+        VaultRootBookmarkStore.setBookmarkFileURLForTesting(bookmarkFile)
+
+        let outcome = VaultWorkspaceAccess.bootstrap(defaultVaultURL: notADir)
+        guard case .needsUserSelectedVault = outcome else {
+            XCTFail("expected needsUserSelectedVault when default URL is not a workspace directory")
+            return
+        }
+    }
 }

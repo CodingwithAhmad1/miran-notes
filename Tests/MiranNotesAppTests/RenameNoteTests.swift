@@ -6,8 +6,7 @@ import XCTest
 
 final class RenameNoteTests: XCTestCase {
     private func tempVaultURL() throws -> URL {
-        FileManager.default.temporaryDirectory
-            .appendingPathComponent("MiranRename-\(UUID().uuidString)", isDirectory: true)
+        try VaultTestSupport.makeEmptyVaultDirectory()
     }
 
     func testRenameNoteChangesBaseNamePreservesNoteID() async throws {

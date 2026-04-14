@@ -5,8 +5,7 @@ import XCTest
 
 final class VaultCrashSafetyTests: XCTestCase {
     private func tempVaultURL() throws -> URL {
-        FileManager.default.temporaryDirectory
-            .appendingPathComponent("MiranNotesCrashTests-\(UUID().uuidString)", isDirectory: true)
+        try VaultTestSupport.makeEmptyVaultDirectory()
     }
 
     func testRecoverPendingCommitsOnCleanVaultIsNoOp() throws {

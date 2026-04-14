@@ -7,8 +7,7 @@ import XCTest
 @MainActor
 final class AppModelExternalEditTests: XCTestCase {
     private func tempVaultURL() throws -> URL {
-        FileManager.default.temporaryDirectory
-            .appendingPathComponent("MiranNotesAppModelTests-\(UUID().uuidString)", isDirectory: true)
+        try VaultTestSupport.makeEmptyVaultDirectory()
     }
 
     func testExternalChangeWhileDirtySetsConflictAlert() async throws {

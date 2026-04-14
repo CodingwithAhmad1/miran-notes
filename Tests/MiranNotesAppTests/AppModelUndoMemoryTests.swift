@@ -7,8 +7,7 @@ import XCTest
 @MainActor
 final class AppModelUndoMemoryTests: XCTestCase {
     private func tempVaultURL() throws -> URL {
-        FileManager.default.temporaryDirectory
-            .appendingPathComponent("MiranNotesUndoMem-\(UUID().uuidString)", isDirectory: true)
+        try VaultTestSupport.makeEmptyVaultDirectory()
     }
 
     /// Rapid single-character replaces coalesce into one undo step by default (300 ms window).

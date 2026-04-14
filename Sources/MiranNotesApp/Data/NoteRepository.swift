@@ -22,6 +22,8 @@ enum NoteRepositoryError: LocalizedError, Equatable {
     case invalidFolderMove
     case folderNotEmpty(UUID)
     case unresolvedNoteIdentity(String)
+    /// The vault root path is missing or is not a directory (the app does not create the vault folder itself).
+    case vaultRootNotDirectory(path: String)
 
     var errorDescription: String? {
         switch self {
@@ -47,6 +49,8 @@ enum NoteRepositoryError: LocalizedError, Equatable {
             return "Folder is not empty (contains notes or folders): \(id.uuidString)"
         case let .unresolvedNoteIdentity(path):
             return "Could not resolve note identity for path: \(path)"
+        case let .vaultRootNotDirectory(path):
+            return "Vault folder does not exist or is not a directory: \(path)"
         }
     }
 }

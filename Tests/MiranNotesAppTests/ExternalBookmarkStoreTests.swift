@@ -5,8 +5,7 @@ import XCTest
 
 final class ExternalBookmarkStoreTests: XCTestCase {
     private func tempVaultURL() throws -> URL {
-        FileManager.default.temporaryDirectory
-            .appendingPathComponent("MiranBookmarks-\(UUID().uuidString)", isDirectory: true)
+        try VaultTestSupport.makeEmptyVaultDirectory()
     }
 
     func testUpsertAndStatusTransition() async throws {

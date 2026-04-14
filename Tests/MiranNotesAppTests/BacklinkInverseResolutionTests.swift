@@ -7,8 +7,7 @@ import XCTest
 @MainActor
 final class BacklinkInverseResolutionTests: XCTestCase {
     private func tempVaultURL() throws -> URL {
-        FileManager.default.temporaryDirectory
-            .appendingPathComponent("MiranNotesBacklink-\(UUID().uuidString)", isDirectory: true)
+        try VaultTestSupport.makeEmptyVaultDirectory()
     }
 
     func testBacklinksResolvedViaPersistedLinkGraphAndRelationshipIndex() async throws {

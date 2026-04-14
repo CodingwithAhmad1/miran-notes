@@ -6,8 +6,7 @@ import XCTest
 
 final class VaultStructureTests: XCTestCase {
     private func tempVaultURL() throws -> URL {
-        FileManager.default.temporaryDirectory
-            .appendingPathComponent("MiranVaultStructure-\(UUID().uuidString)", isDirectory: true)
+        try VaultTestSupport.makeEmptyVaultDirectory()
     }
 
     func testCreateFolderAndNoteUsesNestedRelativePath() async throws {
