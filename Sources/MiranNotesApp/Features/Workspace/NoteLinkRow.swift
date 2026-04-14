@@ -3,7 +3,7 @@ import SwiftUI
 /// Tappable row for a note title. Optional subtitle supports snippets (e.g. future backlinks UI).
 struct NoteLinkRow: View {
     let title: String
-    var subtitle: String?
+    var subtitle: String? = nil
     let onTap: () -> Void
     var onDelete: (() -> Void)?
 

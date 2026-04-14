@@ -17,7 +17,7 @@ final class AppModelSearchTests: XCTestCase {
         }
     }
 
-    func testBodySearchIndexRebuildAndFilterByBody() async throws {
+    func testBodySearchIndexRebuildsAfterRefresh() async throws {
         let vault = try tempVaultURL()
         let repo = NoteRepository(vaultURL: vault)
         try await repo.ensureVault()
@@ -40,13 +40,57 @@ final class AppModelSearchTests: XCTestCase {
         try await waitForAsync {
             model.bodySearchIndex[idA]?.contains("search-token") ?? false
         }
-
-        model.noteQuery = "search-token"
-        XCTAssertEqual(model.filteredNoteSummaries.count, 1)
-        XCTAssertEqual(model.filteredNoteSummaries.first?.noteID, idA)
     }
 
-    func testSearchSnippetForBodyMatch() async throws {
+    func testVaultSearchFiltersByTitleNotBody() async throws {
+        let vault = try tempVaultURL()
+        let repo = NoteRepository(vaultURL: vault)
+        try await repo.ensureVault()
+        let (_, baseA) = try await repo.createNote(named: "alpha-note")
+        _ = try await repo.createNote(named: "beta-note")
+
+        let model = AppModel(repository: repo)
+        await model.refreshNotes()
+        try await waitForAsync { model.bodySearchIndex.count >= 2 }
+
+        model.selectedBaseName = baseA
+        await model.loadSelectedNote()
+        model.apply(EditCommand.replaceText(range: TextRange(start: 0, length: 0), replacement: "unique-body-xyz-123"))
+        model.changeSelection(baseName: nil)
+        try await waitForAsync { model.selectedBaseName == nil }
+
+        await model.refreshNotes()
+        let idA = try XCTUnwrap(model.noteSummaries.first { $0.relativePath == baseA }?.noteID)
+        try await waitForAsync { model.bodySearchIndex[idA]?.contains("unique-body") ?? false }
+
+        model.vaultSearchQuery = "unique-body"
+        XCTAssertTrue(
+            model.filteredNoteSummaries.isEmpty,
+            "Vault search is name/path only and must not match note bodies."
+        )
+
+        model.vaultSearchQuery = "alpha"
+        XCTAssertEqual(model.filteredNoteSummaries.count, 1)
+        XCTAssertEqual(model.filteredNoteSummaries.first?.relativePath, baseA)
+    }
+
+    func testVaultSearchFiltersByRelativePath() async throws {
+        let vault = try tempVaultURL()
+        let repo = NoteRepository(vaultURL: vault)
+        try await repo.ensureVault()
+        let (_, baseA) = try await repo.createNote(named: "my-special-title")
+        _ = try await repo.createNote(named: "other-note")
+
+        let model = AppModel(repository: repo)
+        await model.refreshNotes()
+        try await waitForAsync { model.bodySearchIndex.count >= 1 }
+
+        model.vaultSearchQuery = baseA
+        XCTAssertEqual(model.filteredNoteSummaries.count, 1)
+        XCTAssertEqual(model.filteredNoteSummaries.first?.relativePath, baseA)
+    }
+
+    func testSearchSnippetIsNilForVaultSearch() async throws {
         let vault = try tempVaultURL()
         let repo = NoteRepository(vaultURL: vault)
         try await repo.ensureVault()
@@ -55,7 +99,6 @@ final class AppModelSearchTests: XCTestCase {
         let model = AppModel(repository: repo)
         await model.refreshNotes()
         try await waitForAsync { model.bodySearchIndex.count >= 1 }
-        XCTAssertFalse(model.isBodySearchIndexBuilding)
 
         model.selectedBaseName = baseA
         await model.loadSelectedNote()
@@ -64,36 +107,45 @@ final class AppModelSearchTests: XCTestCase {
         try await waitForAsync { model.selectedBaseName == nil }
 
         await model.refreshNotes()
-        let idA = try XCTUnwrap(model.noteSummaries.first { $0.relativePath == baseA }?.noteID)
-        try await waitForAsync {
-            model.bodySearchIndex[idA]?.contains("find-me") ?? false
-        }
+        let summary = try XCTUnwrap(model.noteSummaries.first { $0.relativePath == baseA })
 
-        model.noteQuery = "find-me"
-        let summary = try XCTUnwrap(model.filteredNoteSummaries.first)
-        let snippet = model.searchSnippet(for: summary)
-        XCTAssertNotNil(snippet)
-        XCTAssertTrue(snippet!.contains("find-me"))
+        model.vaultSearchQuery = "snippet"
+        XCTAssertNil(model.searchSnippet(for: summary))
     }
 
-    func testActiveDocumentOverridesIndexForUnsavedBodyMatch() async throws {
+    func testVaultSearchMatchingNoteSummariesSortedByTitle() async throws {
         let vault = try tempVaultURL()
         let repo = NoteRepository(vaultURL: vault)
         try await repo.ensureVault()
-        let (_, baseA) = try await repo.createNote(named: "live-note")
+        _ = try await repo.createNote(named: "zebra-note")
+        _ = try await repo.createNote(named: "apple-note")
 
         let model = AppModel(repository: repo)
         await model.refreshNotes()
-        try await waitForAsync { model.bodySearchIndex.count >= 1 }
-        XCTAssertFalse(model.isBodySearchIndexBuilding)
+        try await waitForAsync { model.bodySearchIndex.count >= 2 }
 
-        model.selectedBaseName = baseA
-        await model.loadSelectedNote()
-        model.apply(EditCommand.replaceText(range: TextRange(start: 0, length: 0), replacement: "unsaved-xyz"))
+        model.vaultSearchQuery = "note"
+        let matches = model.vaultSearchMatchingNoteSummaries
+        XCTAssertEqual(matches.count, 2)
+        let titles = matches.map(\.title)
+        XCTAssertEqual(
+            titles.sorted(by: { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }),
+            titles
+        )
+    }
 
-        model.noteQuery = "unsaved-xyz"
-        XCTAssertEqual(model.filteredNoteSummaries.count, 1)
-        XCTAssertEqual(model.filteredNoteSummaries.first?.relativePath, baseA)
+    func testVaultSearchResultSubtitleIncludesFolderAndPath() async throws {
+        let vault = try tempVaultURL()
+        let repo = NoteRepository(vaultURL: vault)
+        try await repo.ensureVault()
+        let (_, path) = try await repo.createNote(named: "solo")
+
+        let model = AppModel(repository: repo)
+        await model.refreshNotes()
+        let summary = try XCTUnwrap(model.noteSummaries.first { $0.relativePath == path })
+        let subtitle = model.vaultSearchResultSubtitle(for: summary)
+        XCTAssertTrue(subtitle.contains("Vault"))
+        XCTAssertTrue(subtitle.contains(path))
     }
 
     func testBodySearchIndexNotBuildingAfterIndexReady() async throws {

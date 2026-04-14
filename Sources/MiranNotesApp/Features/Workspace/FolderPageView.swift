@@ -6,9 +6,15 @@ struct FolderPageView: View {
     @State private var isCommittingFolderRename = false
     @FocusState private var isFolderTitleFocused: Bool
 
+    private var vaultSearchActive: Bool {
+        !model.vaultSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     var body: some View {
         Group {
-            if model.selectedFolderID == nil {
+            if vaultSearchActive {
+                vaultSearchResultsPane
+            } else if model.selectedFolderID == nil {
                 if !model.hasDismissedVaultWelcome {
                     VaultOpenedWelcomeView(vaultPath: model.repository.vaultURL.path)
                 } else {
@@ -54,6 +60,36 @@ struct FolderPageView: View {
                     }
                 }
             }
+        }
+    }
+
+    private var vaultSearchResultsPane: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                Text("Search results")
+                    .font(.largeTitle)
+                    .fontWeight(.bold)
+                    .padding(.bottom, 4)
+
+                let matches = model.vaultSearchMatchingNoteSummaries
+                ForEach(matches) { summary in
+                    NoteLinkRow(
+                        title: summary.title,
+                        subtitle: model.vaultSearchResultSubtitle(for: summary),
+                        onTap: { model.openNote(noteID: summary.noteID) },
+                        onDelete: {
+                            model.deleteNoteFromFolder(noteID: summary.noteID)
+                        }
+                    )
+                }
+
+                if matches.isEmpty {
+                    Text("No matching notes.")
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(20)
         }
     }
 

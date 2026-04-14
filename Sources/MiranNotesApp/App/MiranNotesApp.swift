@@ -271,6 +271,25 @@ private struct WorkspaceDetailColumnView: View {
         return doc.metadata.noteID == id
     }
 
+    private var detailSearchBinding: Binding<String> {
+        Binding(
+            get: {
+                model.selectedNoteID != nil ? model.editorFindQuery : model.vaultSearchQuery
+            },
+            set: { newValue in
+                if model.selectedNoteID != nil {
+                    model.editorFindQuery = newValue
+                } else {
+                    model.vaultSearchQuery = newValue
+                }
+            }
+        )
+    }
+
+    private var detailSearchPrompt: Text {
+        model.selectedNoteID != nil ? Text("Find in note…") : Text("Search vault…")
+    }
+
     var body: some View {
         Group {
             if showsLoadedEditor {
@@ -294,6 +313,7 @@ private struct WorkspaceDetailColumnView: View {
                 FolderPageView(model: model)
             }
         }
+        .searchable(text: detailSearchBinding, prompt: detailSearchPrompt)
     }
 }
 
@@ -334,6 +354,7 @@ struct EditorRootView: View {
                         ),
                         cursorOffset: $model.editorCursorOffset,
                         editorTextSelection: $model.editorTextSelection,
+                        editorFindQuery: $model.editorFindQuery,
                         pendingEditorScroll: model.pendingEditorScroll,
                         onPendingEditorScrollConsumed: { model.clearPendingEditorScroll() },
                         onCommands: { commands in model.apply(commands) },

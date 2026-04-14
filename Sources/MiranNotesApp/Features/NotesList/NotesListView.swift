@@ -66,7 +66,7 @@ struct NotesListView: View {
         if model.noteSummaries.isEmpty {
             return "No notes yet"
         }
-        if !model.noteQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        if !model.vaultSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return "No matching notes"
         }
         return "No notes yet"
@@ -83,9 +83,9 @@ struct NotesListView: View {
         List(selection: selectionBinding) {
             SidebarOutlineRows(entries: model.sidebarOutline, model: model, selectedNoteID: model.selectedNoteID)
         }
-        .searchable(text: $model.noteQuery, prompt: Text("Search notes"))
+        .searchable(text: $model.vaultSearchQuery, prompt: Text("Search vault…"))
         .overlay {
-            let queryNonEmpty = !model.noteQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            let queryNonEmpty = !model.vaultSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             if queryNonEmpty && model.isBodySearchIndexBuilding {
                 Text("Indexing note text…")
                     .foregroundStyle(.secondary)

@@ -84,7 +84,10 @@ final class AppModel {
     var backlinks: [BacklinkItem] = []
     /// When set, the editor scrolls to this range once that note is loaded.
     var pendingEditorScroll: PendingEditorScroll?
-    var noteQuery: String = ""
+    /// Search string for vault-wide note name / path filtering (folder page and legacy outline).
+    var vaultSearchQuery: String = ""
+    /// Find-in-note query driven by the detail column search field when a note is open.
+    var editorFindQuery: String = ""
     /// Raw note body text per `noteID`, built asynchronously after `refreshNotes()` for substring search.
     private(set) var bodySearchIndex: [UUID: String] = [:]
     /// True while `buildBodySearchIndex` is in flight after the latest `scheduleBodySearchIndexRebuild()` (excludes cancelled superseded work).
@@ -574,35 +577,9 @@ final class AppModel {
         return rows
     }
 
-    /// Optional body snippet when the search query matches note text (see `SearchSnippetBuilder`).
-    func searchSnippet(for summary: NoteSummary) -> String? {
-        let q = noteQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !q.isEmpty else { return nil }
-        let ql = q.lowercased()
-        let body: String
-        if let doc = activeDocument, doc.metadata.noteID == summary.noteID {
-            body = doc.text
-        } else if let cached = bodySearchIndex[summary.noteID] {
-            body = cached
-        } else {
-            return nil
-        }
-        guard body.lowercased().contains(ql) else { return nil }
-        return SearchSnippetBuilder.snippet(for: q, in: body)
-    }
-
-    private func noteMatchesSearchQuery(_ summary: NoteSummary, queryLowercased q: String) -> Bool {
-        if summary.relativePath.lowercased().contains(q) { return true }
-        if summary.title.lowercased().contains(q) { return true }
-        let body: String
-        if let doc = activeDocument, doc.metadata.noteID == summary.noteID {
-            body = doc.text
-        } else if let cached = bodySearchIndex[summary.noteID] {
-            body = cached
-        } else {
-            return false
-        }
-        return body.lowercased().contains(q)
+    /// Legacy outline hook: vault search is name/path-only, so body snippets are not shown.
+    func searchSnippet(for _: NoteSummary) -> String? {
+        nil
     }
 
     func createFolder(parentID: UUID = FolderCatalog.rootFolderID, name: String = "New Folder") {
@@ -660,11 +637,34 @@ final class AppModel {
         }
     }
 
-    /// Filtered list for search / query UI (title, path, and indexed body text).
+    /// Filtered list for vault search UI: **title and relative path only** (no body matching).
     var filteredNoteSummaries: [NoteSummary] {
-        let q = noteQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let q = vaultSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !q.isEmpty else { return noteSummaries }
-        return noteSummaries.filter { noteMatchesSearchQuery($0, queryLowercased: q) }
+        return noteSummaries.filter { vaultNameOrPathMatches($0, queryLowercased: q) }
+    }
+
+    /// Vault-wide note rows matching ``vaultSearchQuery`` (sorted by title).
+    var vaultSearchMatchingNoteSummaries: [NoteSummary] {
+        let q = vaultSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !q.isEmpty else { return [] }
+        return noteSummaries
+            .filter { vaultNameOrPathMatches($0, queryLowercased: q) }
+            .sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+    }
+
+    /// Secondary line for vault search results (folder label and path).
+    func vaultSearchResultSubtitle(for summary: NoteSummary) -> String {
+        let folderLabel =
+            summary.folderID == FolderCatalog.rootFolderID ? "Vault"
+            : (folderCatalog.folder(id: summary.folderID)?.name ?? "Folder")
+        return "\(folderLabel) — \(summary.relativePath)"
+    }
+
+    private func vaultNameOrPathMatches(_ summary: NoteSummary, queryLowercased q: String) -> Bool {
+        if summary.relativePath.lowercased().contains(q) { return true }
+        if summary.title.lowercased().contains(q) { return true }
+        return false
     }
 
     func refreshBacklinks() async {

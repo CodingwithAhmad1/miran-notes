@@ -158,6 +158,7 @@ private struct ActiveEditorPane: View {
                         ),
                         cursorOffset: $model.editorCursorOffset,
                         editorTextSelection: $model.editorTextSelection,
+                        editorFindQuery: $model.editorFindQuery,
                         pendingEditorScroll: model.pendingEditorScroll,
                         onPendingEditorScrollConsumed: { model.clearPendingEditorScroll() },
                         onCommands: { commands in model.apply(commands) },

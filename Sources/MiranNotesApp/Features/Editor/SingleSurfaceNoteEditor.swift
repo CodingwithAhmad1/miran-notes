@@ -142,6 +142,8 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
     @Binding var cursorOffset: Int
     /// Full UTF-16 selection (caret when `length == 0`) for `CommandContext` and extensions.
     @Binding var editorTextSelection: MiranNotesCore.TextRange
+    /// Bound to the detail column search field in editor mode; selects the first match from the caret (wrapping).
+    @Binding var editorFindQuery: String
     /// When set for the current document’s `noteID`, the coordinator scrolls to `range` once then calls `onPendingEditorScrollConsumed`.
     var pendingEditorScroll: PendingEditorScroll?
     var onPendingEditorScrollConsumed: (() -> Void)?
@@ -678,7 +680,10 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
         }
 
         func applyDocumentText() {
-            defer { refreshBlockChrome() }
+            defer {
+                refreshBlockChrome()
+                applyEditorFindFromQuery()
+            }
             guard let textView else { return }
             // Avoid clobbering an in-flight IME composition when the model updates (e.g. external reload).
             if textView.hasMarkedText() { return }
@@ -716,6 +721,32 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
                 textView: textView,
                 sampleRate: EditorSyncController.driftSampleRate
             )
+        }
+
+        /// Selects the first case-insensitive match of the bound find query at or after the caret, wrapping to the document start.
+        private func applyEditorFindFromQuery() {
+            guard let textView else { return }
+            guard !textView.hasMarkedText() else { return }
+            let trimmed = parent.editorFindQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return }
+
+            let hay = textView.string as NSString
+            let fullLen = hay.length
+            guard fullLen > 0 else { return }
+
+            let opts: NSString.CompareOptions = [.caseInsensitive, .diacriticInsensitive]
+            let sel = textView.selectedRange()
+            var start = NSMaxRange(sel)
+            if start > fullLen { start = 0 }
+
+            var r = hay.range(of: trimmed, options: opts, range: NSRange(location: start, length: fullLen - start))
+            if r.location == NSNotFound, start > 0 {
+                r = hay.range(of: trimmed, options: opts, range: NSRange(location: 0, length: fullLen))
+            }
+            guard r.location != NSNotFound else { return }
+
+            textView.setSelectedRange(r)
+            textView.scrollRangeToVisible(r)
         }
 
         private func refreshVisualChrome(textView: NSTextView, document: NoteDocument) {
