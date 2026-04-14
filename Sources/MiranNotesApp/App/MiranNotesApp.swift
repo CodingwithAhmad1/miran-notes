@@ -12,18 +12,32 @@ private final class MiranNotesAppDelegate: NSObject, NSApplicationDelegate {
 @main
 struct MiranNotesApp: App {
     @NSApplicationDelegateAdaptor(MiranNotesAppDelegate.self) private var appDelegate
-    @State private var vaultAccess: VaultWorkspaceAccess
-    @State private var model: AppModel
+    @State private var vaultAccess: VaultWorkspaceAccess?
+    @State private var model: AppModel?
     @State private var conflictDetailsPresented = false
     @State private var conflictDetailsDiskDate: Date?
     @State private var editingHelpPresented = false
+    @State private var vaultPickerErrorMessage: String?
 
     init() {
         SlashCommandRegistry.registerBuiltins()
-        let defaultVault = Self.defaultVaultDirectoryURL()
-        let access = VaultWorkspaceAccess.bootstrap(defaultVaultURL: defaultVault)
-        _vaultAccess = State(initialValue: access)
-        _model = State(initialValue: AppModel(repository: NoteRepository(vaultURL: access.vaultRootURL)))
+        let outcome = VaultWorkspaceAccess.bootstrap(defaultVaultURL: Self.bootstrapDefaultVaultURL())
+        switch outcome {
+        case .resolved(let access):
+            _vaultAccess = State(initialValue: access)
+            _model = State(initialValue: AppModel(repository: NoteRepository(vaultURL: access.vaultRootURL)))
+        case .needsUserSelectedVault:
+            _vaultAccess = State(initialValue: nil)
+            _model = State(initialValue: nil)
+        }
+    }
+
+    /// When `MIRAN_USE_DEFAULT_VAULT=1` is set, restores the legacy `~/MiranNotesVault` bootstrap for local iteration without picking a folder.
+    private static func bootstrapDefaultVaultURL() -> URL? {
+        if ProcessInfo.processInfo.environment["MIRAN_USE_DEFAULT_VAULT"] == "1" {
+            return defaultVaultDirectoryURL()
+        }
+        return nil
     }
 
     private static func defaultVaultDirectoryURL() -> URL {
@@ -33,8 +47,101 @@ struct MiranNotesApp: App {
 
     var body: some Scene {
         WindowGroup {
-            workspaceRootView
-            .task {
+            Group {
+                if let model {
+                    MiranNotesMainWindowContent(
+                        model: model,
+                        presentOpenWorkspacePanel: presentOpenWorkspacePanel,
+                        conflictDetailsPresented: $conflictDetailsPresented,
+                        conflictDetailsDiskDate: $conflictDetailsDiskDate,
+                        editingHelpPresented: $editingHelpPresented
+                    )
+                } else {
+                    VaultWelcomeView(onOpenVault: presentOpenWorkspacePanel)
+                        .alert(
+                            "Error",
+                            isPresented: Binding(
+                                get: { vaultPickerErrorMessage != nil },
+                                set: { if !$0 { vaultPickerErrorMessage = nil } }
+                            )
+                        ) {
+                            Button("OK", role: .cancel) {
+                                vaultPickerErrorMessage = nil
+                            }
+                        } message: {
+                            Text(vaultPickerErrorMessage ?? "")
+                        }
+                }
+            }
+        }
+        .commands {
+            CommandGroup(after: .newItem) {
+                Button("Open Workspace…") {
+                    presentOpenWorkspacePanel()
+                }
+                .keyboardShortcut("o", modifiers: [.command, .shift])
+            }
+            CommandGroup(after: .help) {
+                Button("Editing in Miran Notes…") {
+                    editingHelpPresented = true
+                }
+            }
+            CommandMenu("Format") {
+                Button("Bold") {
+                    NSApp.sendAction(Selector(("toggleBold:")), to: nil, from: nil)
+                }
+                .keyboardShortcut("b", modifiers: .command)
+                Button("Italic") {
+                    NSApp.sendAction(Selector(("toggleItalic:")), to: nil, from: nil)
+                }
+                .keyboardShortcut("i", modifiers: .command)
+                Button("Code") {
+                    NSApp.sendAction(Selector(("toggleCodeSpan:")), to: nil, from: nil)
+                }
+                .keyboardShortcut("c", modifiers: [.command, .shift])
+            }
+        }
+    }
+
+    private func presentOpenWorkspacePanel() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = true
+        panel.prompt = "Open"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            let newAccess = try VaultWorkspaceAccess.adoptUserSelectedVaultRoot(url)
+            vaultAccess?.stopAccessingIfNeeded()
+            vaultAccess = newAccess
+            model = AppModel(repository: NoteRepository(vaultURL: newAccess.vaultRootURL))
+            model?.loadVault()
+        } catch {
+            let message =
+                "Could not remember access to the folder you chose. Try again or check disk permissions."
+            if let model {
+                model.userAlert = .message(message)
+            } else {
+                vaultPickerErrorMessage = "\(message) \(error.localizedDescription)"
+            }
+        }
+    }
+
+}
+
+// MARK: - Main window (vault open)
+
+private struct MiranNotesMainWindowContent: View {
+    @Bindable var model: AppModel
+    var presentOpenWorkspacePanel: () -> Void
+    @Binding var conflictDetailsPresented: Bool
+    @Binding var conflictDetailsDiskDate: Date?
+    @Binding var editingHelpPresented: Bool
+
+    var body: some View {
+        workspaceRootView
+            .task(id: model.repository.vaultURL.path) {
                 model.loadVault()
             }
             .sheet(item: $model.externalTextCompare) { payload in
@@ -119,34 +226,6 @@ struct MiranNotesApp: App {
                     Text(ExternalEditConflictCopy.alertMessage)
                 }
             )
-        }
-        .commands {
-            CommandGroup(after: .newItem) {
-                Button("Open Workspace…") {
-                    presentOpenWorkspacePanel()
-                }
-                .keyboardShortcut("o", modifiers: [.command, .shift])
-            }
-            CommandGroup(after: .help) {
-                Button("Editing in Miran Notes…") {
-                    editingHelpPresented = true
-                }
-            }
-            CommandMenu("Format") {
-                Button("Bold") {
-                    NSApp.sendAction(Selector(("toggleBold:")), to: nil, from: nil)
-                }
-                .keyboardShortcut("b", modifiers: .command)
-                Button("Italic") {
-                    NSApp.sendAction(Selector(("toggleItalic:")), to: nil, from: nil)
-                }
-                .keyboardShortcut("i", modifiers: .command)
-                Button("Code") {
-                    NSApp.sendAction(Selector(("toggleCodeSpan:")), to: nil, from: nil)
-                }
-                .keyboardShortcut("c", modifiers: [.command, .shift])
-            }
-        }
     }
 
     private var workspaceRootView: some View {
@@ -170,30 +249,6 @@ struct MiranNotesApp: App {
             }
         }
     }
-
-    private func presentOpenWorkspacePanel() {
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = false
-        panel.canChooseDirectories = true
-        panel.allowsMultipleSelection = false
-        panel.canCreateDirectories = true
-        panel.prompt = "Open"
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        vaultAccess.stopAccessingIfNeeded()
-        do {
-            vaultAccess = try VaultWorkspaceAccess.adoptUserSelectedVaultRoot(url)
-            model = AppModel(repository: NoteRepository(vaultURL: vaultAccess.vaultRootURL))
-            model.loadVault()
-        } catch {
-            vaultAccess = VaultWorkspaceAccess.bootstrap(defaultVaultURL: Self.defaultVaultDirectoryURL())
-            model = AppModel(repository: NoteRepository(vaultURL: vaultAccess.vaultRootURL))
-            model.loadVault()
-            model.userAlert = .message(
-                "Could not remember access to the folder you chose. Opened the default vault instead. Try again or check disk permissions."
-            )
-        }
-    }
-
 }
 
 

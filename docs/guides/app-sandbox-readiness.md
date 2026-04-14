@@ -10,7 +10,7 @@ Authoritative write-up: [ADR 0006: Threat model, vault access capability, and Ap
 
 - **`VaultWorkspaceAccess`** ([`VaultWorkspaceAccess.swift`](../../Sources/MiranNotesApp/Data/VaultWorkspaceAccess.swift)) — resolves the vault root, calls `startAccessingSecurityScopedResource()` / `stopAccessingSecurityScopedResource()` when the OS grants scoped access, and supports **plain URL** behavior when sandboxing is off (typical `swift run` / `swift test`).
 - **`VaultRootBookmarkStore`** ([`VaultRootBookmarkStore.swift`](../../Sources/MiranNotesApp/Data/VaultRootBookmarkStore.swift)) — persists vault-root bookmark **`Data`** under **Application Support** (`MiranNotes/vault-root.bookmark`), separate from wiki **`ExternalBookmarkStore`** data inside the vault.
-- **App shell** ([`MiranNotesApp.swift`](../../Sources/MiranNotesApp/App/MiranNotesApp.swift)) — bootstraps from saved bookmark when valid; otherwise `~/MiranNotesVault`; **Open Workspace…** adopts the panel URL, saves a bookmark, and replaces `NoteRepository` / `AppModel`. Stale or missing on-disk targets clear persistence and fall back to the default path.
+- **App shell** ([`MiranNotesApp.swift`](../../Sources/MiranNotesApp/App/MiranNotesApp.swift)) — bootstraps from saved bookmark when valid; otherwise shows **Open a vault** until the user picks a folder. **`MIRAN_USE_DEFAULT_VAULT=1`** restores legacy bootstrap to `~/MiranNotesVault` for development. **Open Workspace…** adopts the panel URL, saves a bookmark, and replaces `NoteRepository` / `AppModel`. Stale or missing on-disk targets clear persistence and return to the open-vault prompt (or the dev default when that env var is set).
 
 **Not implemented yet:** App Sandbox **entitlements**, an **`.app` bundle** product in this repo, or Hardened Runtime flags. `swift test` remains **unsandboxed** by default.
 
@@ -29,7 +29,7 @@ CI can keep **`swift test`** only; sandboxed `.app` verification can be **manual
 
 ## Risks and trade-offs
 
-- **Bookmark lifecycle:** Stale bookmarks (moved/deleted vault) clear storage and fall back to the default vault path; users who relied on a custom location should use **Open Workspace…** again.
+- **Bookmark lifecycle:** Stale bookmarks (moved/deleted vault) clear storage and prompt to open a vault again; users pick the folder (or a new location) via the welcome screen or **Open Workspace…**.
 - **Developer ergonomics:** Contributors running `swift run` do not need entitlements; behavior matches unsandboxed desktop apps.
 
 ## Related

@@ -1,5 +1,13 @@
 import Foundation
 
+/// Result of resolving vault access at launch before the user picks a folder from ``NSOpenPanel``.
+enum VaultBootstrapOutcome {
+    /// Bookmark restored (or tests supplied a fallback `defaultVaultURL`).
+    case resolved(VaultWorkspaceAccess)
+    /// No valid bookmark and no fallback URL — show the open-vault welcome UI.
+    case needsUserSelectedVault
+}
+
 /// Owns the resolved vault root URL and security-scoped access for that directory.
 /// The app shell uses this only on the main thread. See ADR 0006 (`docs/adr/0006-threat-model-app-sandbox-vault-access.md`).
 final class VaultWorkspaceAccess {
@@ -18,18 +26,28 @@ final class VaultWorkspaceAccess {
         }
     }
 
-    /// Restore saved bookmark, or use `defaultVaultURL` when none / stale / invalid.
-    static func bootstrap(defaultVaultURL: URL) -> VaultWorkspaceAccess {
+    /// Restore saved bookmark; if none or invalid, use `defaultVaultURL` when non-`nil`, else ``VaultBootstrapOutcome/needsUserSelectedVault``.
+    ///
+    /// Pass `defaultVaultURL: nil` for production (Obsidian-style prompt when no saved vault).
+    /// Unit tests may pass a temp directory to assert fallback behavior without UI.
+    static func bootstrap(defaultVaultURL: URL?) -> VaultBootstrapOutcome {
         if let data = VaultRootBookmarkStore.loadBookmarkData() {
             if let restored = resolveBookmarkData(data) {
                 let started = restored.startAccessingSecurityScopedResource()
-                return VaultWorkspaceAccess(vaultRootURL: restored, isSecurityScopedAccessActive: started)
+                return .resolved(
+                    VaultWorkspaceAccess(vaultRootURL: restored, isSecurityScopedAccessActive: started)
+                )
             }
             VaultRootBookmarkStore.clearBookmarkData()
         }
+        guard let defaultVaultURL else {
+            return .needsUserSelectedVault
+        }
         let url = defaultVaultURL.standardizedFileURL
         let started = url.startAccessingSecurityScopedResource()
-        return VaultWorkspaceAccess(vaultRootURL: url, isSecurityScopedAccessActive: started)
+        return .resolved(
+            VaultWorkspaceAccess(vaultRootURL: url, isSecurityScopedAccessActive: started)
+        )
     }
 
     /// Call after the user selects a directory from ``NSOpenPanel``. Persists a bookmark for the next launch.

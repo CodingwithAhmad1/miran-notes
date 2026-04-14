@@ -52,6 +52,10 @@ A simple, minimalistic, Mac-native knowledge storer. Local-first, plain-text sto
 - [~] `/task` and `/session` slash commands — **deactivated** during pivot.  
 - [x] Project builds; `swift test` passes (265 tests).
 
+## Vault (first launch)
+
+On first launch (no saved vault bookmark), the app shows **Open a vault**: pick or create an empty folder; notes and folders live under that directory. The choice is remembered via a security-scoped bookmark in Application Support. To skip the picker during development, run with **`MIRAN_USE_DEFAULT_VAULT=1`** (uses `~/MiranNotesVault`).
+
 ## Run
 
 ```bash

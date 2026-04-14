@@ -29,7 +29,11 @@ final class VaultWorkspaceAccessTests: XCTestCase {
         access1.stopAccessingIfNeeded()
 
         let bogusDefault = root.appendingPathComponent("nonexistent-default", isDirectory: true)
-        let access2 = VaultWorkspaceAccess.bootstrap(defaultVaultURL: bogusDefault)
+        let outcome2 = VaultWorkspaceAccess.bootstrap(defaultVaultURL: bogusDefault)
+        guard case let .resolved(access2) = outcome2 else {
+            XCTFail("expected resolved vault from bookmark")
+            return
+        }
         XCTAssertEqual(access2.vaultRootURL.standardizedFileURL.path, vault.standardizedFileURL.path)
 
         access2.stopAccessingIfNeeded()
@@ -58,10 +62,26 @@ final class VaultWorkspaceAccessTests: XCTestCase {
         let defaultVault = root.appendingPathComponent("DefaultVault", isDirectory: true)
         try FileManager.default.createDirectory(at: defaultVault, withIntermediateDirectories: true)
 
-        let access = VaultWorkspaceAccess.bootstrap(defaultVaultURL: defaultVault)
+        let outcome = VaultWorkspaceAccess.bootstrap(defaultVaultURL: defaultVault)
+        guard case let .resolved(access) = outcome else {
+            XCTFail("expected resolved fallback vault")
+            return
+        }
         XCTAssertEqual(access.vaultRootURL.standardizedFileURL.path, defaultVault.standardizedFileURL.path)
         XCTAssertNil(VaultRootBookmarkStore.loadBookmarkData())
 
         access.stopAccessingIfNeeded()
+    }
+
+    func testBootstrapWithNoBookmarkAndNilDefaultNeedsUserSelection() throws {
+        let root = try tempDir()
+        let bookmarkFile = root.appendingPathComponent("bm")
+        VaultRootBookmarkStore.setBookmarkFileURLForTesting(bookmarkFile)
+
+        let outcome = VaultWorkspaceAccess.bootstrap(defaultVaultURL: nil)
+        guard case .needsUserSelectedVault = outcome else {
+            XCTFail("expected needsUserSelectedVault when no bookmark and no default URL")
+            return
+        }
     }
 }

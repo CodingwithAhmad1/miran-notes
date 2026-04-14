@@ -25,7 +25,7 @@ Long-term distribution may require **notarized, sandboxed** builds. That implies
 
 1. **Single vault-root capability:** Introduce `VaultWorkspaceAccess` as the type that owns **resolved vault root URL** and **security-scoped access** lifecycle (`startAccessingSecurityScopedResource` / `stopAccessingSecurityScopedResource`). App shell constructs `NoteRepository(vaultURL:)` only from this capability’s URL (or immediately after entering a scoped block—same effective contract).
 
-2. **Persistence:** Store **vault root bookmark `Data`** under **Application Support** (`VaultRootBookmarkStore`), not inside the vault. On launch, resolve bookmark; if **stale** or invalid, clear stored data and fall back to the **default dev vault** path (`~/MiranNotesVault`) until the user picks a folder again via **Open Workspace…**.
+2. **Persistence:** Store **vault root bookmark `Data`** under **Application Support** (`VaultRootBookmarkStore`), not inside the vault. On launch, resolve bookmark; if **stale** or invalid, clear stored data and show an **Open a vault** prompt (folder picker) so the user explicitly chooses a vault root—there is **no** silent fallback to a default path in normal builds. For local development only, setting **`MIRAN_USE_DEFAULT_VAULT=1`** restores bootstrap to `~/MiranNotesVault` when no bookmark exists. **Open Workspace…** remains available to switch folders after launch.
 
 3. **Two bookmark domains:** Do not conflate vault-root bookmarks with **`ExternalBookmarkStore`** (wiki / external file targets under `.miran/`). They remain separate products of user consent.
 
