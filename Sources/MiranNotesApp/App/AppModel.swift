@@ -519,6 +519,12 @@ final class AppModel {
             do {
                 index = try await repo.buildBodySearchIndex()
             } catch {
+                await MainActor.run {
+                    Logger.vault.error(
+                        "buildBodySearchIndex failed: \(error.localizedDescription, privacy: .public)"
+                    )
+                    self?.lastError = "Could not update text search for this library."
+                }
                 return
             }
             await MainActor.run {
@@ -1157,6 +1163,10 @@ final class AppModel {
                     let manifest = try await repository.loadManifest()
                     path = manifest.entry(noteID: id)?.relativePath
                 } catch {
+                    Logger.vault.error(
+                        "loadManifest failed during note selection: \(error.localizedDescription, privacy: .public)"
+                    )
+                    lastError = "Could not read the note list."
                     path = nil
                 }
             } else {
@@ -1424,7 +1434,9 @@ final class AppModel {
                 return
             }
         } catch {
-            // Fall through: if the hash cannot be read, still reconcile so external edits are not missed.
+            Logger.vault.debug(
+                "noteTextFileSHA256 failed for active presenter; queuing reconcile: \(error.localizedDescription, privacy: .public)"
+            )
         }
         pendingExternalDiskCheck = true
         await runPendingExternalDiskReconciliationIfNeeded()

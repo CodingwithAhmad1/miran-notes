@@ -109,4 +109,52 @@ final class AppModelWatcherRaceTests: XCTestCase {
             "Subsequent reconciliation while alert is showing should be a no-op"
         )
     }
+
+    /// Many consecutive simulated watcher passes must not corrupt list state or raise spurious conflicts.
+    func testRapidSimulatedWatcherEventsStayConsistent() async throws {
+        let vault = try tempVaultURL()
+        let repo = NoteRepository(vaultURL: vault)
+        try await repo.ensureVault()
+        let (_, baseName) = try await repo.createNote(named: "churn-note")
+
+        let model = AppModel(repository: repo, autosaveDebounceMilliseconds: 100)
+        await model.refreshNotes()
+        XCTAssertEqual(model.noteSummaries.count, 1)
+
+        model.selectedBaseName = baseName
+        await model.loadSelectedNote()
+
+        for _ in 0..<20 {
+            await model.simulateWatcherEvent()
+        }
+
+        XCTAssertNil(model.lastError)
+        XCTAssertNil(model.externalEditConflictAlert)
+        XCTAssertEqual(model.noteSummaries.count, 1)
+        XCTAssertEqual(model.selectedBaseName, baseName)
+    }
+
+    /// Bulk on-disk notes via repository, then refresh, must list all notes with no errors.
+    func testBulkExternalNotesThenRefreshListsAll() async throws {
+        let vault = try tempVaultURL()
+        let repo = NoteRepository(vaultURL: vault)
+        try await repo.ensureVault()
+
+        let bulkCount = 28
+        for i in 0..<bulkCount {
+            _ = try await repo.createNote(named: "bulk-\(i)")
+        }
+
+        let model = AppModel(repository: repo, autosaveDebounceMilliseconds: 100)
+        await model.refreshNotes()
+
+        XCTAssertNil(model.lastError)
+        XCTAssertEqual(model.noteSummaries.count, bulkCount)
+
+        await model.simulateWatcherEvent()
+
+        XCTAssertNil(model.lastError)
+        XCTAssertEqual(model.noteSummaries.count, bulkCount)
+    }
 }
+

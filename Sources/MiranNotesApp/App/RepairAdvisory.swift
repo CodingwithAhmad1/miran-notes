@@ -40,7 +40,7 @@ struct RepairAdvisory: Equatable, Sendable {
             : lines.joined(separator: " ")
         return RepairAdvisory(
             kind: .vaultRecoveryCompleted,
-            title: "Your notes library was verified",
+            title: "We checked your notes library",
             explanation: explanation,
             detailsPlainText: nil
         )

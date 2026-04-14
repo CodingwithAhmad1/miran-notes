@@ -413,6 +413,9 @@ actor NoteRepository {
             do {
                 raw = try await files.readRawNoteText(relativePath: entry.relativePath)
             } catch {
+                Logger.vault.debug(
+                    "buildBodySearchIndex skip path=\(entry.relativePath, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
+                )
                 continue
             }
             result[entry.noteID] = raw

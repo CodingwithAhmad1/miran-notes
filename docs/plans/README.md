@@ -29,6 +29,7 @@ Tools such as Cursor may create plans under **`.cursor/plans/`** on a developer 
 | Plan | Role |
 |------|------|
 | [quality-dimensions-roadmap.md](quality-dimensions-roadmap.md) | Cross-cutting quality backlog: current strengths and prioritized improvements across reliability, architecture, product goals, usability, performance, security/robustness (for contributors and agents) |
+| [reliability-expectations.md](reliability-expectations.md) | Operator-oriented scope notes: startup recovery, link-graph sync thresholds, integrity checks, watcher debounce (aligns advisory copy with real behavior) |
 | [longevity-and-migration-analysis.md](longevity-and-migration-analysis.md) | Longevity assessment; **@Observable** and Swift 6 language mode **done**; remaining: TextKit 2 typing migration |
 | [vault-write-paths-audit.md](vault-write-paths-audit.md) | Vault write path audit notes |
 | [constraints-touchpoint-map.md](constraints-touchpoint-map.md) | Constraints touchpoint mapping |

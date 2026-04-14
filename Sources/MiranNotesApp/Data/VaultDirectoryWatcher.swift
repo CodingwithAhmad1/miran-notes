@@ -10,6 +10,16 @@ final class VaultDirectoryWatcher {
     private var debounceTask: Task<Void, Never>?
     private let onEvent: @MainActor () -> Void
 
+    /// Debounce-only watcher for tests (no FSEvent stream).
+    internal init(
+        debounceMillisecondsForTests debounceMilliseconds: UInt64,
+        onEvent: @escaping @MainActor () -> Void
+    ) {
+        self.debounceNanoseconds = debounceMilliseconds * 1_000_000
+        self.onEvent = onEvent
+        self.stream = nil
+    }
+
     init(
         vaultURL: URL,
         debounceMilliseconds: UInt64 = 150,
@@ -100,7 +110,7 @@ final class VaultDirectoryWatcher {
         }
     }
 
-    fileprivate func handleFSEvent() {
+    internal func handleFSEvent() {
         scheduleDebounced()
     }
 

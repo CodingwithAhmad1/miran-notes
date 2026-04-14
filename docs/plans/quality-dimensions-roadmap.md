@@ -40,6 +40,12 @@ Miran Notes treats **data durability** as a first-class concern: vault changes u
 - **Expected impact:** Faster diagnosis; aligns with completed backlog item for backlink refresh surfacing—**audit** for similar patterns (search index, manifest reconcile).
 - **Constraints / dependencies:** Prefer `os_log` categories + user-visible **non-blocking** banners per [Constraints.md](../../Constraints.md) tone (non-technical titles, optional details).
 
+#### Completed (§1 — 2026-04-14)
+
+- **P1:** `VaultDirectoryWatcher` test initializer (debounce without FSEvents) + `VaultDirectoryWatcherTests`; extended `AppModelWatcherRaceTests` (rapid `simulateWatcherEvent`, bulk note create + refresh / watcher). See [vault-data-layer.md](../architecture/vault-data-layer.md).
+- **P2:** [reliability-expectations.md](reliability-expectations.md) documents recovery scope, link-graph sync thresholds (`startupLinkGraphSyncDecision`), and integrity advisory meaning; `RepairAdvisory.vaultRecoveryNotice` title aligned with actual startup recovery (not a full vault audit).
+- **P3:** `buildBodySearchIndex` failures log and set `lastError`; per-note body read skips log at debug; `loadManifest` failure during note-by-ID selection logs and sets `lastError`; active-note presenter hash read failure logs before queuing reconcile.
+
 ---
 
 ## 2. Architectural cleanliness
@@ -225,3 +231,4 @@ Miran Notes treats **data durability** as a first-class concern: vault changes u
 | Date | Change |
 |------|--------|
 | 2026-04-14 | Initial roadmap derived from repository review and engineering quality dimensions. |
+| 2026-04-14 | §1 Reliability P1–P3 shipped: stress tests, reliability-expectations doc, search/manifest observability (see Completed under §1). |
