@@ -4,6 +4,9 @@ import XCTest
 
 /// CI-friendly statistical harness: median wall time over repeated iterations (no Xcode baseline files).
 final class EditEnginePerformanceStatisticalTests: XCTestCase {
+    private var isRunningOnCI: Bool {
+        ProcessInfo.processInfo.environment["CI"] == "true"
+    }
     private func makeDocument(text: String) -> NoteDocument {
         let noteID = UUID()
         return NoteDocument(
@@ -27,7 +30,8 @@ final class EditEnginePerformanceStatisticalTests: XCTestCase {
 
     func testMedianSequentialInsertsUnderThreshold() {
         let longText = String(repeating: "a", count: 10_000)
-        let iterations = 10
+        // CI runners are slower and noisier than local dev: more samples + looser ceiling (see docs/testing/performance-tests.md).
+        let iterations = isRunningOnCI ? 21 : 10
         let innerOps = 200
         var samples: [Double] = []
         samples.reserveCapacity(iterations)
@@ -48,7 +52,7 @@ final class EditEnginePerformanceStatisticalTests: XCTestCase {
 
         samples.sort()
         let median = samples[samples.count / 2]
-        // Loose threshold (seconds) — tune per CI; fails only on large regressions.
-        XCTAssertLessThan(median, 0.35, "Median edit-engine time too high: \(median)s")
+        let maxMedian = isRunningOnCI ? 0.48 : 0.35
+        XCTAssertLessThan(median, maxMedian, "Median edit-engine time too high: \(median)s (limit \(maxMedian)s)")
     }
 }

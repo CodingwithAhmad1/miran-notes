@@ -213,6 +213,12 @@ Treat the items below as **out of scope for the current product phase** unless a
 - **Expected impact:** Smooth typing in search field; predictable results.
 - **Constraints / dependencies:** `AppModel` search paths and `bodySearchIndex`—profile before adding caching complexity.
 
+#### Completed (§5 — 2026-04-14)
+
+- **P1:** [performance-tests.md](../testing/performance-tests.md) — full-stack (app) profiling checklist, Release / optional Instruments notes, baseline table (TBD until measured); cross-links this roadmap.
+- **P2:** [`EditEnginePerformanceStatisticalTests`](../../Tests/MiranNotesTests/EditEnginePerformanceStatisticalTests.swift) — when `CI=true`: 21 iterations, median ceiling **0.48s**; local dev: 10 iterations, **0.35s**; documented in performance-tests.md.
+- **P3:** [`AppModel.isBodySearchIndexBuilding`](../../Sources/MiranNotesApp/App/AppModel.swift) + clear `bodySearchIndex` on rebuild start and incompatible workspace; [`NoteBodySearchIndexController`](../../Sources/MiranNotesApp/Data/NoteBodySearchIndexController.swift) treats superseded work as `CancellationError` (no spurious search alert); [`NotesListView`](../../Sources/MiranNotesApp/Features/NotesList/NotesListView.swift) “Indexing note text…” overlay; [`AppModelSearchTests`](../../Tests/MiranNotesAppTests/AppModelSearchTests.swift).
+
 ---
 
 ## 6. Security and robustness
@@ -266,3 +272,4 @@ Treat the items below as **out of scope for the current product phase** unless a
 | 2026-04-14 | §3 Goal orientation P1–P3 shipped: active product surface doc, empty-vault welcome UX, non-goals / backlog hygiene (see Completed under §3). |
 | 2026-04-14 | §4 Usability P1–P3 shipped: vault path onboarding + sidebar footer, Editing help sheet, `userAlert` with retry for body search index (see Completed under §4). |
 | 2026-04-14 | §4 follow-up: all `AppModel` error alerts use `UserAlertRecoveryKind` with context-specific Retry (manifest, link graph, backlinks, autosave, watcher, etc.; see Completed §4 P3). |
+| 2026-04-14 | §5 Performance P1–P3 shipped: full-stack perf doc checklist, CI vs local statistical thresholds, body-search indexing UI + `isBodySearchIndexBuilding` (see Completed under §5). |

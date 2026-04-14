@@ -85,7 +85,11 @@ struct NotesListView: View {
         }
         .searchable(text: $model.noteQuery, prompt: Text("Search notes"))
         .overlay {
-            if model.filteredNoteSummaries.isEmpty && !model.isLoading {
+            let queryNonEmpty = !model.noteQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            if queryNonEmpty && model.isBodySearchIndexBuilding {
+                Text("Indexing note text…")
+                    .foregroundStyle(.secondary)
+            } else if model.filteredNoteSummaries.isEmpty && !model.isLoading {
                 Text(emptyListMessage)
                     .foregroundStyle(.secondary)
             }

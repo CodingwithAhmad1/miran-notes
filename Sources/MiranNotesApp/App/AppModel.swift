@@ -89,6 +89,8 @@ final class AppModel {
     var noteQuery: String = ""
     /// Raw note body text per `noteID`, built asynchronously after `refreshNotes()` for substring search.
     private(set) var bodySearchIndex: [UUID: String] = [:]
+    /// True while `buildBodySearchIndex` is in flight after the latest `scheduleBodySearchIndexRebuild()` (excludes cancelled superseded work).
+    private(set) var isBodySearchIndexBuilding = false
     var isLoading = false
     /// User-visible error alert (generic or with optional recovery — e.g. retry body search index).
     var userAlert: UserAlertState = .none
@@ -528,17 +530,25 @@ final class AppModel {
         repairAdvisory = nil
         clearUndoStack()
         bodySearchIndexController.cancel()
+        bodySearchIndex = [:]
+        isBodySearchIndexBuilding = false
         backlinkRefreshScheduler.cancel()
     }
 
     private func scheduleBodySearchIndexRebuild() {
+        bodySearchIndex = [:]
+        isBodySearchIndexBuilding = true
         bodySearchIndexController.scheduleRebuild(
             repository: repository,
             apply: { [weak self] index in
-                self?.bodySearchIndex = index
+                guard let self else { return }
+                self.bodySearchIndex = index
+                self.isBodySearchIndexBuilding = false
             },
             onFailure: { [weak self] in
-                self?.userAlert = .recoverable(
+                guard let self else { return }
+                self.isBodySearchIndexBuilding = false
+                self.userAlert = .recoverable(
                     message: "Could not update text search for this library.",
                     kind: .retryBodySearchIndex
                 )

@@ -26,6 +26,7 @@ final class NoteBodySearchIndexController {
             do {
                 index = try await repository.buildBodySearchIndex()
             } catch {
+                if error is CancellationError { return }
                 await MainActor.run {
                     Logger.vault.error(
                         "buildBodySearchIndex failed: \(error.localizedDescription, privacy: .public)"

@@ -28,6 +28,7 @@ final class AppModelSearchTests: XCTestCase {
         let model = AppModel(repository: repo)
         await model.refreshNotes()
         try await waitForAsync { model.bodySearchIndex.count >= 2 }
+        XCTAssertFalse(model.isBodySearchIndexBuilding)
 
         model.selectedBaseName = baseA
         await model.loadSelectedNote()
@@ -55,6 +56,7 @@ final class AppModelSearchTests: XCTestCase {
         let model = AppModel(repository: repo)
         await model.refreshNotes()
         try await waitForAsync { model.bodySearchIndex.count >= 1 }
+        XCTAssertFalse(model.isBodySearchIndexBuilding)
 
         model.selectedBaseName = baseA
         await model.loadSelectedNote()
@@ -84,6 +86,7 @@ final class AppModelSearchTests: XCTestCase {
         let model = AppModel(repository: repo)
         await model.refreshNotes()
         try await waitForAsync { model.bodySearchIndex.count >= 1 }
+        XCTAssertFalse(model.isBodySearchIndexBuilding)
 
         model.selectedBaseName = baseA
         await model.loadSelectedNote()
@@ -92,5 +95,17 @@ final class AppModelSearchTests: XCTestCase {
         model.noteQuery = "unsaved-xyz"
         XCTAssertEqual(model.filteredNoteSummaries.count, 1)
         XCTAssertEqual(model.filteredNoteSummaries.first?.relativePath, baseA)
+    }
+
+    func testBodySearchIndexNotBuildingAfterIndexReady() async throws {
+        let vault = try tempVaultURL()
+        let repo = NoteRepository(vaultURL: vault)
+        try await repo.ensureVault()
+        _ = try await repo.createNote(named: "solo-note")
+
+        let model = AppModel(repository: repo)
+        await model.refreshNotes()
+        try await waitForAsync { model.bodySearchIndex.count >= 1 }
+        XCTAssertFalse(model.isBodySearchIndexBuilding)
     }
 }
