@@ -148,20 +148,6 @@ private struct ActiveEditorPane: View {
                         onSizeLimitExceeded: { model.presentSizeLimitAdvisory() }
                     )
                 }
-                .toolbar {
-                    ToolbarItemGroup {
-                        Menu("Link") {
-                            ForEach(
-                                model.noteSummaries.filter { $0.noteID != current.metadata.noteID },
-                                id: \.relativePath
-                            ) { note in
-                                Button(note.title) {
-                                    model.insertWikiLink(to: note.noteID, displayText: note.title)
-                                }
-                            }
-                        }
-                    }
-                }
             } else {
                 ContentUnavailableView(
                     "Select a note",

@@ -138,7 +138,7 @@ private struct SlashCommandMenuView: View {
 
 struct SingleSurfaceNoteEditor: NSViewRepresentable {
     @Binding var document: NoteDocument
-    /// Updated on every selection change so callers (e.g. insertWikiLink) know the cursor position.
+    /// Updated on every selection change so the model knows the caret position for cursor-aware edits.
     @Binding var cursorOffset: Int
     /// Full UTF-16 selection (caret when `length == 0`) for `CommandContext` and extensions.
     @Binding var editorTextSelection: MiranNotesCore.TextRange

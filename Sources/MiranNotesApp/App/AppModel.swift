@@ -800,14 +800,6 @@ final class AppModel {
         pendingEditorScroll = nil
     }
 
-    func insertWikiLink(to targetNoteID: UUID, displayText: String? = nil) {
-        guard let doc = activeDocument else { return }
-        let text = displayText ?? (noteSummaries.first { $0.noteID == targetNoteID }?.title ?? "note")
-        let docLength = RangeNormalizer.utf16Length(of: doc.text)
-        let offset = min(max(0, editorCursorOffset), docLength)
-        apply([.insertWikiLink(utf16Offset: offset, targetNoteID: targetNoteID, displayText: text)])
-    }
-
     func renameActiveNote(newTitle: String) {
         guard let oldPath = selectedBaseName else { return }
         Task { @MainActor in
