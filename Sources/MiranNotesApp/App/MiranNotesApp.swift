@@ -153,6 +153,7 @@ private struct MiranNotesMainWindowContent: View {
     @Binding var conflictDetailsPresented: Bool
     @Binding var conflictDetailsDiskDate: Date?
     @Binding var editingHelpPresented: Bool
+    @FocusState private var isToolbarSearchFocused: Bool
 
     var body: some View {
         workspaceRootView
@@ -270,6 +271,11 @@ private struct MiranNotesMainWindowContent: View {
                         .toolbar(removing: .sidebarToggle)
                 } detail: {
                     WorkspaceDetailColumnView(model: model)
+                        .simultaneousGesture(
+                            TapGesture().onEnded { _ in
+                                isToolbarSearchFocused = false
+                            }
+                        )
                 }
                 .toolbar {
                     ToolbarItem(placement: .navigation) {
@@ -297,13 +303,7 @@ private struct MiranNotesMainWindowContent: View {
                     ToolbarItem(placement: .principal) {
                         HStack {
                             Spacer(minLength: 0)
-                            TextField(
-                                "",
-                                text: workspaceSearchBinding,
-                                prompt: workspaceSearchPrompt
-                            )
-                            .textFieldStyle(.roundedBorder)
-                            .frame(maxWidth: Self.toolbarSearchFieldMaxWidth)
+                            vaultToolbarSearchField
                             Spacer(minLength: 0)
                         }
                         .frame(maxWidth: .infinity)
@@ -329,7 +329,29 @@ private struct MiranNotesMainWindowContent: View {
     }
 
     private static let toolbarTitleMaxWidth: CGFloat = 220
-    private static let toolbarSearchFieldMaxWidth: CGFloat = 320
+    private static let toolbarSearchFieldMinWidth: CGFloat = 400
+    private static let toolbarSearchFieldIdealWidth: CGFloat = 500
+    private static let toolbarSearchFieldMaxWidth: CGFloat = 600
+
+    @ViewBuilder
+    private var vaultToolbarSearchField: some View {
+        let outlineOpacity = isToolbarSearchFocused ? 0.42 : 0.18
+        TextField("", text: workspaceSearchBinding, prompt: workspaceSearchPrompt)
+            .textFieldStyle(.plain)
+            .focused($isToolbarSearchFocused)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(Capsule().fill(Color(nsColor: .quaternarySystemFill)))
+            .overlay(
+                Capsule().strokeBorder(Color.primary.opacity(outlineOpacity), lineWidth: 1)
+            )
+            .focusEffectDisabled()
+            .frame(
+                minWidth: Self.toolbarSearchFieldMinWidth,
+                idealWidth: Self.toolbarSearchFieldIdealWidth,
+                maxWidth: Self.toolbarSearchFieldMaxWidth
+            )
+    }
 
     private var vaultWorkspaceToolbarTitle: String {
         if model.selectedNoteID != nil {
