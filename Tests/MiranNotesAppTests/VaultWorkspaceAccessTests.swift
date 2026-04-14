@@ -73,16 +73,6 @@ final class VaultWorkspaceAccessTests: XCTestCase {
         access.stopAccessingIfNeeded()
     }
 
-    func testIsEphemeralVaultRootDetectsTemporarySubtree() {
-        let temp = FileManager.default.temporaryDirectory.standardizedFileURL
-        XCTAssertTrue(VaultWorkspaceAccess.isEphemeralVaultRoot(temp))
-        let underTemp = temp.appendingPathComponent("MiranVaultAccess-UNIT/V", isDirectory: true)
-        XCTAssertTrue(VaultWorkspaceAccess.isEphemeralVaultRoot(underTemp))
-        let docs = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Documents/MyVault", isDirectory: true)
-        XCTAssertFalse(VaultWorkspaceAccess.isEphemeralVaultRoot(docs))
-    }
-
     func testBootstrapWithNoBookmarkAndNilDefaultNeedsUserSelection() throws {
         let root = try tempDir()
         let bookmarkFile = root.appendingPathComponent("bm")

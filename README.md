@@ -54,7 +54,7 @@ A simple, minimalistic, Mac-native knowledge storer. Local-first, plain-text sto
 
 ## Vault (first launch)
 
-On first launch (no saved vault bookmark), the app shows **Open a vault**: pick or create an empty folder; notes and folders live under that directory. The choice is remembered via a security-scoped bookmark in Application Support. To skip the picker during development, run with **`MIRAN_USE_DEFAULT_VAULT=1`** (uses `~/MiranNotesVault`).
+Each time you start the app, it shows **Open a vault** until you pick or create a folder; notes and folders live under that directory for the session. Production builds do not persist a vault-root bookmark (legacy files under Application Support are cleared on launch). To skip the picker during development, run with **`MIRAN_USE_DEFAULT_VAULT=1`** (uses `~/MiranNotesVault`).
 
 ## Run
 

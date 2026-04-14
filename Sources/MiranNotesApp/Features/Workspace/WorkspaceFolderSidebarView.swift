@@ -9,8 +9,8 @@ struct WorkspaceFolderSidebarView: View {
         VStack(spacing: 0) {
             List(selection: folderSelection) {
                 if model.hasRootLevelNotes {
-                    Label("Vault", systemImage: "tray.full")
-                        .tag(Optional(FolderCatalog.rootFolderID))
+                    Label(model.sidebarNotesTrayTitle, systemImage: "tray.full")
+                        .tag(Optional(model.sidebarNotesTrayFolderID))
                 }
                 ForEach(model.topLevelFolderEntries, id: \.id) { folder in
                     Text(folder.name)

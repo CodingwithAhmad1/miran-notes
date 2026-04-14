@@ -2,7 +2,7 @@ import Foundation
 
 /// Result of resolving vault access at launch before the user picks a folder from ``NSOpenPanel``.
 enum VaultBootstrapOutcome {
-    /// Bookmark restored (or tests supplied a fallback `defaultVaultURL`).
+    /// Security-scoped vault access ready (`defaultVaultURL` or unit-test bookmark restore).
     case resolved(VaultWorkspaceAccess)
     /// No valid bookmark and no fallback URL — show the open-vault welcome UI.
     case needsUserSelectedVault
@@ -35,6 +35,7 @@ final class VaultWorkspaceAccess {
         self.isSecurityScopedAccessActive = isSecurityScopedAccessActive
     }
 
+    /// Security-scoped access is managed by ``VaultSecurityScopeCoordinator`` via ``AppModel`` lifetime.
     func stopAccessingIfNeeded() {
         if isSecurityScopedAccessActive {
             vaultRootURL.stopAccessingSecurityScopedResource()
@@ -42,30 +43,26 @@ final class VaultWorkspaceAccess {
         }
     }
 
-    /// Restore saved bookmark; if none or invalid, use `defaultVaultURL` when non-`nil`, else ``VaultBootstrapOutcome/needsUserSelectedVault``.
-    ///
-    /// Pass `defaultVaultURL: nil` for production (Obsidian-style prompt when no saved vault).
-    /// Unit tests may pass a temp directory to assert fallback behavior without UI.
+    /// Production: clears any legacy vault-root bookmark file, does not restore it—user picks a folder each launch unless `defaultVaultURL` is set (e.g. `MIRAN_USE_DEFAULT_VAULT`).
+    /// Unit tests: when ``VaultRootBookmarkStore/isBookmarkFileRedirectedForTesting`` is true, restores from the redirected bookmark file like before.
     static func bootstrap(defaultVaultURL: URL?) -> VaultBootstrapOutcome {
-        if let data = VaultRootBookmarkStore.loadBookmarkData() {
-            if let restored = resolveBookmarkData(data) {
-                if !VaultRootBookmarkStore.isBookmarkFileRedirectedForTesting,
-                   isEphemeralVaultRoot(restored) {
-                    VaultRootBookmarkStore.clearBookmarkData()
-                } else {
+        if VaultRootBookmarkStore.isBookmarkFileRedirectedForTesting {
+            if let data = VaultRootBookmarkStore.loadBookmarkData() {
+                if let restored = resolveBookmarkData(data) {
                     switch WorkspaceCompatibilityScanner.scan(vaultRoot: restored) {
                     case .incompatible:
                         VaultRootBookmarkStore.clearBookmarkData()
                     case .empty, .compatible:
-                        let started = restored.startAccessingSecurityScopedResource()
                         return .resolved(
-                            VaultWorkspaceAccess(vaultRootURL: restored, isSecurityScopedAccessActive: started)
+                            VaultWorkspaceAccess(vaultRootURL: restored, isSecurityScopedAccessActive: false)
                         )
                     }
+                } else {
+                    VaultRootBookmarkStore.clearBookmarkData()
                 }
-            } else {
-                VaultRootBookmarkStore.clearBookmarkData()
             }
+        } else {
+            VaultRootBookmarkStore.clearBookmarkData()
         }
         guard let defaultVaultURL else {
             return .needsUserSelectedVault
@@ -75,14 +72,14 @@ final class VaultWorkspaceAccess {
         case .incompatible:
             return .needsUserSelectedVault
         case .empty, .compatible:
-            let started = url.startAccessingSecurityScopedResource()
             return .resolved(
-                VaultWorkspaceAccess(vaultRootURL: url, isSecurityScopedAccessActive: started)
+                VaultWorkspaceAccess(vaultRootURL: url, isSecurityScopedAccessActive: false)
             )
         }
     }
 
-    /// Call after the user selects a directory from ``NSOpenPanel``. Persists a bookmark for the next launch.
+    /// Call after the user selects a directory from ``NSOpenPanel``.
+    /// Production does not persist a vault-root bookmark; unit tests do when ``VaultRootBookmarkStore/isBookmarkFileRedirectedForTesting`` is true.
     /// Caller should invoke ``stopAccessingIfNeeded()`` on the previous instance before replacing it.
     static func adoptUserSelectedVaultRoot(_ url: URL) throws -> VaultWorkspaceAccess {
         let standardized = url.standardizedFileURL
@@ -92,19 +89,11 @@ final class VaultWorkspaceAccess {
         case .empty, .compatible:
             break
         }
-        let started = standardized.startAccessingSecurityScopedResource()
-        let data = try makeBookmarkData(for: standardized)
-        try VaultRootBookmarkStore.saveBookmarkData(data)
-        return VaultWorkspaceAccess(vaultRootURL: standardized, isSecurityScopedAccessActive: started)
-    }
-
-    /// Vault roots under the process temp tree are not restored on launch in production (see ``bootstrap(defaultVaultURL:)``).
-    internal static func isEphemeralVaultRoot(_ url: URL) -> Bool {
-        let tempRoot = FileManager.default.temporaryDirectory.standardizedFileURL
-        let path = url.standardizedFileURL.path
-        let tempPath = tempRoot.path
-        if path == tempPath { return true }
-        return path.hasPrefix(tempPath + "/")
+        if VaultRootBookmarkStore.isBookmarkFileRedirectedForTesting {
+            let data = try makeBookmarkData(for: standardized)
+            try VaultRootBookmarkStore.saveBookmarkData(data)
+        }
+        return VaultWorkspaceAccess(vaultRootURL: standardized, isSecurityScopedAccessActive: false)
     }
 
     private static func resolveBookmarkData(_ data: Data) -> URL? {

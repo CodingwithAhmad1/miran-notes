@@ -4,7 +4,7 @@ enum VaultRootBookmarkError: Error {
     case applicationSupportUnavailable
 }
 
-/// Persists **vault root** security bookmarks outside the vault (Application Support). Separate from ``ExternalBookmarkStore`` (wiki targets).
+/// Vault-root bookmark file on disk. **Production** does not read or write it (legacy file is removed on launch); **unit tests** redirect the path via ``setBookmarkFileURLForTesting``. Separate from ``ExternalBookmarkStore`` (wiki targets).
 enum VaultRootBookmarkStore {
     private static let appFolderName = "MiranNotes"
     private static let bookmarkFileName = "vault-root.bookmark"
@@ -16,7 +16,7 @@ enum VaultRootBookmarkStore {
         bookmarkFileURLOverride = url
     }
 
-    /// When `true`, bookmark I/O uses a test path; callers may skip production-only bootstrap rules (e.g. rejecting vaults under the temp directory).
+    /// When `true`, bookmark I/O uses a test path and ``VaultWorkspaceAccess`` persists/restores the vault root bookmark for tests only.
     internal static var isBookmarkFileRedirectedForTesting: Bool {
         bookmarkFileURLOverride != nil
     }

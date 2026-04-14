@@ -14,6 +14,7 @@ struct MiranNotesApp: App {
     @NSApplicationDelegateAdaptor(MiranNotesAppDelegate.self) private var appDelegate
     @State private var vaultAccess: VaultWorkspaceAccess?
     @State private var model: AppModel?
+    @State private var sessionRegistry = VaultSessionRegistry()
     @State private var conflictDetailsPresented = false
     @State private var conflictDetailsDiskDate: Date?
     @State private var editingHelpPresented = false
@@ -77,33 +78,52 @@ struct MiranNotesApp: App {
                         }
                 }
             }
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    LayoutToolbarItem(model: model, vaultSessionRegistry: sessionRegistry)
+                }
+            }
+            .environment(sessionRegistry)
         }
-        .commands {
-            CommandGroup(after: .newItem) {
-                Button("Open Workspace…") {
-                    presentOpenWorkspacePanel()
-                }
-                .keyboardShortcut("o", modifiers: [.command, .shift])
+        .commands { appCommands }
+        WindowGroup(for: WorkspaceWindowPayload.self) { $payload in
+            if let payload {
+                SecondaryVaultWindowRoot(
+                    payload: payload,
+                    presentOpenWorkspacePanel: presentOpenWorkspacePanel
+                )
+                .environment(sessionRegistry)
             }
-            CommandGroup(after: .help) {
-                Button("Editing in Miran Notes…") {
-                    editingHelpPresented = true
-                }
+        }
+        .commands { appCommands }
+    }
+
+    @CommandsBuilder
+    private var appCommands: some Commands {
+        CommandGroup(after: .newItem) {
+            Button("Open Workspace…") {
+                presentOpenWorkspacePanel()
             }
-            CommandMenu("Format") {
-                Button("Bold") {
-                    NSApp.sendAction(Selector(("toggleBold:")), to: nil, from: nil)
-                }
-                .keyboardShortcut("b", modifiers: .command)
-                Button("Italic") {
-                    NSApp.sendAction(Selector(("toggleItalic:")), to: nil, from: nil)
-                }
-                .keyboardShortcut("i", modifiers: .command)
-                Button("Code") {
-                    NSApp.sendAction(Selector(("toggleCodeSpan:")), to: nil, from: nil)
-                }
-                .keyboardShortcut("c", modifiers: [.command, .shift])
+            .keyboardShortcut("o", modifiers: [.command, .shift])
+        }
+        CommandGroup(after: .help) {
+            Button("Editing in Miran Notes…") {
+                editingHelpPresented = true
             }
+        }
+        CommandMenu("Format") {
+            Button("Bold") {
+                NSApp.sendAction(Selector(("toggleBold:")), to: nil, from: nil)
+            }
+            .keyboardShortcut("b", modifiers: .command)
+            Button("Italic") {
+                NSApp.sendAction(Selector(("toggleItalic:")), to: nil, from: nil)
+            }
+            .keyboardShortcut("i", modifiers: .command)
+            Button("Code") {
+                NSApp.sendAction(Selector(("toggleCodeSpan:")), to: nil, from: nil)
+            }
+            .keyboardShortcut("c", modifiers: [.command, .shift])
         }
     }
 
@@ -117,7 +137,6 @@ struct MiranNotesApp: App {
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
             let newAccess = try VaultWorkspaceAccess.adoptUserSelectedVaultRoot(url)
-            vaultAccess?.stopAccessingIfNeeded()
             vaultAccess = newAccess
             model = AppModel(repository: NoteRepository(vaultURL: newAccess.vaultRootURL))
             model?.loadVault()
@@ -144,6 +163,7 @@ struct MiranNotesApp: App {
 
 private struct MiranNotesMainWindowContent: View {
     @Bindable var model: AppModel
+    @Environment(VaultSessionRegistry.self) private var vaultSessionRegistry
     var presentOpenWorkspacePanel: () -> Void
     @Binding var conflictDetailsPresented: Bool
     @Binding var conflictDetailsDiskDate: Date?
@@ -151,6 +171,12 @@ private struct MiranNotesMainWindowContent: View {
 
     var body: some View {
         workspaceRootView
+            .onAppear {
+                vaultSessionRegistry.registerSession()
+            }
+            .onDisappear {
+                vaultSessionRegistry.unregisterSession()
+            }
             .task(id: model.repository.vaultURL.path) {
                 model.loadVault()
             }
@@ -293,7 +319,7 @@ private struct WorkspaceDetailColumnView: View {
     var body: some View {
         Group {
             if showsLoadedEditor {
-                EditorRootView(model: model)
+                TiledEditorView(model: model)
             } else if model.selectedNoteID != nil {
                 VStack(spacing: 12) {
                     ProgressView()
@@ -528,6 +554,57 @@ private struct ExternalEditCompareSheet: View {
                     Button("Done", action: onDone)
                 }
             }
+        }
+    }
+}
+
+// MARK: - Secondary vault window (multi-pane layout)
+
+private struct SecondaryVaultWindowRoot: View {
+    let payload: WorkspaceWindowPayload
+    let presentOpenWorkspacePanel: () -> Void
+
+    @Environment(VaultSessionRegistry.self) private var vaultSessionRegistry
+    @State private var model: AppModel?
+    @State private var conflictDetailsPresented = false
+    @State private var conflictDetailsDiskDate: Date?
+    @State private var editingHelpPresented = false
+    @State private var appliedInitialLayout = false
+
+    var body: some View {
+        Group {
+            if let model {
+                MiranNotesMainWindowContent(
+                    model: model,
+                    presentOpenWorkspacePanel: presentOpenWorkspacePanel,
+                    conflictDetailsPresented: $conflictDetailsPresented,
+                    conflictDetailsDiskDate: $conflictDetailsDiskDate,
+                    editingHelpPresented: $editingHelpPresented
+                )
+            } else {
+                ProgressView("Opening workspace…")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                LayoutToolbarItem(model: model, vaultSessionRegistry: vaultSessionRegistry)
+            }
+        }
+        .task(id: payload) {
+            appliedInitialLayout = false
+            let url = URL(fileURLWithPath: payload.vaultPath)
+            let m = AppModel(
+                repository: NoteRepository(vaultURL: url),
+                workspaceScope: payload.workspaceScope
+            )
+            model = m
+            m.loadVault()
+        }
+        .onChange(of: model?.workspaceGateState) { _, new in
+            guard new == .ready, let m = model, !appliedInitialLayout else { return }
+            appliedInitialLayout = true
+            m.setLayout(payload.initialLayout)
         }
     }
 }

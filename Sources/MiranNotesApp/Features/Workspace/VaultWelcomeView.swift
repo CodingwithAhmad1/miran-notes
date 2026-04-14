@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Shown when no vault bookmark exists until the user chooses a folder (Obsidian-style).
+/// Shown on each launch until the user chooses a folder (no persisted vault-root bookmark in production).
 struct VaultWelcomeView: View {
     let onOpenVault: () -> Void
 

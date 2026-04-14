@@ -1,7 +1,7 @@
 import MiranNotesCore
 
 /// The arrangement of note panes in the editor area.
-enum PaneLayout: Int, CaseIterable, Equatable {
+enum PaneLayout: Int, CaseIterable, Equatable, Codable {
     case single
     case twoPane
     case threePane

@@ -5,7 +5,6 @@ import SwiftUI
 /// classic single-pane editor or a tiled arrangement of multiple note panes.
 struct TiledEditorView: View {
     var model: AppModel
-    @State private var layoutSelectorVisible = false
 
     var body: some View {
         Group {
@@ -44,19 +43,6 @@ struct TiledEditorView: View {
                 }
             }
         }
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    layoutSelectorVisible.toggle()
-                } label: {
-                    Image(systemName: "rectangle.split.2x2")
-                }
-                .help("Change layout")
-                .popover(isPresented: $layoutSelectorVisible, arrowEdge: .bottom) {
-                    LayoutSelectorView(model: model)
-                }
-            }
-        }
     }
 
     // MARK: - Single-pane
@@ -72,11 +58,6 @@ struct TiledEditorView: View {
                 systemImage: "note.text",
                 description: Text("Create or open a note to start editing.")
             )
-            .toolbar {
-                // Placeholder toolbar group so the layout button sits alongside the
-                // empty-state detail column without jumping on layout change.
-                ToolbarItemGroup { EmptyView() }
-            }
         }
     }
 

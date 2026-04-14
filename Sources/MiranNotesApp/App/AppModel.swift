@@ -130,7 +130,14 @@ final class AppModel {
     private(set) var hasDismissedVaultWelcome = false
 
     var topLevelFolderEntries: [FolderEntry] {
-        folderCatalog.childFolders(of: FolderCatalog.rootFolderID).sorted {
+        let parent: UUID
+        switch workspaceScope {
+        case .fullVault:
+            parent = FolderCatalog.rootFolderID
+        case .folderSubtree(let rootFolderID):
+            parent = rootFolderID
+        }
+        return folderCatalog.childFolders(of: parent).sorted {
             $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
         }
     }
@@ -148,7 +155,32 @@ final class AppModel {
     }
 
     var hasRootLevelNotes: Bool {
-        noteSummaries.contains { $0.folderID == FolderCatalog.rootFolderID }
+        switch workspaceScope {
+        case .fullVault:
+            return noteSummaries.contains { $0.folderID == FolderCatalog.rootFolderID }
+        case .folderSubtree(let rootFolderID):
+            return noteSummaries.contains { $0.folderID == rootFolderID }
+        }
+    }
+
+    /// Folder ID for the sidebar row that lists notes sitting at the “root” of the visible tree.
+    var sidebarNotesTrayFolderID: UUID {
+        switch workspaceScope {
+        case .fullVault:
+            return FolderCatalog.rootFolderID
+        case .folderSubtree(let rootFolderID):
+            return rootFolderID
+        }
+    }
+
+    /// Title for the notes tray row (e.g. “Vault” or the scoped folder name).
+    var sidebarNotesTrayTitle: String {
+        switch workspaceScope {
+        case .fullVault:
+            return "Vault"
+        case .folderSubtree(let rootFolderID):
+            return folderCatalog.folder(id: rootFolderID)?.name ?? "Folder"
+        }
     }
 
     /// True when the vault has no notes and no folder to show yet (same condition as ``pickDefaultFolderID()`` returning `nil`).
@@ -165,12 +197,15 @@ final class AppModel {
     /// State for the non-active (read-only) view panes. Count is always `currentLayout.paneCount - 1`.
     var viewPaneStates: [ViewPaneState] = []
 
+    /// Limits sidebar/navigation to a folder subtree when not ``WorkspaceScope/fullVault``.
+    var workspaceScope: WorkspaceScope = .fullVault
+
     let repository: NoteRepository
     private let manifestRefreshFacade = VaultManifestRefreshFacade()
     private let bodySearchIndexController = NoteBodySearchIndexController()
     private let backlinkRefreshScheduler = DebouncedAsyncWorkScheduler()
     private var saveTask: Task<Void, Never>?
-    private var vaultWatcher: VaultDirectoryWatcher?
+    private var vaultWatcherSubscription: VaultWatcherSubscription?
     /// Set when the vault watcher fires; processed after autosave finishes so events are not dropped.
     private var pendingExternalDiskCheck = false
     /// Last snapshot known to match on-disk files (after load or successful save). Used with `activeDocument` to detect dirty state.
@@ -226,6 +261,7 @@ final class AppModel {
 
     init(
         repository: NoteRepository,
+        workspaceScope: WorkspaceScope = .fullVault,
         autosaveDebounceMilliseconds: UInt64 = 400,
         undoPolicy: UndoPolicy = .defaultPolicy,
         largeVaultLinkGraphSyncThreshold: Int = 2_000,
@@ -234,12 +270,21 @@ final class AppModel {
         commandPipelineContract: CommandPipelineContract = CommandPipelineContract()
     ) {
         self.repository = repository
+        self.workspaceScope = workspaceScope
         self.autosaveDebounceMilliseconds = autosaveDebounceMilliseconds
         self.undoPolicy = undoPolicy
         self.largeVaultLinkGraphSyncThreshold = largeVaultLinkGraphSyncThreshold
         self.startupLinkGraphSyncBudgetMs = startupLinkGraphSyncBudgetMs
         self.startupLinkGraphSyncHistoryWeight = startupLinkGraphSyncHistoryWeight
         self.commandPipelineContract = commandPipelineContract
+        VaultSecurityScopeCoordinator.shared.retain(repository.vaultURL)
+    }
+
+    deinit {
+        let url = repository.vaultURL
+        Task { @MainActor in
+            VaultSecurityScopeCoordinator.shared.release(url)
+        }
     }
 
     func setUndoManager(_ manager: UndoManager?) {
@@ -431,8 +476,11 @@ final class AppModel {
 
     private func isSelectedFolderStillValid() -> Bool {
         guard let id = selectedFolderID else { return false }
-        if id == FolderCatalog.rootFolderID {
-            return true
+        switch workspaceScope {
+        case .fullVault:
+            if id == FolderCatalog.rootFolderID { return true }
+        case .folderSubtree(let rootFolderID):
+            if id == rootFolderID { return true }
         }
         return folderCatalog.folder(id: id) != nil
     }
@@ -443,7 +491,7 @@ final class AppModel {
             return first.id
         }
         if hasRootLevelNotes {
-            return FolderCatalog.rootFolderID
+            return sidebarNotesTrayFolderID
         }
         return nil
     }
@@ -461,7 +509,7 @@ final class AppModel {
     }
 
     private func applyIncompatibleWorkspaceReport(_ report: CompatibilityReport) {
-        vaultWatcher?.cancel()
+        vaultWatcherSubscription = nil
         workspaceGateState = .incompatible(report)
         noteSummaries = []
         folderCatalog = FolderCatalog()
@@ -1278,8 +1326,8 @@ final class AppModel {
     }
 
     private func startVaultWatcher() {
-        vaultWatcher?.cancel()
-        vaultWatcher = VaultDirectoryWatcher(
+        vaultWatcherSubscription = nil
+        vaultWatcherSubscription = VaultWatcherHub.shared.subscribe(
             vaultURL: repository.vaultURL,
             onSetupFailed: { [weak self] error in
                 self?.userAlert = .recoverable(
