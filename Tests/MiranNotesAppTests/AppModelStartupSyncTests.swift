@@ -65,16 +65,16 @@ final class AppModelStartupSyncTests: XCTestCase {
 
         await model.selectFolderForPage(FolderCatalog.rootFolderID)
 
-        var loaded = false
+        var listed = false
         for _ in 0..<100 {
             if model.selectedFolderID == FolderCatalog.rootFolderID,
-               model.folderPageDocuments.count == 1 {
-                loaded = true
+               model.folderPageNoteSummaries.count == 1 {
+                listed = true
                 break
             }
             try await Task.sleep(for: .milliseconds(25))
         }
-        XCTAssertTrue(loaded, "folder page should load for root notes even when link graph sync is deferred")
+        XCTAssertTrue(listed, "folder page should list root notes even when link graph sync is deferred")
         XCTAssertEqual(model.userAlert, .none)
     }
 }

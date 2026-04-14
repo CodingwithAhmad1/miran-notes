@@ -35,7 +35,6 @@ final class AppModelUserAlertTests: XCTestCase {
             .retryManifestReconcileAfterDiskChange(invalidateCaches: false),
             .retryManifestReconcileAfterDiskChange(invalidateCaches: true),
             .retryRefreshNotesAndFolderUI,
-            .retryLoadFolderPageDocuments,
             .retryRefreshBacklinks,
             .retryLoadActiveNote,
             .retryResolveNoteSelection(noteID: noteID),
@@ -45,7 +44,6 @@ final class AppModelUserAlertTests: XCTestCase {
             .retryProcessExternalDiskActivity,
             .retryOpenExternalEditCompare,
             .retryLoadViewPane(index: 1, baseName: "test-note"),
-            .retryFolderPageAutosave(noteID: noteID),
         ]
 
         for kind in kinds {

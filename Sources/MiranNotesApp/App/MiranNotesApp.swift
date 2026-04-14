@@ -244,8 +244,44 @@ private struct MiranNotesMainWindowContent: View {
                 NavigationSplitView {
                     WorkspaceFolderSidebarView(model: model)
                 } detail: {
-                    FolderPageView(model: model)
+                    WorkspaceDetailColumnView(model: model)
                 }
+            }
+        }
+    }
+}
+
+// MARK: - Workspace detail (folder list vs note editor)
+
+private struct WorkspaceDetailColumnView: View {
+    @Bindable var model: AppModel
+
+    private var showsLoadedEditor: Bool {
+        guard let doc = model.activeDocument, let id = model.selectedNoteID else { return false }
+        return doc.metadata.noteID == id
+    }
+
+    var body: some View {
+        Group {
+            if showsLoadedEditor {
+                EditorRootView(model: model)
+            } else if model.selectedNoteID != nil {
+                VStack(spacing: 12) {
+                    ProgressView()
+                    Text("Loading note…")
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Folder") {
+                            model.closeToFolderPage()
+                        }
+                        .help("Return to folder page")
+                    }
+                }
+            } else {
+                FolderPageView(model: model)
             }
         }
     }
@@ -304,6 +340,12 @@ struct EditorRootView: View {
                 }
                 .navigationTitle("Editor")
                 .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Folder") {
+                            model.closeToFolderPage()
+                        }
+                        .help("Return to folder page")
+                    }
                     ToolbarItemGroup {
                         Menu("Link") {
                             ForEach(model.noteSummaries.filter { $0.noteID != current.metadata.noteID }, id: \.relativePath) { note in

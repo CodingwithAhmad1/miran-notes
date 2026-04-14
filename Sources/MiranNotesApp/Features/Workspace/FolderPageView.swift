@@ -25,7 +25,13 @@ struct FolderPageView: View {
                             .padding(.bottom, 4)
 
                         ForEach(model.folderPageNoteSummaries) { summary in
-                            noteSection(summary)
+                            NoteLinkRow(
+                                title: summary.title,
+                                onTap: { model.openNote(noteID: summary.noteID) },
+                                onDelete: {
+                                    model.deleteNoteFromFolder(noteID: summary.noteID)
+                                }
+                            )
                         }
 
                         if model.folderPageNoteSummaries.isEmpty {
@@ -98,31 +104,4 @@ struct FolderPageView: View {
         }
     }
 
-    @ViewBuilder
-    private func noteSection(_ summary: NoteSummary) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text(summary.title)
-                    .font(.title2)
-                    .fontWeight(.semibold)
-                Spacer()
-                Button(role: .destructive) {
-                    model.deleteNoteFromFolder(noteID: summary.noteID)
-                } label: {
-                    Image(systemName: "trash")
-                }
-                .buttonStyle(.borderless)
-                .help("Delete note")
-            }
-
-            TextEditor(text: model.bindingForFolderPageNoteText(noteID: summary.noteID))
-                .font(.body)
-                .scrollContentBackground(.hidden)
-                .frame(minHeight: 140, alignment: .topLeading)
-                .padding(8)
-                .background(Color(nsColor: .textBackgroundColor))
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-        }
-        .padding(.vertical, 4)
-    }
 }

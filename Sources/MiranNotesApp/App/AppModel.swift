@@ -25,7 +25,6 @@ enum UserAlertRecoveryKind: Equatable, Sendable {
     case retryStartupLinkGraphSync
     case retryManifestReconcileAfterDiskChange(invalidateCaches: Bool)
     case retryRefreshNotesAndFolderUI
-    case retryLoadFolderPageDocuments
     case retryRefreshBacklinks
     case retryLoadActiveNote
     case retryResolveNoteSelection(noteID: UUID?)
@@ -35,7 +34,6 @@ enum UserAlertRecoveryKind: Equatable, Sendable {
     case retryProcessExternalDiskActivity
     case retryOpenExternalEditCompare
     case retryLoadViewPane(index: Int, baseName: String)
-    case retryFolderPageAutosave(noteID: UUID)
 }
 
 /// Modal error presentation: plain message or retryable async failure.
@@ -127,11 +125,6 @@ final class AppModel {
 
     /// When true, the one-time vault welcome in the detail pane will not be shown again for this vault (see ``VaultWelcomeDismissalStore``).
     private(set) var hasDismissedVaultWelcome = false
-
-    /// In-memory buffers for every note shown on the current folder page (parallel editing).
-    private(set) var folderPageDocuments: [UUID: NoteDocument] = [:]
-    private var folderPageLastPersisted: [UUID: NoteDocument] = [:]
-    private var folderPageSaveTasks: [UUID: Task<Void, Never>] = [:]
 
     var topLevelFolderEntries: [FolderEntry] {
         folderCatalog.childFolders(of: FolderCatalog.rootFolderID).sorted {
@@ -419,7 +412,6 @@ final class AppModel {
         }
         // When `selectedFolderID` is nil, keep it nil: either the one-time welcome is showing
         // (`!hasDismissedVaultWelcome`) or the user cleared selection after dismissing the welcome.
-        await loadFolderPageDocuments()
     }
 
     private func markVaultWelcomeDismissedIfNeeded() {
@@ -463,77 +455,6 @@ final class AppModel {
         activeDocument = nil
         lastPersistedDocument = nil
         clearUndoStack()
-        await loadFolderPageDocuments()
-    }
-
-    func loadFolderPageDocuments() async {
-        cancelFolderPageSaveTasks()
-        let result = await FolderPageNoteLoading.loadDocuments(
-            folderID: selectedFolderID,
-            noteSummaries: noteSummaries,
-            repository: repository
-        )
-        folderPageDocuments = result.documents
-        folderPageLastPersisted = result.lastPersisted
-        if let err = result.loadError {
-            userAlert = .recoverable(message: err, kind: .retryLoadFolderPageDocuments)
-        }
-    }
-
-    func bindingForFolderPageNoteText(noteID: UUID) -> Binding<String> {
-        Binding(
-            get: {
-                self.folderPageDocuments[noteID]?.text ?? ""
-            },
-            set: { newText in
-                guard var doc = self.folderPageDocuments[noteID] else { return }
-                doc.text = newText
-                self.folderPageDocuments[noteID] = doc
-                self.scheduleFolderPageSave(noteID: noteID)
-            }
-        )
-    }
-
-    private func scheduleFolderPageSave(noteID: UUID) {
-        folderPageSaveTasks[noteID]?.cancel()
-        folderPageSaveTasks[noteID] = Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(self.autosaveDebounceMilliseconds))
-            guard !Task.isCancelled else { return }
-            await self.flushFolderPageNoteIfDirty(noteID: noteID)
-        }
-    }
-
-    private func flushFolderPageNoteIfDirty(noteID: UUID) async {
-        guard let doc = folderPageDocuments[noteID] else { return }
-        guard let summary = noteSummaries.first(where: { $0.noteID == noteID }) else { return }
-        guard doc != folderPageLastPersisted[noteID] else { return }
-        do {
-            let integrity = try await repository.save(
-                doc,
-                asRelativePath: summary.relativePath,
-                folderID: summary.folderID
-            )
-            applyVaultIntegrityAfterSave(integrity)
-            folderPageLastPersisted[noteID] = doc
-        } catch {
-            userAlert = .recoverable(
-                message: "Autosave failed: \(error.localizedDescription)",
-                kind: .retryFolderPageAutosave(noteID: noteID)
-            )
-        }
-    }
-
-    private func flushAllFolderPageNotesIfDirty() async {
-        for id in Array(folderPageDocuments.keys) {
-            await flushFolderPageNoteIfDirty(noteID: id)
-        }
-    }
-
-    private func cancelFolderPageSaveTasks() {
-        for task in folderPageSaveTasks.values {
-            task.cancel()
-        }
-        folderPageSaveTasks.removeAll()
     }
 
     private func applyIncompatibleWorkspaceReport(_ report: CompatibilityReport) {
@@ -547,9 +468,6 @@ final class AppModel {
         selectedBaseName = nil
         activeDocument = nil
         lastPersistedDocument = nil
-        cancelFolderPageSaveTasks()
-        folderPageDocuments = [:]
-        folderPageLastPersisted = [:]
         backlinks = []
         repairAdvisory = nil
         clearUndoStack()
@@ -593,8 +511,6 @@ final class AppModel {
             Task { await self.reconcileVaultState(invalidateCaches: invalidateCaches) }
         case .retryRefreshNotesAndFolderUI:
             Task { await self.refreshNotes() }
-        case .retryLoadFolderPageDocuments:
-            Task { await self.loadFolderPageDocuments() }
         case .retryRefreshBacklinks:
             Task { await self.refreshBacklinks() }
         case .retryLoadActiveNote:
@@ -617,8 +533,6 @@ final class AppModel {
             openExternalEditCompare()
         case .retryLoadViewPane(let index, let baseName):
             loadViewPane(index: index, baseName: baseName)
-        case .retryFolderPageAutosave(let noteID):
-            Task { await self.flushFolderPageNoteIfDirty(noteID: noteID) }
         }
     }
 
@@ -698,7 +612,6 @@ final class AppModel {
                 markVaultWelcomeDismissedIfNeeded()
                 await refreshNotes()
                 selectedFolderID = id
-                await loadFolderPageDocuments()
             } catch {
                 userAlert = .recoverable(
                     message: error.localizedDescription,
@@ -818,6 +731,11 @@ final class AppModel {
         changeSelection(noteID: noteID)
     }
 
+    /// Leaves the note editor and returns to the folder page (same sidebar folder stays selected when applicable).
+    func closeToFolderPage() {
+        changeSelection(noteID: nil)
+    }
+
     func openBacklinkSource(_ item: BacklinkItem) {
         if !item.linkRange.isEmpty {
             pendingEditorScroll = PendingEditorScroll(noteID: item.sourceNoteID, range: item.linkRange)
@@ -864,7 +782,6 @@ final class AppModel {
     func createNote() {
         Task { @MainActor in
             await flushCurrentNoteToDiskIfDirty()
-            await flushAllFolderPageNotesIfDirty()
             navigationGeneration += 1
             let targetFolder = selectedFolderID ?? FolderCatalog.rootFolderID
             do {
@@ -872,7 +789,6 @@ final class AppModel {
                 markVaultWelcomeDismissedIfNeeded()
                 await refreshNotes()
                 selectedFolderID = targetFolder
-                await loadFolderPageDocuments()
                 selectedBaseName = nil
                 selectedNoteID = nil
                 activeDocument = nil
@@ -896,7 +812,6 @@ final class AppModel {
     /// Performs folder rename and refresh; on failure sets ``userAlert`` and returns `false`.
     @discardableResult
     func renameFolderAndWait(id: UUID, newName: String) async -> Bool {
-        await flushAllFolderPageNotesIfDirty()
         do {
             try await repository.renameFolder(id: id, newName: newName)
             await refreshNotes()
@@ -912,7 +827,6 @@ final class AppModel {
 
     func deleteNoteFromFolder(noteID: UUID) {
         Task { @MainActor in
-            await flushAllFolderPageNotesIfDirty()
             do {
                 try await repository.deleteNote(noteID: noteID)
                 await refreshNotes()
