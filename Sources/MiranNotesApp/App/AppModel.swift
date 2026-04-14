@@ -168,9 +168,7 @@ final class AppModel {
 
     var folderPageNoteSummaries: [NoteSummary] {
         guard let id = selectedFolderID else { return [] }
-        return noteSummaries.filter { $0.folderID == id }.sorted {
-            $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
-        }
+        return noteSummaries.filter { $0.folderID == id }
     }
 
     var hasRootLevelNotes: Bool {
@@ -283,6 +281,15 @@ final class AppModel {
     private let startupLinkGraphSyncHistoryWeight: Double
     private var startupLinkGraphSyncTask: Task<Void, Never>?
     private var activeNoteFilePresenter: ActiveNoteFilePresenter?
+
+    /// Canonical default note ordering (A→Z by title, then path for stable ties).
+    private static func noteSummarySortPredicate(_ lhs: NoteSummary, _ rhs: NoteSummary) -> Bool {
+        let titleOrder = lhs.title.localizedCaseInsensitiveCompare(rhs.title)
+        if titleOrder != .orderedSame {
+            return titleOrder == .orderedAscending
+        }
+        return lhs.relativePath.localizedCaseInsensitiveCompare(rhs.relativePath) == .orderedAscending
+    }
 
     init(
         repository: NoteRepository,
@@ -466,7 +473,7 @@ final class AppModel {
         isLoading = true
         defer { isLoading = false }
         do {
-            noteSummaries = try await repository.listNotes()
+            noteSummaries = try await repository.listNotes().sorted(by: Self.noteSummarySortPredicate)
             folderCatalog = try await repository.loadFolderCatalog()
             scheduleBodySearchIndexRebuild()
         } catch {
@@ -667,9 +674,7 @@ final class AppModel {
         let folders = folderCatalog.childFolders(of: parentID).sorted {
             $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
         }
-        let noteList = notes.filter { $0.folderID == parentID }.sorted {
-            $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
-        }
+        let noteList = notes.filter { $0.folderID == parentID }
         var rows: [SidebarOutlineEntry] = []
         for f in folders {
             let children = buildSidebarOutline(
@@ -787,7 +792,6 @@ final class AppModel {
         guard !q.isEmpty else { return [] }
         return noteSummaries
             .filter { vaultNameOrPathMatches($0, queryLowercased: q) }
-            .sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
     }
 
     /// Secondary line for vault search results (folder label and path).

@@ -329,14 +329,6 @@ private struct MiranNotesMainWindowContent: View {
                                 .help("Back to folder")
                                 .accessibilityLabel("Back to folder")
                             }
-
-                            if model.selectedNoteID != nil || model.isFolderManagementPresented {
-                                Text(toolbarPathLabel)
-                                    .font(.headline)
-                                    .lineLimit(1)
-                                    .truncationMode(.middle)
-                                    .help(toolbarPathLabel)
-                            }
                         }
                     }
                     ToolbarItem(placement: .principal) {
@@ -412,15 +404,6 @@ private struct MiranNotesMainWindowContent: View {
         return model.selectedNoteID != nil ? Text("Find in note…") : Text("Search vault…")
     }
 
-    private var toolbarPathLabel: String {
-        if let notePath = model.selectedBaseName, !notePath.isEmpty {
-            return notePath
-        }
-        if !model.selectedFolderDisplayTitle.isEmpty {
-            return model.selectedFolderDisplayTitle
-        }
-        return model.sidebarNotesTrayTitle
-    }
 }
 
 // MARK: - Workspace detail (folder list vs note editor)
