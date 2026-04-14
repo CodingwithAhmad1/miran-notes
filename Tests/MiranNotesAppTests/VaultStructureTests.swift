@@ -92,4 +92,34 @@ final class VaultStructureTests: XCTestCase {
         XCTAssertTrue(titles.contains(where: { $0.contains("Root") }))
         XCTAssertTrue(titles.contains(where: { $0.contains("Inbox") }))
     }
+
+    func testCreateFolderAllowsDuplicateDisplayNamesWithDistinctPaths() async throws {
+        let vault = try tempVaultURL()
+        let repo = NoteRepository(vaultURL: vault)
+        try await repo.ensureVault()
+
+        let firstID = try await repo.createFolder(parentID: FolderCatalog.rootFolderID, name: "New Folder")
+        let secondID = try await repo.createFolder(parentID: FolderCatalog.rootFolderID, name: "New Folder")
+        XCTAssertNotEqual(firstID, secondID)
+
+        let (_, firstPath) = try await repo.createNote(named: "same", folderID: firstID)
+        let (_, secondPath) = try await repo.createNote(named: "same", folderID: secondID)
+        XCTAssertNotEqual(firstPath, secondPath)
+        XCTAssertTrue(firstPath.hasPrefix("new-folder/"))
+        XCTAssertTrue(secondPath.hasPrefix("new-folder-2/"))
+    }
+
+    func testRenameFolderDoesNotRewriteNoteRelativePaths() async throws {
+        let vault = try tempVaultURL()
+        let repo = NoteRepository(vaultURL: vault)
+        try await repo.ensureVault()
+        let folderID = try await repo.createFolder(parentID: FolderCatalog.rootFolderID, name: "Inbox")
+        let (doc, oldPath) = try await repo.createNote(named: "item", folderID: folderID)
+
+        try await repo.renameFolder(id: folderID, newName: "Renamed")
+
+        let summaries = try await repo.listNotes()
+        let updated = try XCTUnwrap(summaries.first(where: { $0.noteID == doc.metadata.noteID }))
+        XCTAssertEqual(updated.relativePath, oldPath)
+    }
 }

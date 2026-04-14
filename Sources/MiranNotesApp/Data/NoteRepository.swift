@@ -18,7 +18,6 @@ enum NoteRepositoryError: LocalizedError, Equatable {
     case noteNotFoundByID(UUID)
     case folderNotFound(UUID)
     case invalidFolderName(String)
-    case duplicateFolderName(String)
     case invalidFolderMove
     case folderNotEmpty(UUID)
     case unresolvedNoteIdentity(String)
@@ -41,8 +40,6 @@ enum NoteRepositoryError: LocalizedError, Equatable {
             return "Folder not found: \(id.uuidString)"
         case let .invalidFolderName(name):
             return "Invalid folder name: \(name)"
-        case let .duplicateFolderName(name):
-            return "A folder with this name already exists: \(name)"
         case .invalidFolderMove:
             return "That folder cannot be moved there."
         case let .folderNotEmpty(id):
@@ -108,7 +105,7 @@ actor NoteRepository {
             return FolderCatalog.rootFolderID
         }
         for folder in folderCatalog.childFolders(of: FolderCatalog.rootFolderID) {
-            if VaultPath.slugifySegment(folder.name) == first {
+            if folder.storageSegment == first {
                 return folder.id
             }
         }
@@ -919,29 +916,9 @@ actor NoteRepository {
         }
         var folderCatalog = try await index.loadFolderCatalog()
         folderCatalog.ensureRoot()
-        let oldPrefix = folderCatalog.relativeDirectoryPath(for: id)
-        let oldURL = folderCatalog.directoryURL(vaultRoot: vaultURL, folderID: id)
         try folderCatalog.renameFolder(id: id, newName: newName)
-        let newPrefix = folderCatalog.relativeDirectoryPath(for: id)
-        let newURL = folderCatalog.directoryURL(vaultRoot: vaultURL, folderID: id)
-
-        if oldPrefix != newPrefix {
-            if FileManager.default.fileExists(atPath: oldURL.path) {
-                try FileManager.default.createDirectory(at: newURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-                if FileManager.default.fileExists(atPath: newURL.path) {
-                    throw NoteRepositoryError.duplicateFolderName(newName)
-                }
-                try FileManager.default.moveItem(at: oldURL, to: newURL)
-            } else if !FileManager.default.fileExists(atPath: newURL.path) {
-                try FileManager.default.createDirectory(at: newURL, withIntermediateDirectories: true)
-            }
-        }
-
-        var manifest = try await loadOrRebuildManifest()
-        var pathIndex = try await index.loadPathIndex()
-        if oldPrefix != newPrefix {
-            applyRelativePathPrefixRewrite(from: oldPrefix, to: newPrefix, manifest: &manifest, pathIndex: &pathIndex)
-        }
+        let manifest = try await loadOrRebuildManifest()
+        let pathIndex = try await index.loadPathIndex()
         let graph = try await index.loadLinkGraph()
         let rel = try await index.loadRelationshipIndex()
         await index.logIfIntegrityIssues(try await index.commitIndexOnly(

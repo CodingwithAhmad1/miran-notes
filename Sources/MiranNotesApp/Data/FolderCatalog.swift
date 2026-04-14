@@ -2,7 +2,7 @@ import Foundation
 import MiranNotesCore
 
 struct FolderCatalog: Codable, Equatable, Sendable {
-    static let currentSchemaVersion = 1
+    static let currentSchemaVersion = 2
     static let rootFolderID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
 
     var schemaVersion: Int
@@ -23,17 +23,48 @@ struct FolderCatalog: Codable, Equatable, Sendable {
             folders.insert(.root, at: 0)
             isDirty = true
         }
+        ensureStorageSegments()
     }
 }
 
 struct FolderEntry: Codable, Equatable, Hashable, Sendable {
     var id: UUID
     var name: String
+    /// Stable on-disk segment used for directory layout (independent from display `name`).
+    var storageSegment: String
     var parentFolderID: UUID?
+
+    init(id: UUID, name: String, storageSegment: String? = nil, parentFolderID: UUID?) {
+        self.id = id
+        self.name = name
+        if let storageSegment {
+            self.storageSegment = storageSegment
+        } else {
+            self.storageSegment = id == FolderCatalog.rootFolderID ? "" : VaultPath.slugifySegment(name)
+        }
+        self.parentFolderID = parentFolderID
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, storageSegment, parentFolderID
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        parentFolderID = try container.decodeIfPresent(UUID.self, forKey: .parentFolderID)
+        if let stored = try container.decodeIfPresent(String.self, forKey: .storageSegment), !stored.isEmpty || id == FolderCatalog.rootFolderID {
+            storageSegment = id == FolderCatalog.rootFolderID ? "" : stored
+        } else {
+            storageSegment = id == FolderCatalog.rootFolderID ? "" : VaultPath.slugifySegment(name)
+        }
+    }
 
     static let root = FolderEntry(
         id: FolderCatalog.rootFolderID,
         name: "Vault",
+        storageSegment: "",
         parentFolderID: nil
     )
 }
