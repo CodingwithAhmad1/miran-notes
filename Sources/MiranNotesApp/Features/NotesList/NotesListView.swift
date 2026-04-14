@@ -101,9 +101,8 @@ private struct SidebarOutlineRows: View {
 
 struct NotesListView: View {
     @Bindable var model: AppModel
-    /// When this list is shown beside the principal toolbar search field, wire this to clear that field’s focus.
+    /// When this list is shown beside the window toolbar search field, wire this to clear that field’s focus.
     var onDismissCompanionToolbarSearch: () -> Void = {}
-    @Environment(\.dismissSearch) private var dismissSearch
     @Environment(\.controlActiveState) private var controlActiveState
     @Environment(\.scenePhase) private var scenePhase
 
@@ -128,21 +127,19 @@ struct NotesListView: View {
         List(selection: selectionBinding) {
             SidebarOutlineRows(entries: model.sidebarOutline, model: model, selectedNoteID: model.selectedNoteID)
         }
-        .searchable(text: $model.vaultSearchQuery, prompt: Text("Search vault…"))
         .simultaneousGesture(
             TapGesture().onEnded { _ in
-                dismissSearch()
                 onDismissCompanionToolbarSearch()
             }
         )
         .onChange(of: controlActiveState) { _, newValue in
             if newValue == .inactive {
-                dismissSearch()
+                onDismissCompanionToolbarSearch()
             }
         }
         .onChange(of: scenePhase) { _, phase in
             if phase != .active {
-                dismissSearch()
+                onDismissCompanionToolbarSearch()
             }
         }
         .overlay {

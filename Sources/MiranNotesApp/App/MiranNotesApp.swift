@@ -314,70 +314,73 @@ private struct MiranNotesMainWindowContent: View {
             model.isFolderManagementPresented || model.selectedNoteID != nil
         NavigationSplitView {
             WorkspaceFolderSidebarView(model: model, onClearToolbarSearchFocus: clearToolbarSearchFocus)
+                .navigationSplitViewColumnWidth(min: 180, ideal: 240, max: 420)
                 .toolbar(removing: .sidebarToggle)
         } detail: {
-            WorkspaceDetailColumnView(model: model, onClearToolbarSearchFocus: clearToolbarSearchFocus)
-        }
-        .onPreferenceChange(DetailColumnWidthPreferenceKey.self) { measuredDetailColumnWidth = $0 }
-        .toolbar {
-            ToolbarItem(placement: .navigation) {
-                HStack(spacing: 8) {
-                    if model.isFolderManagementPresented {
-                        Button {
-                            isToolbarSearchFocused = false
-                            model.isFolderManagementPresented = false
-                        } label: {
-                            Image(systemName: "chevron.left")
-                                .font(.system(size: 13, weight: .semibold))
-                                .frame(width: 30, height: 30)
-                                .background(
-                                    Circle().fill(Color(nsColor: .quaternarySystemFill))
-                                )
-                                .contentShape(Circle())
+            NavigationStack {
+                WorkspaceDetailColumnView(model: model, onClearToolbarSearchFocus: clearToolbarSearchFocus)
+            }
+            .toolbar {
+                ToolbarItem(placement: .navigation) {
+                    HStack(spacing: 8) {
+                        if model.isFolderManagementPresented {
+                            Button {
+                                isToolbarSearchFocused = false
+                                model.isFolderManagementPresented = false
+                            } label: {
+                                Image(systemName: "chevron.left")
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .frame(width: 30, height: 30)
+                                    .background(
+                                        Circle().fill(Color(nsColor: .quaternarySystemFill))
+                                    )
+                                    .contentShape(Circle())
+                            }
+                            .buttonStyle(.plain)
+                            .frame(width: 34, height: 34)
+                            .contentShape(Rectangle())
+                            .help("Back to vault")
+                            .accessibilityLabel("Back to vault")
+                        } else if model.selectedNoteID != nil {
+                            Button {
+                                clearToolbarSearchFocus()
+                                model.closeToFolderPage()
+                            } label: {
+                                Image(systemName: "chevron.left")
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .frame(width: 30, height: 30)
+                                    .background(
+                                        Circle().fill(Color(nsColor: .quaternarySystemFill))
+                                    )
+                                    .contentShape(Circle())
+                            }
+                            .buttonStyle(.plain)
+                            .frame(width: 34, height: 34)
+                            .contentShape(Rectangle())
+                            .help("Back to folder")
+                            .accessibilityLabel("Back to folder")
                         }
-                        .buttonStyle(.plain)
-                        .frame(width: 34, height: 34)
-                        .contentShape(Rectangle())
-                        .help("Back to vault")
-                        .accessibilityLabel("Back to vault")
-                    } else if model.selectedNoteID != nil {
-                        Button {
-                            clearToolbarSearchFocus()
-                            model.closeToFolderPage()
-                        } label: {
-                            Image(systemName: "chevron.left")
-                                .font(.system(size: 13, weight: .semibold))
-                                .frame(width: 30, height: 30)
-                                .background(
-                                    Circle().fill(Color(nsColor: .quaternarySystemFill))
-                                )
-                                .contentShape(Circle())
-                        }
-                        .buttonStyle(.plain)
-                        .frame(width: 34, height: 34)
-                        .contentShape(Rectangle())
-                        .help("Back to folder")
-                        .accessibilityLabel("Back to folder")
+                    }
+                }
+                ToolbarItem(placement: .principal) {
+                    vaultToolbarSearchField(
+                        toolbarLayoutWidth: toolbarLayoutWidth,
+                        showsBackNavigation: showsBackNavigation
+                    )
+                }
+                if !Self.shouldHideTrailingToolbarControls(width: toolbarLayoutWidth) {
+                    ToolbarItemGroup(placement: .primaryAction) {
+                        LayoutToolbarItem(
+                            model: model,
+                            vaultSessionRegistry: vaultSessionRegistry,
+                            onToolbarInteraction: clearToolbarSearchFocus
+                        )
+                        FolderManagementToolbarButton(model: model, onToolbarInteraction: clearToolbarSearchFocus)
                     }
                 }
             }
-            ToolbarItem(placement: .principal) {
-                vaultToolbarSearchField(
-                    toolbarLayoutWidth: toolbarLayoutWidth,
-                    showsBackNavigation: showsBackNavigation
-                )
-            }
-            if !Self.shouldHideTrailingToolbarControls(width: toolbarLayoutWidth) {
-                ToolbarItemGroup(placement: .primaryAction) {
-                    LayoutToolbarItem(
-                        model: model,
-                        vaultSessionRegistry: vaultSessionRegistry,
-                        onToolbarInteraction: clearToolbarSearchFocus
-                    )
-                    FolderManagementToolbarButton(model: model, onToolbarInteraction: clearToolbarSearchFocus)
-                }
-            }
         }
+        .onPreferenceChange(DetailColumnWidthPreferenceKey.self) { measuredDetailColumnWidth = $0 }
     }
 
     /// Prefer the measured detail column width (toolbar row); fall back to full window width before first layout.
@@ -424,7 +427,6 @@ private struct MiranNotesMainWindowContent: View {
         showsBackNavigation: Bool
     ) -> some View {
         let showsSearchRing = isToolbarSearchFocused && controlActiveState == .active
-        let outlineOpacity = showsSearchRing ? 0.42 : 0.18
         let frames = Self.toolbarSearchFieldFrameWidths(
             toolbarLayoutWidth: toolbarLayoutWidth,
             showsBackNavigation: showsBackNavigation
@@ -434,12 +436,13 @@ private struct MiranNotesMainWindowContent: View {
             isFocused: $isToolbarSearchFocused,
             placeholder: workspaceSearchPlaceholder
         )
-        .padding(.horizontal, 10)
-        .padding(.vertical, 4)
-        .background(Capsule().fill(Color(nsColor: .quaternarySystemFill)))
-        .overlay(
-            Capsule().strokeBorder(Color.primary.opacity(outlineOpacity), lineWidth: 1)
-        )
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
+        .overlay {
+            if showsSearchRing {
+                Capsule().strokeBorder(Color.accentColor.opacity(0.55), lineWidth: 1.5)
+            }
+        }
         .frame(minWidth: frames.min, idealWidth: frames.ideal, maxWidth: frames.max)
     }
 

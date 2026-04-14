@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct WorkspaceFolderSidebarView: View {
@@ -7,38 +8,42 @@ struct WorkspaceFolderSidebarView: View {
     @State private var renameFieldText = ""
 
     var body: some View {
-        // Keep the footer outside the List’s scroll/table surface. On macOS, an almost-empty sidebar
-        // List can otherwise expand its NSTableView in ways that swallow sibling stacks/overlays.
-        GeometryReader { geometry in
-            let listHeight = max(0, geometry.size.height - Self.sidebarFooterReserveHeight)
-            VStack(spacing: 0) {
-                List(selection: folderSelection) {
-                    Label(model.sidebarNotesTrayTitle, systemImage: "tray.full")
-                        .tag(Optional(model.sidebarNotesTrayFolderID))
-                    ForEach(model.visibleTopLevelFolderEntries, id: \.id) { folder in
-                        Text(folder.name)
-                            .tag(Optional(folder.id))
-                            .contextMenu {
-                                Button("Rename…") {
-                                    renamingFolder = folder
-                                    renameFieldText = folder.name
-                                }
-                                Button("Delete Folder", role: .destructive) {
-                                    model.deleteFolder(id: folder.id)
-                                }
+        // Sidebar `List` is backed by AppKit `NSTableView` inside an `NSScrollView`. In sparse lists,
+        // that scroll view can paint (and hit-test) through the SwiftUI stack until something forces
+        // a relayout (e.g. toggling Folder Management / the unified toolbar). Pinning `masksToBounds`
+        // on the enclosing scroll view keeps the table from swallowing the footer below this list.
+        VStack(spacing: 0) {
+            List(selection: folderSelection) {
+                Label(model.sidebarNotesTrayTitle, systemImage: "tray.full")
+                    .tag(Optional(model.sidebarNotesTrayFolderID))
+                ForEach(model.visibleTopLevelFolderEntries, id: \.id) { folder in
+                    Text(folder.name)
+                        .tag(Optional(folder.id))
+                        .contextMenu {
+                            Button("Rename…") {
+                                renamingFolder = folder
+                                renameFieldText = folder.name
                             }
-                    }
+                            Button("Delete Folder", role: .destructive) {
+                                model.deleteFolder(id: folder.id)
+                            }
+                        }
                 }
-                .frame(width: geometry.size.width, height: listHeight)
-
-                VStack(spacing: 0) {
-                    Divider()
-                    sidebarActionsFooter
-                    workspaceLocationFooter
-                }
-                .frame(width: geometry.size.width, height: Self.sidebarFooterReserveHeight, alignment: .top)
-                .background(.regularMaterial)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .overlay {
+                ListEnclosingScrollViewClip()
+                    .allowsHitTesting(false)
+            }
+
+            VStack(spacing: 0) {
+                Divider()
+                sidebarActionsFooter
+                workspaceLocationFooter
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .fixedSize(horizontal: false, vertical: true)
+            .background(.regularMaterial)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .simultaneousGesture(
@@ -148,7 +153,60 @@ struct WorkspaceFolderSidebarView: View {
         }
         return String(path[s..<headEnd]) + "…" + String(path[tailStart..<e])
     }
+}
 
-    /// Reserved height for the non-scrolling footer (actions + path + shortcut). Sized for caption text + padding.
-    private static let sidebarFooterReserveHeight: CGFloat = 104
+// MARK: - AppKit clip fix (SwiftUI List / NSTableView)
+
+private final class ListClipAnchorView: NSView {
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        MainActor.assumeIsolated {
+            ListScrollViewClip.applyEnclosingScrollViewClipping(anchor: self)
+        }
+    }
+
+    override func viewDidMoveToSuperview() {
+        super.viewDidMoveToSuperview()
+        MainActor.assumeIsolated {
+            ListScrollViewClip.applyEnclosingScrollViewClipping(anchor: self)
+        }
+    }
+
+    override func layout() {
+        super.layout()
+        MainActor.assumeIsolated {
+            ListScrollViewClip.applyEnclosingScrollViewClipping(anchor: self)
+        }
+    }
+}
+
+@MainActor
+private enum ListScrollViewClip {
+    static func applyEnclosingScrollViewClipping(anchor: NSView) {
+        var current: NSView? = anchor
+        while let view = current {
+            if let scroll = view as? NSScrollView {
+                scroll.clipsToBounds = true
+                scroll.wantsLayer = true
+                scroll.layer?.masksToBounds = true
+                let clipView = scroll.contentView
+                clipView.wantsLayer = true
+                clipView.layer?.masksToBounds = true
+                return
+            }
+            current = view.superview
+        }
+    }
+}
+
+private struct ListEnclosingScrollViewClip: NSViewRepresentable {
+    func makeNSView(context: Context) -> ListClipAnchorView {
+        ListClipAnchorView()
+    }
+
+    func updateNSView(_ nsView: ListClipAnchorView, context: Context) {
+        Task { @MainActor in
+            ListScrollViewClip.applyEnclosingScrollViewClipping(anchor: nsView)
+        }
+    }
 }
