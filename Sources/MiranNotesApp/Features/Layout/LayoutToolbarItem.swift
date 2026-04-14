@@ -4,6 +4,7 @@ import SwiftUI
 struct LayoutToolbarItem: View {
     var model: AppModel?
     var vaultSessionRegistry: VaultSessionRegistry
+    var onToolbarInteraction: () -> Void = {}
     @State private var layoutSelectorVisible = false
 
     private var isGloballyActive: Bool {
@@ -16,6 +17,7 @@ struct LayoutToolbarItem: View {
 
     var body: some View {
         Button {
+            onToolbarInteraction()
             guard canPickLayout else { return }
             layoutSelectorVisible.toggle()
         } label: {

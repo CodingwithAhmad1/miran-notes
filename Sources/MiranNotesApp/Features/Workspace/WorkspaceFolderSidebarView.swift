@@ -2,6 +2,7 @@ import SwiftUI
 
 struct WorkspaceFolderSidebarView: View {
     @Bindable var model: AppModel
+    var onClearToolbarSearchFocus: () -> Void = {}
     @State private var renamingFolder: FolderEntry?
     @State private var renameFieldText = ""
 
@@ -27,6 +28,11 @@ struct WorkspaceFolderSidebarView: View {
             .frame(maxHeight: .infinity, alignment: .top)
             workspaceLocationFooter
         }
+        .simultaneousGesture(
+            TapGesture().onEnded { _ in
+                onClearToolbarSearchFocus()
+            }
+        )
         .navigationTitle("Folders")
         .alert("Rename Folder", isPresented: renameBinding, presenting: renamingFolder) { folder in
             TextField("Name", text: $renameFieldText)
@@ -46,11 +52,13 @@ struct WorkspaceFolderSidebarView: View {
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 Button {
+                    onClearToolbarSearchFocus()
                     model.createFolder()
                 } label: {
                     Label("New Folder", systemImage: "folder.badge.plus")
                 }
                 Button {
+                    onClearToolbarSearchFocus()
                     model.createNote()
                 } label: {
                     Label("New Note", systemImage: "plus")

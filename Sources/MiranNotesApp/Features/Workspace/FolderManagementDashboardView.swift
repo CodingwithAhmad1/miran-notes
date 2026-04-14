@@ -2,6 +2,7 @@ import SwiftUI
 
 struct FolderManagementToolbarButton: View {
     var model: AppModel?
+    var onToolbarInteraction: () -> Void = {}
 
     private var isEnabled: Bool {
         guard let model else { return false }
@@ -11,6 +12,7 @@ struct FolderManagementToolbarButton: View {
 
     var body: some View {
         Button {
+            onToolbarInteraction()
             model?.isFolderManagementPresented = true
         } label: {
             Image(systemName: "gearshape")

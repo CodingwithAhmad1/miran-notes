@@ -119,6 +119,9 @@ struct MiranNotesApp: App {
         panel.allowsMultipleSelection = false
         panel.canCreateDirectories = true
         panel.prompt = "Open"
+        if let desktop = FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask).first {
+            panel.directoryURL = desktop
+        }
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
             let newAccess = try VaultWorkspaceAccess.adoptUserSelectedVaultRoot(url)
@@ -149,14 +152,30 @@ struct MiranNotesApp: App {
 private struct MiranNotesMainWindowContent: View {
     @Bindable var model: AppModel
     @Environment(VaultSessionRegistry.self) private var vaultSessionRegistry
+    @Environment(\.controlActiveState) private var controlActiveState
+    @Environment(\.scenePhase) private var scenePhase
     var presentOpenWorkspacePanel: () -> Void
     @Binding var conflictDetailsPresented: Bool
     @Binding var conflictDetailsDiskDate: Date?
     @Binding var editingHelpPresented: Bool
     @FocusState private var isToolbarSearchFocused: Bool
 
+    private func clearToolbarSearchFocus() {
+        isToolbarSearchFocused = false
+    }
+
     var body: some View {
         workspaceRootView
+            .onChange(of: controlActiveState) { _, newValue in
+                if newValue == .inactive {
+                    isToolbarSearchFocused = false
+                }
+            }
+            .onChange(of: scenePhase) { _, phase in
+                if phase != .active {
+                    isToolbarSearchFocused = false
+                }
+            }
             .onAppear {
                 vaultSessionRegistry.registerSession()
             }
@@ -264,21 +283,17 @@ private struct MiranNotesMainWindowContent: View {
                 WorkspaceIncompatibleView(report: report, onChooseDifferentFolder: presentOpenWorkspacePanel)
             case .ready:
                 NavigationSplitView {
-                    WorkspaceFolderSidebarView(model: model)
+                    WorkspaceFolderSidebarView(model: model, onClearToolbarSearchFocus: clearToolbarSearchFocus)
                         .toolbar(removing: .sidebarToggle)
                 } detail: {
-                    WorkspaceDetailColumnView(model: model)
-                        .simultaneousGesture(
-                            TapGesture().onEnded { _ in
-                                isToolbarSearchFocused = false
-                            }
-                        )
+                    WorkspaceDetailColumnView(model: model, onClearToolbarSearchFocus: clearToolbarSearchFocus)
                 }
                 .toolbar {
                     ToolbarItem(placement: .navigation) {
                         HStack(spacing: 8) {
                             if model.isFolderManagementPresented {
                                 Button {
+                                    isToolbarSearchFocused = false
                                     model.isFolderManagementPresented = false
                                 } label: {
                                     Image(systemName: "chevron.left")
@@ -288,6 +303,7 @@ private struct MiranNotesMainWindowContent: View {
                                 .accessibilityLabel("Back to vault")
                             } else if model.selectedNoteID != nil {
                                 Button {
+                                    clearToolbarSearchFocus()
                                     model.closeToFolderPage()
                                 } label: {
                                     Image(systemName: "chevron.left")
@@ -315,8 +331,13 @@ private struct MiranNotesMainWindowContent: View {
                         .frame(maxWidth: .infinity)
                     }
                     ToolbarItemGroup(placement: .primaryAction) {
-                        LayoutToolbarItem(model: model, vaultSessionRegistry: vaultSessionRegistry)
+                        LayoutToolbarItem(
+                            model: model,
+                            vaultSessionRegistry: vaultSessionRegistry,
+                            onToolbarInteraction: clearToolbarSearchFocus
+                        )
                         Button {
+                            clearToolbarSearchFocus()
                             model.createNote()
                         } label: {
                             Label("New Note", systemImage: "plus")
@@ -329,7 +350,7 @@ private struct MiranNotesMainWindowContent: View {
                                     ? "Create a new note in the selected folder"
                                     : "Select a folder (not Vault) to create a note"
                         )
-                        FolderManagementToolbarButton(model: model)
+                        FolderManagementToolbarButton(model: model, onToolbarInteraction: clearToolbarSearchFocus)
                     }
                 }
             }
@@ -343,7 +364,8 @@ private struct MiranNotesMainWindowContent: View {
 
     @ViewBuilder
     private var vaultToolbarSearchField: some View {
-        let outlineOpacity = isToolbarSearchFocused ? 0.42 : 0.18
+        let showsSearchRing = isToolbarSearchFocused && controlActiveState == .active
+        let outlineOpacity = showsSearchRing ? 0.42 : 0.18
         TextField("", text: workspaceSearchBinding, prompt: workspaceSearchPrompt)
             .textFieldStyle(.plain)
             .focused($isToolbarSearchFocused)
@@ -413,6 +435,7 @@ private struct MiranNotesMainWindowContent: View {
 
 private struct WorkspaceDetailColumnView: View {
     @Bindable var model: AppModel
+    var onClearToolbarSearchFocus: () -> Void
 
     private var showsLoadedEditor: Bool {
         guard let doc = model.activeDocument, let id = model.selectedNoteID else { return false }
@@ -436,6 +459,11 @@ private struct WorkspaceDetailColumnView: View {
                 FolderPageView(model: model)
             }
         }
+        .simultaneousGesture(
+            TapGesture().onEnded { _ in
+                onClearToolbarSearchFocus()
+            }
+        )
     }
 }
 
