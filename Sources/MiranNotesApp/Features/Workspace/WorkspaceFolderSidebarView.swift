@@ -7,28 +7,31 @@ struct WorkspaceFolderSidebarView: View {
     @State private var renameFieldText = ""
 
     var body: some View {
-        List(selection: folderSelection) {
-            Label(model.sidebarNotesTrayTitle, systemImage: "tray.full")
-                .tag(Optional(model.sidebarNotesTrayFolderID))
-            ForEach(model.visibleTopLevelFolderEntries, id: \.id) { folder in
-                Text(folder.name)
-                    .tag(Optional(folder.id))
-                    .contextMenu {
-                        Button("Rename…") {
-                            renamingFolder = folder
-                            renameFieldText = folder.name
+        ZStack(alignment: .bottom) {
+            List(selection: folderSelection) {
+                Label(model.sidebarNotesTrayTitle, systemImage: "tray.full")
+                    .tag(Optional(model.sidebarNotesTrayFolderID))
+                ForEach(model.visibleTopLevelFolderEntries, id: \.id) { folder in
+                    Text(folder.name)
+                        .tag(Optional(folder.id))
+                        .contextMenu {
+                            Button("Rename…") {
+                                renamingFolder = folder
+                                renameFieldText = folder.name
+                            }
+                            Button("Delete Folder", role: .destructive) {
+                                model.deleteFolder(id: folder.id)
+                            }
                         }
-                        Button("Delete Folder", role: .destructive) {
-                            model.deleteFolder(id: folder.id)
-                        }
-                    }
+                }
             }
-        }
-        .safeAreaInset(edge: .bottom, spacing: 0) {
+            .padding(.bottom, 56)
+
             VStack(spacing: 0) {
                 sidebarActionsFooter
                 workspaceLocationFooter
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
             .background(.regularMaterial)
         }
         .simultaneousGesture(

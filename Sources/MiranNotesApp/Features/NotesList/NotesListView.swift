@@ -7,6 +7,8 @@ private struct SidebarOutlineRows: View {
     let selectedNoteID: UUID?
 
     @State private var hoveredNoteID: UUID?
+    @State private var revealedPathNoteIDs: Set<UUID> = []
+    @State private var pulsingPathNoteID: UUID?
 
     var body: some View {
         ForEach(entries) { entry in
@@ -28,6 +30,13 @@ private struct SidebarOutlineRows: View {
             case let .note(note, searchSnippet):
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     VStack(alignment: .leading, spacing: 2) {
+                        if revealedPathNoteIDs.contains(note.noteID), !note.relativePath.isEmpty {
+                            Text(note.relativePath)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .transition(.move(edge: .top).combined(with: .opacity))
+                        }
                         Text(note.title)
                         if let searchSnippet, !searchSnippet.isEmpty {
                             Text(searchSnippet)
@@ -39,11 +48,32 @@ private struct SidebarOutlineRows: View {
                     }
                     Spacer(minLength: 0)
                     if !note.relativePath.isEmpty {
-                        Image(systemName: "info.circle")
-                            .font(.caption)
-                            .foregroundStyle(.tertiary)
-                            .accessibilityLabel("Note path")
-                            .help(note.relativePath)
+                        Button {
+                            withAnimation(.easeOut(duration: 0.12)) {
+                                pulsingPathNoteID = note.noteID
+                            }
+                            Task { @MainActor in
+                                try? await Task.sleep(nanoseconds: 120_000_000)
+                                withAnimation(.easeOut(duration: 0.14)) {
+                                    pulsingPathNoteID = nil
+                                    if revealedPathNoteIDs.contains(note.noteID) {
+                                        revealedPathNoteIDs.remove(note.noteID)
+                                    } else {
+                                        revealedPathNoteIDs.insert(note.noteID)
+                                    }
+                                }
+                            }
+                        } label: {
+                            Image(systemName: "info.circle")
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                                .frame(width: 22, height: 22)
+                                .contentShape(Circle())
+                                .scaleEffect(pulsingPathNoteID == note.noteID ? 1.15 : 1.0)
+                        }
+                        .buttonStyle(.borderless)
+                        .accessibilityLabel("Toggle note path")
+                        .help(note.relativePath)
                     }
                 }
                 .tag(Optional(note.noteID))
