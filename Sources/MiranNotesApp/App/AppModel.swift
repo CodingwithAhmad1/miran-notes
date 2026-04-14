@@ -5,12 +5,6 @@ import Observation
 import os.log
 import SwiftUI
 
-/// Stored undo boundary: full snapshot, or replace-text-only chain (inverse commands for hybrid undo).
-private enum UndoCheckpoint {
-    case full(NoteDocument)
-    case replaceTextOnly(forward: [EditCommand], undoCommands: [EditCommand])
-}
-
 /// Drives the “file changed on disk” alert; non-nil means a conflict is being presented.
 struct ExternalEditConflict: Identifiable, Equatable, Sendable {
     let id = UUID()
@@ -48,44 +42,6 @@ enum SidebarOutlineEntry: Identifiable {
 @MainActor
 @Observable
 final class AppModel {
-    enum StartupLinkGraphSyncMode: Equatable {
-        case immediate
-        case deferred
-    }
-
-    struct StartupLinkGraphSyncDecision: Equatable {
-        var mode: StartupLinkGraphSyncMode
-        var reason: String
-    }
-
-    nonisolated static func startupLinkGraphSyncDecision(
-        noteCount: Int,
-        noteLinkRelationshipCount: Int,
-        hardThreshold: Int,
-        historicalAverageMs: Double?,
-        budgetMs: Double
-    ) -> StartupLinkGraphSyncDecision {
-        if noteCount > hardThreshold {
-            return StartupLinkGraphSyncDecision(
-                mode: .deferred,
-                reason: "noteCount>\(hardThreshold)"
-            )
-        }
-        if noteLinkRelationshipCount > hardThreshold * 5 {
-            return StartupLinkGraphSyncDecision(
-                mode: .deferred,
-                reason: "relationshipCountHigh"
-            )
-        }
-        if let historicalAverageMs, historicalAverageMs > budgetMs {
-            return StartupLinkGraphSyncDecision(
-                mode: .deferred,
-                reason: "historicalAverageOverBudget"
-            )
-        }
-        return StartupLinkGraphSyncDecision(mode: .immediate, reason: "withinBudget")
-    }
-
     var noteSummaries: [NoteSummary] = []
     /// Manifest `relativePath` for the open note (stable selection for tests and shell).
     var selectedBaseName: String?
@@ -164,6 +120,9 @@ final class AppModel {
     var viewPaneStates: [ViewPaneState] = []
 
     let repository: NoteRepository
+    private let manifestRefreshFacade = VaultManifestRefreshFacade()
+    private let bodySearchIndexController = NoteBodySearchIndexController()
+    private let backlinkRefreshScheduler = DebouncedAsyncWorkScheduler()
     private var saveTask: Task<Void, Never>?
     private var vaultWatcher: VaultDirectoryWatcher?
     /// Set when the vault watcher fires; processed after autosave finishes so events are not dropped.
@@ -217,9 +176,6 @@ final class AppModel {
     private let startupLinkGraphSyncBudgetMs: Double
     private let startupLinkGraphSyncHistoryWeight: Double
     private var startupLinkGraphSyncTask: Task<Void, Never>?
-    private var backlinkRefreshTask: Task<Void, Never>?
-    private var bodySearchIndexTask: Task<Void, Never>?
-    private var bodySearchIndexGeneration = 0
     private var activeNoteFilePresenter: ActiveNoteFilePresenter?
 
     init(
@@ -283,7 +239,7 @@ final class AppModel {
             lastError = "Could not read relationship index for startup sync decision: \(error.localizedDescription)"
             return
         }
-        let decision = Self.startupLinkGraphSyncDecision(
+        let decision = LinkGraphStartupPolicy.decision(
             noteCount: noteSummaries.count,
             noteLinkRelationshipCount: relationshipCount,
             hardThreshold: largeVaultLinkGraphSyncThreshold,
@@ -349,13 +305,11 @@ final class AppModel {
 
     /// Canonical vault-refresh sequence for disk-driven changes: optional cache invalidation + manifest reconciliation.
     private func reconcileVaultState(invalidateCaches: Bool) async {
-        if invalidateCaches {
-            await repository.invalidateIndexCaches()
-        }
-        do {
-            try await repository.reconcileManifest()
-        } catch {
-            lastError = "Manifest reconciliation failed: \(error.localizedDescription)"
+        if let err = await manifestRefreshFacade.reconcileAfterDiskChange(
+            repository: repository,
+            invalidateCaches: invalidateCaches
+        ) {
+            lastError = err
         }
     }
 
@@ -422,19 +376,15 @@ final class AppModel {
 
     func loadFolderPageDocuments() async {
         cancelFolderPageSaveTasks()
-        folderPageDocuments.removeAll()
-        folderPageLastPersisted.removeAll()
-        guard let fid = selectedFolderID else { return }
-        let notes = noteSummaries.filter { $0.folderID == fid }
-        for n in notes {
-            do {
-                let result = try await repository.loadNote(noteID: n.noteID)
-                let doc = result.document
-                folderPageDocuments[n.noteID] = doc
-                folderPageLastPersisted[n.noteID] = doc
-            } catch {
-                lastError = "Failed to load note: \(error.localizedDescription)"
-            }
+        let result = await FolderPageNoteLoading.loadDocuments(
+            folderID: selectedFolderID,
+            noteSummaries: noteSummaries,
+            repository: repository
+        )
+        folderPageDocuments = result.documents
+        folderPageLastPersisted = result.lastPersisted
+        if let err = result.loadError {
+            lastError = err
         }
     }
 
@@ -507,32 +457,20 @@ final class AppModel {
         backlinks = []
         repairAdvisory = nil
         clearUndoStack()
+        bodySearchIndexController.cancel()
+        backlinkRefreshScheduler.cancel()
     }
 
     private func scheduleBodySearchIndexRebuild() {
-        bodySearchIndexTask?.cancel()
-        bodySearchIndexGeneration += 1
-        let generation = bodySearchIndexGeneration
-        let repo = repository
-        bodySearchIndexTask = Task { [weak self] in
-            let index: [UUID: String]
-            do {
-                index = try await repo.buildBodySearchIndex()
-            } catch {
-                await MainActor.run {
-                    Logger.vault.error(
-                        "buildBodySearchIndex failed: \(error.localizedDescription, privacy: .public)"
-                    )
-                    self?.lastError = "Could not update text search for this library."
-                }
-                return
+        bodySearchIndexController.scheduleRebuild(
+            repository: repository,
+            apply: { [weak self] index in
+                self?.bodySearchIndex = index
+            },
+            onFailure: { [weak self] in
+                self?.lastError = "Could not update text search for this library."
             }
-            await MainActor.run {
-                guard let self else { return }
-                guard generation == self.bodySearchIndexGeneration else { return }
-                self.bodySearchIndex = index
-            }
-        }
+        )
     }
 
     /// Hierarchical rows for the sidebar (`FolderCatalog` + notes from `filteredNoteSummaries`).
@@ -700,10 +638,8 @@ final class AppModel {
     }
 
     private func scheduleBacklinkRefresh() {
-        backlinkRefreshTask?.cancel()
-        backlinkRefreshTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .milliseconds(1500))
-            guard !Task.isCancelled, let self else { return }
+        backlinkRefreshScheduler.schedule(delay: .milliseconds(1500)) { [weak self] in
+            guard let self else { return }
             await self.refreshBacklinks()
         }
     }
@@ -912,8 +848,8 @@ final class AppModel {
 
         if recordUndo, undoManager != nil {
             let after = doc
-            let name = Self.undoActionName(for: intercepted)
-            let singleReplace = Self.isSingleReplaceTextOnly(intercepted)
+            let name = UndoActionNaming.actionName(for: intercepted)
+            let singleReplace = UndoActionNaming.isSingleReplaceTextOnly(intercepted)
             let now = Date()
             let windowSeconds = Double(undoPolicy.coalesceReplaceTextWindowNanoseconds) / 1_000_000_000.0
 
@@ -956,7 +892,11 @@ final class AppModel {
 
             if !didCoalesce {
                 if undoCheckpoints.isEmpty {
-                    let second = Self.checkpointForRecordedStep(after: after, before: before, intercepted: intercepted)
+                    let second = UndoCheckpointSupport.checkpointForRecordedStep(
+                        after: after,
+                        before: before,
+                        intercepted: intercepted
+                    )
                     undoCheckpoints = [.full(before), second]
                     undoActionNames = [name]
                     let top = 1
@@ -966,7 +906,11 @@ final class AppModel {
                     undoManager?.setActionName(name)
                 } else {
                     assert(materializeCheckpoint(at: undoCheckpoints.count - 1) == before)
-                    let newCheckpoint = Self.checkpointForRecordedStep(after: after, before: before, intercepted: intercepted)
+                    let newCheckpoint = UndoCheckpointSupport.checkpointForRecordedStep(
+                        after: after,
+                        before: before,
+                        intercepted: intercepted
+                    )
                     undoCheckpoints.append(newCheckpoint)
                     undoActionNames.append(name)
                     let top = undoCheckpoints.count - 1
@@ -1000,28 +944,7 @@ final class AppModel {
 
     /// Materializes the document at the given checkpoint index (index 0 is always a full snapshot).
     private func materializeCheckpoint(at index: Int) -> NoteDocument {
-        switch undoCheckpoints[index] {
-        case .full(let d):
-            return d
-        case .replaceTextOnly(let forward, _):
-            var doc = materializeCheckpoint(at: index - 1)
-            for c in forward {
-                doc = EditCommandEngine.apply(c, to: doc)
-            }
-            return doc
-        }
-    }
-
-    private static func checkpointForRecordedStep(
-        after: NoteDocument,
-        before: NoteDocument,
-        intercepted: [EditCommand]
-    ) -> UndoCheckpoint {
-        if let chain = UndoInverseSupport.replaceTextChainUndoCommands(forward: intercepted, documentBefore: before),
-           chain.after == after {
-            return .replaceTextOnly(forward: intercepted, undoCommands: chain.undoCommands)
-        }
-        return .full(after)
+        UndoCheckpointSupport.materialize(checkpoints: undoCheckpoints, at: index)
     }
 
     private func reregisterAllUndoActions() {
@@ -1060,55 +983,6 @@ final class AppModel {
         undoActionNames = Array(undoActionNames.suffix(max))
         reregisterAllUndoActions()
         Logger.vault.info("Undo stack pruned to \(max, privacy: .public) steps")
-    }
-
-    private static func isSingleReplaceTextOnly(_ commands: [EditCommand]) -> Bool {
-        guard commands.count == 1, case .replaceText = commands[0] else { return false }
-        return true
-    }
-
-    private static func undoActionName(for commands: [EditCommand]) -> String {
-        if commands.count >= 2 {
-            let head = Array(commands.prefix(2))
-            if head.count == 2 {
-                switch (head[0], head[1]) {
-                case let (.replaceText(range, replacement), .splitBlock):
-                    if range.length == 0, replacement == "\n" {
-                        return "Split Block"
-                    }
-                case (.mergeWithPrevious, .replaceText):
-                    return "Merge Blocks"
-                case let (.replaceText(range, replacement), .changeBlockType):
-                    if replacement.isEmpty, range.length > 0 {
-                        return "Slash Command"
-                    }
-                case (.replaceText, .replaceMetadataBlocks):
-                    return "Full Buffer Edit"
-                default:
-                    break
-                }
-            }
-        }
-
-        let kinds = Set(commands.map { command -> String in
-            switch command {
-            case .replaceText: return "Edit"
-            case .splitBlock: return "Split Block"
-            case .mergeWithPrevious: return "Merge Blocks"
-            case .changeBlockType: return "Change Block"
-            case .toggleSpanStyle: return "Toggle Style"
-            case .insertWikiLink: return "Insert Link"
-            case .registerDatabaseRow: return "Link Database Row"
-            case .repairMetadata: return "Repair Note"
-            case .replaceMetadataBlocks: return "Recover Blocks"
-            case .duplicateBlock: return "Duplicate Block"
-            case .deleteBlock: return "Delete Block"
-            }
-        })
-        if kinds.count == 1, let only = kinds.first {
-            return only
-        }
-        return "Edit"
     }
 
     /// Sidebar rows use ``SidebarOutlineEntry`` identities (`n:<noteID>`, `f:<folderID>`). `List(selection:)`
@@ -1271,6 +1145,11 @@ final class AppModel {
 
     /// Test helper: mirrors what the vault watcher closure does without relying on filesystem events.
     func simulateWatcherEvent() async {
+        await processVaultFilesystemRefreshPipeline()
+    }
+
+    /// Workspace gate, reconcile manifest after external FS churn, then deferred external-edit reconciliation.
+    private func processVaultFilesystemRefreshPipeline() async {
         let outcome = WorkspaceCompatibilityScanner.scan(vaultRoot: repository.vaultURL)
         if case .incompatible(let report) = outcome {
             applyIncompatibleWorkspaceReport(report)
@@ -1291,15 +1170,7 @@ final class AppModel {
             onEvent: { [weak self] in
                 guard let self else { return }
                 Task { @MainActor [weak self] in
-                    guard let self else { return }
-                    let outcome = WorkspaceCompatibilityScanner.scan(vaultRoot: self.repository.vaultURL)
-                    if case .incompatible(let report) = outcome {
-                        self.applyIncompatibleWorkspaceReport(report)
-                        return
-                    }
-                    await self.reconcileVaultState(invalidateCaches: true)
-                    self.pendingExternalDiskCheck = true
-                    await self.runPendingExternalDiskReconciliationIfNeeded()
+                    await self?.processVaultFilesystemRefreshPipeline()
                 }
             }
         )

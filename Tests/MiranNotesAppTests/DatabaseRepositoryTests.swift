@@ -1,5 +1,6 @@
 import Foundation
 import MiranNotesCore
+import MiranNotesLegacyDatabase
 import XCTest
 
 @testable import MiranNotesApp
@@ -34,10 +35,10 @@ final class DatabaseRepositoryTests: XCTestCase {
         XCTAssertEqual(all.first?.kind, .general)
         XCTAssertEqual(all.first?.id, record.id)
 
-        let schemaURL = VaultPaths.databaseSchemaURL(vaultURL: vault, databaseID: record.id)
+        let schemaURL = VaultDatabasePaths.databaseSchemaURL(vaultURL: vault, databaseID: record.id)
         XCTAssertTrue(FileManager.default.fileExists(atPath: schemaURL.path))
 
-        let rowsURL = VaultPaths.databaseRowsURL(vaultURL: vault, databaseID: record.id)
+        let rowsURL = VaultDatabasePaths.databaseRowsURL(vaultURL: vault, databaseID: record.id)
         XCTAssertTrue(FileManager.default.fileExists(atPath: rowsURL.path))
     }
 
@@ -54,7 +55,7 @@ final class DatabaseRepositoryTests: XCTestCase {
         let afterCount = try await repo.listDatabases().count
         XCTAssertEqual(afterCount, 0)
 
-        let dbDir = VaultPaths.databaseDirectory(vaultURL: vault, databaseID: record.id)
+        let dbDir = VaultDatabasePaths.databaseDirectory(vaultURL: vault, databaseID: record.id)
         XCTAssertFalse(FileManager.default.fileExists(atPath: dbDir.path))
     }
 

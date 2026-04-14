@@ -11,7 +11,7 @@ final class AppModelStartupSyncTests: XCTestCase {
     }
 
     func testStartupLinkGraphSyncDecisionImmediateAtThreshold() {
-        let decision = AppModel.startupLinkGraphSyncDecision(
+        let decision = LinkGraphStartupPolicy.decision(
             noteCount: 2_000,
             noteLinkRelationshipCount: 100,
             hardThreshold: 2_000,
@@ -22,7 +22,7 @@ final class AppModelStartupSyncTests: XCTestCase {
     }
 
     func testStartupLinkGraphSyncDecisionDeferredAboveThreshold() {
-        let decision = AppModel.startupLinkGraphSyncDecision(
+        let decision = LinkGraphStartupPolicy.decision(
             noteCount: 2_001,
             noteLinkRelationshipCount: 100,
             hardThreshold: 2_000,
@@ -33,7 +33,7 @@ final class AppModelStartupSyncTests: XCTestCase {
     }
 
     func testStartupLinkGraphSyncDecisionDeferredWhenHistoricalAverageOverBudget() {
-        let decision = AppModel.startupLinkGraphSyncDecision(
+        let decision = LinkGraphStartupPolicy.decision(
             noteCount: 500,
             noteLinkRelationshipCount: 2_000,
             hardThreshold: 2_000,

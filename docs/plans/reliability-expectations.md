@@ -14,7 +14,7 @@ This note documents **what the app actually does** at startup and after saves so
 
 ## Link graph sync at open (immediate vs deferred)
 
-**Decision function:** `AppModel.startupLinkGraphSyncDecision(noteCount:noteLinkRelationshipCount:hardThreshold:historicalAverageMs:budgetMs:)` (defaults on `AppModel`: `hardThreshold` 2000 notes, `budgetMs` 120 ms, history weight 0.3 for rolling average).
+**Decision function:** `LinkGraphStartupPolicy.decision(noteCount:noteLinkRelationshipCount:hardThreshold:historicalAverageMs:budgetMs:)` in `Sources/MiranNotesApp/App/LinkGraphStartupPolicy.swift` (defaults on `AppModel`: `hardThreshold` 2000 notes, `budgetMs` 120 ms, history weight 0.3 for rolling average).
 
 **Rules (first match wins for deferral):**
 

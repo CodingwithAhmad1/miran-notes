@@ -1,33 +1,34 @@
 import Foundation
 import MiranNotesCore
-import os.log
 
 /// Manages a single vault-level database's schema, rows, and views on disk.
 /// Uses atomic writes and debounced persistence. Rows stored as JSONL (ADR 0002 contract).
-actor DatabaseDocument {
+///
+/// **Build:** Preserved in `MiranNotesLegacyDatabase`; not linked by the shipping app executable.
+public actor DatabaseDocument {
     private enum Budget {
         static let defaultPageSize = 500
         static let maxLoadedRows = 50_000
     }
 
-    let databaseID: UUID
+    public let databaseID: UUID
     private let schemaURL: URL
     private let rowsURL: URL
     private let viewsDirectory: URL
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
 
-    private(set) var schema: DatabaseSchema
-    private(set) var rows: [TableRowRecord]
-    private(set) var views: [DatabaseViewConfig]
+    public private(set) var schema: DatabaseSchema
+    public private(set) var rows: [TableRowRecord]
+    public private(set) var views: [DatabaseViewConfig]
     private var allRowsLoaded = false
-    var isDirty = false
+    public var isDirty = false
 
-    init(vaultURL: URL, databaseID: UUID) {
+    public init(vaultURL: URL, databaseID: UUID) {
         self.databaseID = databaseID
-        self.schemaURL = VaultPaths.databaseSchemaURL(vaultURL: vaultURL, databaseID: databaseID)
-        self.rowsURL = VaultPaths.databaseRowsURL(vaultURL: vaultURL, databaseID: databaseID)
-        self.viewsDirectory = VaultPaths.databaseViewsDirectory(vaultURL: vaultURL, databaseID: databaseID)
+        self.schemaURL = VaultDatabasePaths.databaseSchemaURL(vaultURL: vaultURL, databaseID: databaseID)
+        self.rowsURL = VaultDatabasePaths.databaseRowsURL(vaultURL: vaultURL, databaseID: databaseID)
+        self.viewsDirectory = VaultDatabasePaths.databaseViewsDirectory(vaultURL: vaultURL, databaseID: databaseID)
         self.encoder = JSONEncoder()
         self.encoder.outputFormatting = [.sortedKeys]
         self.decoder = JSONDecoder()
@@ -38,7 +39,7 @@ actor DatabaseDocument {
 
     // MARK: - Loading
 
-    func loadIfNeeded() throws {
+    public func loadIfNeeded() throws {
         try loadSchema()
         if !allRowsLoaded { try loadAllRows() }
         try loadViews()
@@ -90,17 +91,17 @@ actor DatabaseDocument {
 
     // MARK: - Schema mutations
 
-    func updateSchema(_ newSchema: DatabaseSchema) {
+    public func updateSchema(_ newSchema: DatabaseSchema) {
         schema = newSchema
         isDirty = true
     }
 
-    func addColumn(_ column: DatabaseColumnDefinition) {
+    public func addColumn(_ column: DatabaseColumnDefinition) {
         schema.columns.append(column)
         isDirty = true
     }
 
-    func removeColumn(id: String) {
+    public func removeColumn(id: String) {
         schema.columns.removeAll { $0.id == id }
         for i in rows.indices {
             rows[i].cells.removeValue(forKey: id)
@@ -110,18 +111,18 @@ actor DatabaseDocument {
 
     // MARK: - Row mutations
 
-    func insertRow(_ row: TableRowRecord) {
+    public func insertRow(_ row: TableRowRecord) {
         rows.append(row)
         isDirty = true
     }
 
-    func updateRow(id: UUID, cells: [String: String]) {
+    public func updateRow(id: UUID, cells: [String: String]) {
         guard let index = rows.firstIndex(where: { $0.id == id }) else { return }
         rows[index].cells = cells
         isDirty = true
     }
 
-    func updateCell(rowID: UUID, columnID: String, value: String) {
+    public func updateCell(rowID: UUID, columnID: String, value: String) {
         guard let index = rows.firstIndex(where: { $0.id == rowID }) else { return }
         let colType = schema.columnType(for: columnID)
         guard colType.accepts(value) else { return }
@@ -129,7 +130,7 @@ actor DatabaseDocument {
         isDirty = true
     }
 
-    func deleteRow(id: UUID) {
+    public func deleteRow(id: UUID) {
         let before = rows.count
         rows.removeAll { $0.id == id }
         if rows.count != before {
@@ -137,19 +138,19 @@ actor DatabaseDocument {
         }
     }
 
-    func replaceAllRows(_ newRows: [TableRowRecord]) {
+    public func replaceAllRows(_ newRows: [TableRowRecord]) {
         rows = newRows
         isDirty = true
     }
 
     // MARK: - View mutations
 
-    func addView(_ view: DatabaseViewConfig) {
+    public func addView(_ view: DatabaseViewConfig) {
         views.append(view)
         isDirty = true
     }
 
-    func updateView(_ view: DatabaseViewConfig) {
+    public func updateView(_ view: DatabaseViewConfig) {
         if let i = views.firstIndex(where: { $0.id == view.id }) {
             views[i] = view
         } else {
@@ -158,14 +159,14 @@ actor DatabaseDocument {
         isDirty = true
     }
 
-    func removeView(id: UUID) {
+    public func removeView(id: UUID) {
         views.removeAll { $0.id == id }
         isDirty = true
     }
 
     // MARK: - Query
 
-    func filteredRows(view: DatabaseViewConfig) -> [TableRowRecord] {
+    public func filteredRows(view: DatabaseViewConfig) -> [TableRowRecord] {
         var result = rows
 
         for filter in view.filters {
@@ -187,15 +188,15 @@ actor DatabaseDocument {
         return result
     }
 
-    func allRows() -> [TableRowRecord] { rows }
+    public func allRows() -> [TableRowRecord] { rows }
 
-    func snapshot() -> (schema: DatabaseSchema, rows: [TableRowRecord], views: [DatabaseViewConfig]) {
+    public func snapshot() -> (schema: DatabaseSchema, rows: [TableRowRecord], views: [DatabaseViewConfig]) {
         (schema, rows, views)
     }
 
     // MARK: - Persistence
 
-    func flushToDisk() throws {
+    public func flushToDisk() throws {
         let fm = FileManager.default
         let dbDir = rowsURL.deletingLastPathComponent()
         try fm.createDirectory(at: dbDir, withIntermediateDirectories: true)
@@ -237,7 +238,7 @@ actor DatabaseDocument {
         }
     }
 
-    func invalidateAndReload() throws {
+    public func invalidateAndReload() throws {
         allRowsLoaded = false
         rows = []
         views = []

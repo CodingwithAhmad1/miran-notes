@@ -144,7 +144,7 @@ SwiftUI now tracks fine-grained property access on `AppModel` instead of invalid
 | `NoteRepository.swift` | `nonisolated let vaultURL` | Low |
 | `NoteRepository.swift` | `nonisolated static func validateBaseName` | Low — pure |
 | `DatabaseRepository.swift` | `nonisolated let vaultURL` | Low |
-| `AppModel.swift` | `nonisolated static func startupLinkGraphSyncDecision(...)` | Low — pure decision helper |
+| `LinkGraphStartupPolicy.swift` | `nonisolated static func decision(...)` | Low — pure decision helper (extracted from `AppModel`) |
 
 **`@unchecked Sendable` (1 site):**
 

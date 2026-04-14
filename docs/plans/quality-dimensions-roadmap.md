@@ -82,6 +82,13 @@ Miran Notes treats **data durability** as a first-class concern: vault changes u
 - **Expected impact:** Fewer mistaken edits; optional **compiler flags** or target separation if the team wants a hard boundary (see §3).
 - **Constraints / dependencies:** Product decision: keep single target vs split targets; migration cost vs clarity.
 
+#### Completed (§2 — 2026-04-14)
+
+- **P1:** [`LinkGraphStartupPolicy`](../../Sources/MiranNotesApp/App/LinkGraphStartupPolicy.swift) holds startup link-graph sync mode/decision pure logic; `AppModel` keeps I/O and `UserDefaults` EMA.
+- **P2:** [`VaultManifestRefreshFacade`](../../Sources/MiranNotesApp/Data/VaultManifestRefreshFacade.swift) centralizes invalidate + `reconcileManifest` for disk-driven refresh; header links `vault-data-layer.md` and ADR 0003.
+- **P3:** [`MiranNotesLegacyDatabase`](../../Sources/MiranNotesLegacyDatabase/) library product for `DatabaseRepository` / `DatabaseDocument` (tests-only dependency of the app executable); [`VaultDatabasePaths`](../../Sources/MiranNotesCore/VaultDatabasePaths.swift) + `DatabaseRegistry.loadFromVault` in `MiranNotesCore`. See [architectural-refinements.md](../architecture/architectural-refinements.md).
+- **Later pass (same §2 theme):** Further `AppModel` decomposition — [`NoteBodySearchIndexController`](../../Sources/MiranNotesApp/Data/NoteBodySearchIndexController.swift), [`DebouncedAsyncWorkScheduler`](../../Sources/MiranNotesApp/Data/DebouncedAsyncWorkScheduler.swift), [`FolderPageNoteLoading`](../../Sources/MiranNotesApp/Data/FolderPageNoteLoading.swift), [`AppModelUndoCheckpointSupport`](../../Sources/MiranNotesApp/App/AppModelUndoCheckpointSupport.swift); shared vault FS pipeline `processVaultFilesystemRefreshPipeline()` on `AppModel`. Optional deeper `NoteRepository` facades deferred until call-site churn justifies them.
+
 ---
 
 ## 3. Goal orientation
@@ -156,7 +163,7 @@ Miran Notes treats **data durability** as a first-class concern: vault changes u
 
 ### Current status and strengths
 
-**Startup scaling:** `startupLinkGraphSyncDecision` defers heavy link-graph work when note counts or relationship counts exceed thresholds or historical timing budgets (`AppModel`)—reduces launch stalls on large vaults.
+**Startup scaling:** `LinkGraphStartupPolicy.decision` defers heavy link-graph work when note counts or relationship counts exceed thresholds or historical timing budgets (configured on `AppModel`)—reduces launch stalls on large vaults.
 
 **Write path:** Dirty flags on index participants and debounced autosave/backlink refresh reduce redundant disk and CPU work (see root [README.md](../../README.md)).
 
@@ -232,3 +239,5 @@ Miran Notes treats **data durability** as a first-class concern: vault changes u
 |------|--------|
 | 2026-04-14 | Initial roadmap derived from repository review and engineering quality dimensions. |
 | 2026-04-14 | §1 Reliability P1–P3 shipped: stress tests, reliability-expectations doc, search/manifest observability (see Completed under §1). |
+| 2026-04-14 | §2 Architectural cleanliness P1–P3 shipped: `LinkGraphStartupPolicy`, `VaultManifestRefreshFacade`, `MiranNotesLegacyDatabase` + `VaultDatabasePaths` (see Completed under §2). |
+| 2026-04-14 | §2 follow-up: `AppModel` helpers — body search index controller, debounced scheduler, folder-page loading, undo checkpoint support types; unified `processVaultFilesystemRefreshPipeline` (see Completed under §2). |
