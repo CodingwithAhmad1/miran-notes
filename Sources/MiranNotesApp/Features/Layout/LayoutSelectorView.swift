@@ -5,7 +5,6 @@ import SwiftUI
 struct LayoutSelectorView: View {
     var model: AppModel
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         VStack(spacing: 0) {
@@ -26,19 +25,8 @@ struct LayoutSelectorView: View {
     private func layoutButton(for layout: PaneLayout) -> some View {
         let isSelected = model.currentLayout == layout
         return Button {
-            switch layout {
-            case .single:
-                model.setLayout(layout)
-                dismiss()
-            case .twoPane, .threePane, .fourPane:
-                let payload = WorkspaceWindowPayload(
-                    vaultPath: model.repository.vaultURL.path,
-                    initialLayout: layout,
-                    workspaceScope: model.workspaceScope
-                )
-                openWindow(value: payload)
-                dismiss()
-            }
+            model.setLayout(layout)
+            dismiss()
         } label: {
             LayoutIconView(layout: layout, isSelected: isSelected)
                 .padding(4)

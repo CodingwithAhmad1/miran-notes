@@ -85,7 +85,7 @@ struct MiranNotesApp: App {
                 }
             }
             .environment(sessionRegistry)
-               }
+        }
         .commands { appCommands }
     }
 

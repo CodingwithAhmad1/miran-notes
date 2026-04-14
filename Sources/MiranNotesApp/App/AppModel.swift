@@ -1581,23 +1581,44 @@ final class AppModel {
 
     // MARK: - Layout management
 
-    /// Switches to a new pane layout. Flushes the current note to disk and resizes `viewPaneStates`,
-    /// preserving existing pane notes where the index still exists in the new layout.
+    /// Switches to a new pane layout. Flushes the current note to disk and resizes `viewPaneStates`.
+    ///
+    /// When **shrinking**, auxiliary panes are removed in **decreasing pane index** order: the last
+    /// auxiliary slot (`viewPaneStates` suffix) corresponds to the highest-index pane and is dropped
+    /// first (e.g. 4→3 drops pane 3; 3→2 drops pane 2). Remaining prefix slots keep their ``ViewPaneState``.
+    /// 3- vs 4-pane geometry differs, so a note may appear in a different on-screen region after a
+    /// topology change without an explicit remap.
     func setLayout(_ layout: PaneLayout) {
         Task { @MainActor in
             await flushCurrentNoteToDiskIfDirty()
-            let viewPaneCount = layout.paneCount - 1
-            if viewPaneStates.count > viewPaneCount {
-                viewPaneStates = Array(viewPaneStates.prefix(viewPaneCount))
+
+            let newAuxiliaryCount = layout.paneCount - 1
+            let previousActiveIndex = activePaneIndex
+
+            // If the editable pane is an auxiliary, copy its live buffer into that slot when the slot
+            // survives the resize so read-only panes stay coherent.
+            if previousActiveIndex > 0 {
+                let slot = previousActiveIndex - 1
+                if slot < viewPaneStates.count, slot < newAuxiliaryCount {
+                    viewPaneStates[slot].noteBaseName = selectedBaseName
+                    viewPaneStates[slot].document = activeDocument
+                }
+            }
+
+            if viewPaneStates.count > newAuxiliaryCount {
+                viewPaneStates = Array(viewPaneStates.prefix(newAuxiliaryCount))
             } else {
-                while viewPaneStates.count < viewPaneCount {
+                while viewPaneStates.count < newAuxiliaryCount {
                     viewPaneStates.append(ViewPaneState())
                 }
             }
-            // Reset active pane to 0 when shrinking below the current index.
-            if activePaneIndex >= layout.paneCount {
+
+            if previousActiveIndex >= layout.paneCount {
                 activePaneIndex = 0
+                clearUndoStack()
+                await loadSelectedNote()
             }
+
             currentLayout = layout
         }
     }
