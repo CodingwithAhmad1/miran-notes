@@ -163,6 +163,12 @@ final class AppModel {
         }
     }
 
+    /// Whether the sidebar may create a note in the current folder (excludes welcome/`nil` and the vault root tray).
+    var allowsToolbarNewNote: Bool {
+        guard let id = selectedFolderID else { return false }
+        return id != FolderCatalog.rootFolderID
+    }
+
     /// Folder ID for the sidebar row that lists notes sitting at the “root” of the visible tree.
     var sidebarNotesTrayFolderID: UUID {
         switch workspaceScope {
@@ -496,7 +502,7 @@ final class AppModel {
         return nil
     }
 
-    func selectFolderForPage(_ folderID: UUID?) async {
+    func selectFolderForPage(_ folderID: UUID?) {
         if folderID != nil {
             markVaultWelcomeDismissedIfNeeded()
         }
@@ -821,9 +827,14 @@ final class AppModel {
 
     func createNote() {
         Task { @MainActor in
+            guard let targetFolder = selectedFolderID, targetFolder != FolderCatalog.rootFolderID else {
+                userAlert = .message(
+                    "Select a folder in the sidebar before creating a note. New notes cannot be added at the vault root."
+                )
+                return
+            }
             await flushCurrentNoteToDiskIfDirty()
             navigationGeneration += 1
-            let targetFolder = selectedFolderID ?? FolderCatalog.rootFolderID
             do {
                 _ = try await repository.createNote(named: "untitled-note", folderID: targetFolder)
                 markVaultWelcomeDismissedIfNeeded()

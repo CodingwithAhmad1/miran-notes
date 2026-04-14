@@ -8,10 +8,8 @@ struct WorkspaceFolderSidebarView: View {
     var body: some View {
         VStack(spacing: 0) {
             List(selection: folderSelection) {
-                if model.hasRootLevelNotes {
-                    Label(model.sidebarNotesTrayTitle, systemImage: "tray.full")
-                        .tag(Optional(model.sidebarNotesTrayFolderID))
-                }
+                Label(model.sidebarNotesTrayTitle, systemImage: "tray.full")
+                    .tag(Optional(model.sidebarNotesTrayFolderID))
                 ForEach(model.topLevelFolderEntries, id: \.id) { folder in
                     Text(folder.name)
                         .tag(Optional(folder.id))
@@ -57,6 +55,12 @@ struct WorkspaceFolderSidebarView: View {
                 } label: {
                     Label("New Note", systemImage: "plus")
                 }
+                .disabled(!model.allowsToolbarNewNote)
+                .help(
+                    model.allowsToolbarNewNote
+                        ? "Create a new note in the selected folder"
+                        : "Select a folder (not Vault) to create a note"
+                )
             }
         }
     }
@@ -64,9 +68,7 @@ struct WorkspaceFolderSidebarView: View {
     private var folderSelection: Binding<UUID?> {
         Binding(
             get: { model.selectedFolderID },
-            set: { new in
-                Task { await model.selectFolderForPage(new) }
-            }
+            set: { model.selectFolderForPage($0) }
         )
     }
 

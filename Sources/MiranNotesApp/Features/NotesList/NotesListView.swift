@@ -106,6 +106,7 @@ struct NotesListView: View {
                 } label: {
                     Label("New Note", systemImage: "plus")
                 }
+                .disabled(!model.allowsToolbarNewNote)
                 Button(role: .destructive) {
                     model.deleteSelectedNote()
                 } label: {

@@ -62,7 +62,7 @@ final class AppModelStartupSyncTests: XCTestCase {
         }
         XCTAssertTrue(ready, "vault should become ready with notes listed")
 
-        await model.selectFolderForPage(FolderCatalog.rootFolderID)
+        model.selectFolderForPage(FolderCatalog.rootFolderID)
 
         var listed = false
         for _ in 0..<100 {

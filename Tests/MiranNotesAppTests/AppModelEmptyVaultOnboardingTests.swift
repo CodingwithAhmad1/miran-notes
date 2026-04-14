@@ -56,7 +56,7 @@ final class AppModelEmptyVaultOnboardingTests: XCTestCase {
         XCTAssertFalse(model.isEmptyVaultOnboardingState)
         XCTAssertNil(model.selectedFolderID, "Welcome flow keeps nil selection until user picks a folder")
 
-        await model.selectFolderForPage(FolderCatalog.rootFolderID)
+        model.selectFolderForPage(FolderCatalog.rootFolderID)
         XCTAssertEqual(model.selectedFolderID, FolderCatalog.rootFolderID)
         XCTAssertTrue(VaultWelcomeDismissalStore.isDismissed(vaultURL: vault))
     }
@@ -100,7 +100,7 @@ final class AppModelEmptyVaultOnboardingTests: XCTestCase {
 
         XCTAssertNil(model.selectedFolderID)
         let folderID = try XCTUnwrap(model.topLevelFolderEntries.first?.id)
-        await model.selectFolderForPage(folderID)
+        model.selectFolderForPage(folderID)
         XCTAssertEqual(model.selectedFolderID, folderID)
         XCTAssertTrue(VaultWelcomeDismissalStore.isDismissed(vaultURL: vault))
     }

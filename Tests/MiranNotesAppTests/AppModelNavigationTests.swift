@@ -42,10 +42,12 @@ final class AppModelNavigationTests: XCTestCase {
         let vault = try tempVaultURL()
         let repo = NoteRepository(vaultURL: vault)
         try await repo.ensureVault()
-        let (_, baseA) = try await repo.createNote(named: "prior-note")
+        let folderID = try await repo.createFolder(parentID: FolderCatalog.rootFolderID, name: "Inbox")
+        let (_, baseA) = try await repo.createNote(named: "prior-note", folderID: folderID)
 
         let model = AppModel(repository: repo)
         await model.refreshNotes()
+        model.selectedFolderID = folderID
         model.selectedBaseName = baseA
         await model.loadSelectedNote()
         model.apply(EditCommand.replaceText(range: TextRange(start: 0, length: 0), replacement: "saved-before-new"))
@@ -53,9 +55,39 @@ final class AppModelNavigationTests: XCTestCase {
         model.createNote()
         try await waitForAsync { model.selectedBaseName != baseA }
 
-        let textURLA = vault.appendingPathComponent("\(baseA).txt")
+        let textURLA = VaultPath.fileURL(vaultRoot: vault, relativePathWithoutExtension: baseA, extension: "txt")
         let onDiskA = try String(contentsOf: textURLA, encoding: .utf8)
         XCTAssertEqual(onDiskA, "saved-before-new")
+    }
+
+    func testCreateNoteWithoutFolderSelectionSetsAlertAndCreatesNothing() async throws {
+        let vault = try tempVaultURL()
+        let repo = NoteRepository(vaultURL: vault)
+        try await repo.ensureVault()
+        let model = AppModel(repository: repo)
+        await model.refreshNotes()
+        XCTAssertNil(model.selectedFolderID)
+        let countBefore = model.noteSummaries.count
+        model.createNote()
+        try await waitForAsync { model.userAlert != .none }
+        XCTAssertEqual(model.noteSummaries.count, countBefore)
+        XCTAssertTrue(model.userAlert.alertMessage.contains("Select a folder"))
+    }
+
+    func testCreateNoteWithVaultRootTraySelectedSetsAlert() async throws {
+        let vault = try tempVaultURL()
+        let repo = NoteRepository(vaultURL: vault)
+        try await repo.ensureVault()
+        _ = try await repo.createNote(named: "solo")
+        let model = AppModel(repository: repo)
+        await model.refreshNotes()
+        model.selectFolderForPage(FolderCatalog.rootFolderID)
+        XCTAssertEqual(model.selectedFolderID, FolderCatalog.rootFolderID)
+        let countBefore = model.noteSummaries.count
+        model.createNote()
+        try await waitForAsync { model.userAlert != .none }
+        XCTAssertEqual(model.noteSummaries.count, countBefore)
+        XCTAssertTrue(model.userAlert.alertMessage.contains("vault root"))
     }
 
     func testRenameActiveNotePersistsUnsavedBufferBeforeRepositoryRename() async throws {

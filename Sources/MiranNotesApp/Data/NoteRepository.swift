@@ -487,9 +487,16 @@ actor NoteRepository {
         )
     }
 
-    /// Flat save at vault root (single segment).
+    /// Persists a note addressed by its manifest-relative path (single segment at vault root, or nested `folder/note-stem`).
     @discardableResult
     func save(_ note: NoteDocument, asBaseName baseName: String) async throws -> VaultIntegrityResult {
+        if baseName.contains("/") {
+            try VaultPath.validateRelativePath(baseName)
+            let pathIndex = try await index.loadPathIndex()
+            let folderID =
+                pathIndex.entries.first { $0.relativePath == baseName }?.folderID ?? FolderCatalog.rootFolderID
+            return try await save(note, asRelativePath: baseName, folderID: folderID)
+        }
         try Self.validateBaseName(baseName)
         return try await save(note, asRelativePath: baseName, folderID: FolderCatalog.rootFolderID)
     }
