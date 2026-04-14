@@ -283,74 +283,97 @@ private struct MiranNotesMainWindowContent: View {
             case .incompatible(let report):
                 WorkspaceIncompatibleView(report: report, onChooseDifferentFolder: presentOpenWorkspacePanel)
             case .ready:
-                NavigationSplitView {
-                    WorkspaceFolderSidebarView(model: model, onClearToolbarSearchFocus: clearToolbarSearchFocus)
-                        .toolbar(removing: .sidebarToggle)
-                } detail: {
-                    WorkspaceDetailColumnView(model: model, onClearToolbarSearchFocus: clearToolbarSearchFocus)
+                GeometryReader { geo in
+                    readyWorkspaceShell(windowContentWidth: geo.size.width)
                 }
-                .toolbar {
-                    ToolbarItem(placement: .navigation) {
-                        HStack(spacing: 8) {
-                            if model.isFolderManagementPresented {
-                                Button {
-                                    isToolbarSearchFocused = false
-                                    model.isFolderManagementPresented = false
-                                } label: {
-                                    Image(systemName: "chevron.left")
-                                        .font(.system(size: 13, weight: .semibold))
-                                        .frame(width: 30, height: 30)
-                                        .background(
-                                            Circle().fill(Color(nsColor: .quaternarySystemFill))
-                                        )
-                                        .contentShape(Circle())
-                                }
-                                .buttonStyle(.plain)
-                                .frame(width: 34, height: 34)
-                                .contentShape(Rectangle())
-                                .help("Back to vault")
-                                .accessibilityLabel("Back to vault")
-                            } else if model.selectedNoteID != nil {
-                                Button {
-                                    clearToolbarSearchFocus()
-                                    model.closeToFolderPage()
-                                } label: {
-                                    Image(systemName: "chevron.left")
-                                        .font(.system(size: 13, weight: .semibold))
-                                        .frame(width: 30, height: 30)
-                                        .background(
-                                            Circle().fill(Color(nsColor: .quaternarySystemFill))
-                                        )
-                                        .contentShape(Circle())
-                                }
-                                .buttonStyle(.plain)
-                                .frame(width: 34, height: 34)
-                                .contentShape(Rectangle())
-                                .help("Back to folder")
-                                .accessibilityLabel("Back to folder")
-                            }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+    }
+
+    /// Full window content width (sidebar + detail). Used to drop trailing toolbar items before the system
+    /// overflow chevron would absorb them on narrow windows.
+    @ViewBuilder
+    private func readyWorkspaceShell(windowContentWidth: CGFloat) -> some View {
+        NavigationSplitView {
+            WorkspaceFolderSidebarView(model: model, onClearToolbarSearchFocus: clearToolbarSearchFocus)
+                .toolbar(removing: .sidebarToggle)
+        } detail: {
+            WorkspaceDetailColumnView(model: model, onClearToolbarSearchFocus: clearToolbarSearchFocus)
+        }
+        .toolbar {
+            ToolbarItem(placement: .navigation) {
+                HStack(spacing: 8) {
+                    if model.isFolderManagementPresented {
+                        Button {
+                            isToolbarSearchFocused = false
+                            model.isFolderManagementPresented = false
+                        } label: {
+                            Image(systemName: "chevron.left")
+                                .font(.system(size: 13, weight: .semibold))
+                                .frame(width: 30, height: 30)
+                                .background(
+                                    Circle().fill(Color(nsColor: .quaternarySystemFill))
+                                )
+                                .contentShape(Circle())
                         }
-                    }
-                    ToolbarItem(placement: .principal) {
-                        HStack {
-                            Spacer(minLength: 0)
-                            vaultToolbarSearchField
-                            Spacer(minLength: 0)
+                        .buttonStyle(.plain)
+                        .frame(width: 34, height: 34)
+                        .contentShape(Rectangle())
+                        .help("Back to vault")
+                        .accessibilityLabel("Back to vault")
+                    } else if model.selectedNoteID != nil {
+                        Button {
+                            clearToolbarSearchFocus()
+                            model.closeToFolderPage()
+                        } label: {
+                            Image(systemName: "chevron.left")
+                                .font(.system(size: 13, weight: .semibold))
+                                .frame(width: 30, height: 30)
+                                .background(
+                                    Circle().fill(Color(nsColor: .quaternarySystemFill))
+                                )
+                                .contentShape(Circle())
                         }
-                        .frame(maxWidth: .infinity)
+                        .buttonStyle(.plain)
+                        .frame(width: 34, height: 34)
+                        .contentShape(Rectangle())
+                        .help("Back to folder")
+                        .accessibilityLabel("Back to folder")
                     }
-                    ToolbarItemGroup(placement: .primaryAction) {
-                        LayoutToolbarItem(
-                            model: model,
-                            vaultSessionRegistry: vaultSessionRegistry,
-                            onToolbarInteraction: clearToolbarSearchFocus
-                        )
-                        FolderManagementToolbarButton(model: model, onToolbarInteraction: clearToolbarSearchFocus)
-                    }
+                }
+            }
+            ToolbarItem(placement: .principal) {
+                HStack {
+                    Spacer(minLength: 0)
+                    vaultToolbarSearchField
+                    Spacer(minLength: 0)
+                }
+                .frame(maxWidth: .infinity)
+            }
+            if !Self.shouldHideTrailingToolbarControls(width: windowContentWidth) {
+                ToolbarItemGroup(placement: .primaryAction) {
+                    LayoutToolbarItem(
+                        model: model,
+                        vaultSessionRegistry: vaultSessionRegistry,
+                        onToolbarInteraction: clearToolbarSearchFocus
+                    )
+                    FolderManagementToolbarButton(model: model, onToolbarInteraction: clearToolbarSearchFocus)
                 }
             }
         }
     }
+
+    /// Hide layout + folder-management toolbar items when the window is too narrow for the principal search
+    /// field’s minimum width plus leading navigation and trailing controls, so AppKit does not move them
+    /// into the overflow menu.
+    private static func shouldHideTrailingToolbarControls(width: CGFloat) -> Bool {
+        guard width.isFinite, width > 1 else { return true }
+        return width < (toolbarSearchFieldMinWidth + toolbarChromeReserveForTrailingItems)
+    }
+
+    /// Space reserved for back/navigation column, trailing icon buttons, and unified-toolbar insets.
+    private static let toolbarChromeReserveForTrailingItems: CGFloat = 300
 
     private static let toolbarSearchFieldMinWidth: CGFloat = 400
     private static let toolbarSearchFieldIdealWidth: CGFloat = 500
