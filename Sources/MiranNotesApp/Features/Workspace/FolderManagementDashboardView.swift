@@ -16,13 +16,12 @@ struct FolderManagementToolbarButton: View {
             Image(systemName: "gearshape")
         }
         .help("Folder Management…")
-        .disabled(!isEnabled)
+        .disabled(!isEnabled || model?.isFolderManagementPresented == true)
     }
 }
 
 struct FolderManagementDashboardView: View {
     @Bindable var model: AppModel
-    @Environment(\.dismiss) private var dismiss
 
     @State private var selection: Set<UUID> = []
     @State private var confirmHide = false
@@ -40,49 +39,39 @@ struct FolderManagementDashboardView: View {
     }
 
     var body: some View {
-        NavigationStack {
-            VStack(spacing: 0) {
-                if let inlineNotice {
-                    Text(inlineNotice)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 10)
-                        .background(.quaternary.opacity(0.35))
+        VStack(spacing: 0) {
+            if let inlineNotice {
+                Text(inlineNotice)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                    .background(.quaternary.opacity(0.35))
+            }
+
+            List {
+                Section("Folders") {
+                    if model.visibleTopLevelFolderEntries.isEmpty {
+                        Text("No visible folders.")
+                            .foregroundStyle(.secondary)
+                    }
+                    ForEach(model.visibleTopLevelFolderEntries, id: \.id) { folder in
+                        folderRow(folder)
+                    }
                 }
 
-                List {
-                    Section("Folders") {
-                        if model.visibleTopLevelFolderEntries.isEmpty {
-                            Text("No visible folders.")
-                                .foregroundStyle(.secondary)
-                        }
-                        ForEach(model.visibleTopLevelFolderEntries, id: \.id) { folder in
-                            folderRow(folder)
-                        }
-                    }
-
-                    if !model.hiddenTopLevelFolderEntries.isEmpty {
-                        Section {
-                            DisclosureGroup("Hidden") {
-                                ForEach(model.hiddenTopLevelFolderEntries, id: \.id) { folder in
-                                    folderRow(folder)
-                                }
+                if !model.hiddenTopLevelFolderEntries.isEmpty {
+                    Section {
+                        DisclosureGroup("Hidden") {
+                            ForEach(model.hiddenTopLevelFolderEntries, id: \.id) { folder in
+                                folderRow(folder)
                             }
                         }
                     }
                 }
             }
-            .frame(minWidth: 420, minHeight: 360)
-            .navigationTitle("Folder Management")
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Done") {
-                        dismiss()
-                    }
-                }
-            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 if !selection.isEmpty {
                     HStack(spacing: 16) {
@@ -158,10 +147,11 @@ struct FolderManagementDashboardView: View {
                     "This permanently removes each empty folder from the workspace (no notes and no subfolders). Folders that still contain items cannot be deleted."
                 )
             }
-            .onDisappear {
-                noticeDismissTask?.cancel()
-                noticeDismissTask = nil
-            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onDisappear {
+            noticeDismissTask?.cancel()
+            noticeDismissTask = nil
         }
     }
 

@@ -176,9 +176,6 @@ private struct MiranNotesMainWindowContent: View {
                     editingHelpPresented = false
                 }
             }
-            .sheet(isPresented: $model.isFolderManagementPresented) {
-                FolderManagementDashboardView(model: model)
-            }
             .sheet(isPresented: $conflictDetailsPresented) {
                 NavigationStack {
                     ScrollView {
@@ -280,7 +277,16 @@ private struct MiranNotesMainWindowContent: View {
                 .toolbar {
                     ToolbarItem(placement: .navigation) {
                         HStack(spacing: 8) {
-                            if model.selectedNoteID != nil {
+                            if model.isFolderManagementPresented {
+                                Button {
+                                    model.isFolderManagementPresented = false
+                                } label: {
+                                    Image(systemName: "chevron.left")
+                                }
+                                .buttonStyle(.borderless)
+                                .help("Back to vault")
+                                .accessibilityLabel("Back to vault")
+                            } else if model.selectedNoteID != nil {
                                 Button {
                                     model.closeToFolderPage()
                                 } label: {
@@ -315,11 +321,13 @@ private struct MiranNotesMainWindowContent: View {
                         } label: {
                             Label("New Note", systemImage: "plus")
                         }
-                        .disabled(!model.allowsToolbarNewNote)
+                        .disabled(model.isFolderManagementPresented || !model.allowsToolbarNewNote)
                         .help(
-                            model.allowsToolbarNewNote
-                                ? "Create a new note in the selected folder"
-                                : "Select a folder (not Vault) to create a note"
+                            model.isFolderManagementPresented
+                                ? "Close Folder Management to create a note"
+                                : model.allowsToolbarNewNote
+                                    ? "Create a new note in the selected folder"
+                                    : "Select a folder (not Vault) to create a note"
                         )
                         FolderManagementToolbarButton(model: model)
                     }
@@ -354,6 +362,9 @@ private struct MiranNotesMainWindowContent: View {
     }
 
     private var vaultWorkspaceToolbarTitle: String {
+        if model.isFolderManagementPresented {
+            return "Folder Management"
+        }
         if model.selectedNoteID != nil {
             if let path = model.selectedBaseName, !path.isEmpty {
                 return VaultPath.displayTitle(forRelativePath: path)
@@ -373,10 +384,15 @@ private struct MiranNotesMainWindowContent: View {
     private var workspaceSearchBinding: Binding<String> {
         Binding(
             get: {
-                model.selectedNoteID != nil ? model.editorFindQuery : model.vaultSearchQuery
+                if model.isFolderManagementPresented {
+                    return model.vaultSearchQuery
+                }
+                return model.selectedNoteID != nil ? model.editorFindQuery : model.vaultSearchQuery
             },
             set: { newValue in
-                if model.selectedNoteID != nil {
+                if model.isFolderManagementPresented {
+                    model.vaultSearchQuery = newValue
+                } else if model.selectedNoteID != nil {
                     model.editorFindQuery = newValue
                 } else {
                     model.vaultSearchQuery = newValue
@@ -386,7 +402,10 @@ private struct MiranNotesMainWindowContent: View {
     }
 
     private var workspaceSearchPrompt: Text {
-        model.selectedNoteID != nil ? Text("Find in note…") : Text("Search vault…")
+        if model.isFolderManagementPresented {
+            return Text("Search vault…")
+        }
+        return model.selectedNoteID != nil ? Text("Find in note…") : Text("Search vault…")
     }
 }
 
@@ -402,7 +421,9 @@ private struct WorkspaceDetailColumnView: View {
 
     var body: some View {
         Group {
-            if showsLoadedEditor {
+            if model.isFolderManagementPresented {
+                FolderManagementDashboardView(model: model)
+            } else if showsLoadedEditor {
                 TiledEditorView(model: model)
             } else if model.selectedNoteID != nil {
                 VStack(spacing: 12) {
