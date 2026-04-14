@@ -36,7 +36,10 @@ struct NoteEditorTitleHeader: View {
             pendingDisplayedTitleUntilPathUpdates = nil
             syncDraftFromModel()
         }
-        .onChange(of: model.selectedNoteID) { _, _ in
+        .onChange(of: model.selectedNoteID) { oldID, newID in
+            if oldID != nil, newID == nil {
+                commitTitle(moveCaretToBody: false)
+            }
             pendingDisplayedTitleUntilPathUpdates = nil
             syncDraftFromModel()
         }
