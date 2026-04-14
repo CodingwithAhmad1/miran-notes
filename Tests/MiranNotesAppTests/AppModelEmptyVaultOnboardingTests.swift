@@ -55,7 +55,11 @@ final class AppModelEmptyVaultOnboardingTests: XCTestCase {
         try await waitUntil { !model.noteSummaries.isEmpty }
 
         XCTAssertFalse(model.isEmptyVaultOnboardingState)
+        XCTAssertNil(model.selectedFolderID, "Welcome flow keeps nil selection until user picks a folder")
+
+        await model.selectFolderForPage(FolderCatalog.rootFolderID)
         XCTAssertEqual(model.selectedFolderID, FolderCatalog.rootFolderID)
+        XCTAssertTrue(VaultWelcomeDismissalStore.isDismissed(vaultURL: vault))
     }
 
     func testOnboardingStateFalseAfterCreateFolder() async throws {
@@ -77,5 +81,28 @@ final class AppModelEmptyVaultOnboardingTests: XCTestCase {
         try await waitUntil { !model.isEmptyVaultOnboardingState }
 
         XCTAssertNotNil(model.selectedFolderID)
+        XCTAssertTrue(VaultWelcomeDismissalStore.isDismissed(vaultURL: vault))
+    }
+
+    func testExistingTopLevelFolderDoesNotAutoSelectUntilUserPicks() async throws {
+        let vault = try tempVaultURL()
+        let repo = NoteRepository(vaultURL: vault)
+        try await repo.ensureVault()
+        _ = try await repo.createFolder(parentID: FolderCatalog.rootFolderID, name: "Inbox")
+
+        let model = AppModel(repository: repo)
+        model.loadVault()
+
+        try await waitUntil {
+            if case .ready = model.workspaceGateState { return true }
+            return false
+        }
+        try await waitUntil { model.topLevelFolderEntries.count == 1 }
+
+        XCTAssertNil(model.selectedFolderID)
+        let folderID = try XCTUnwrap(model.topLevelFolderEntries.first?.id)
+        await model.selectFolderForPage(folderID)
+        XCTAssertEqual(model.selectedFolderID, folderID)
+        XCTAssertTrue(VaultWelcomeDismissalStore.isDismissed(vaultURL: vault))
     }
 }

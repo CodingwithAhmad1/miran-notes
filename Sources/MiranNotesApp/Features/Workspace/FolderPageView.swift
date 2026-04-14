@@ -6,33 +6,8 @@ struct FolderPageView: View {
     var body: some View {
         Group {
             if model.selectedFolderID == nil {
-                if model.isEmptyVaultOnboardingState {
-                    ContentUnavailableView {
-                        Label("Welcome to Miran Notes", systemImage: "note.text")
-                    } description: {
-                        VStack(alignment: .leading, spacing: 10) {
-                            Text(
-                                "Your notes are plain text files in this workspace—local-first and private.\n\n"
-                                    + "Miran is for calm, personal knowledge—not cloud collaboration or a shared wiki by default.\n\n"
-                                    + "Use New Folder or New Note in the Folders sidebar."
-                            )
-                            Text("Workspace folder")
-                                .font(.caption)
-                                .fontWeight(.semibold)
-                                .foregroundStyle(.secondary)
-                            Text(verbatim: model.repository.vaultURL.path)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .textSelection(.enabled)
-                            Text(
-                                "Open Workspace… (Shift-Command-O) chooses a different folder on this Mac. "
-                                    + "You can use a Git checkout, iCloud Drive folder, or any ordinary folder—Miran saves files there."
-                            )
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        }
-                        .frame(maxWidth: 420, alignment: .leading)
-                    }
+                if !model.hasDismissedVaultWelcome {
+                    VaultOpenedWelcomeView(vaultPath: model.repository.vaultURL.path)
                 } else {
                     ContentUnavailableView(
                         "No folder selected",

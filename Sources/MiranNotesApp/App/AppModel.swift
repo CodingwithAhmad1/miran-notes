@@ -125,6 +125,9 @@ final class AppModel {
     /// Selected topic folder (or vault root) for the folder-page column.
     var selectedFolderID: UUID?
 
+    /// When true, the one-time vault welcome in the detail pane will not be shown again for this vault (see ``VaultWelcomeDismissalStore``).
+    private(set) var hasDismissedVaultWelcome = false
+
     /// In-memory buffers for every note shown on the current folder page (parallel editing).
     private(set) var folderPageDocuments: [UUID: NoteDocument] = [:]
     private var folderPageLastPersisted: [UUID: NoteDocument] = [:]
@@ -270,6 +273,7 @@ final class AppModel {
                 return
             }
             workspaceGateState = .ready
+            hasDismissedVaultWelcome = VaultWelcomeDismissalStore.isDismissed(vaultURL: repository.vaultURL)
 
             await runStartupRecoveryIfPossible()
             await reconcileVaultState(invalidateCaches: false)
@@ -410,10 +414,24 @@ final class AppModel {
     }
 
     private func syncFolderSelectionAfterRefresh() async {
-        if !isSelectedFolderStillValid() {
+        if let id = selectedFolderID, !isSelectedFolderStillValid() {
             selectedFolderID = pickDefaultFolderID()
         }
+        // When `selectedFolderID` is nil, keep it nil: either the one-time welcome is showing
+        // (`!hasDismissedVaultWelcome`) or the user cleared selection after dismissing the welcome.
         await loadFolderPageDocuments()
+    }
+
+    private func markVaultWelcomeDismissedIfNeeded() {
+        guard !hasDismissedVaultWelcome else { return }
+        do {
+            try VaultWelcomeDismissalStore.markDismissed(vaultURL: repository.vaultURL)
+            hasDismissedVaultWelcome = true
+        } catch {
+            userAlert = .message(
+                "Could not save workspace preferences: \(error.localizedDescription)"
+            )
+        }
     }
 
     private func isSelectedFolderStillValid() -> Bool {
@@ -436,6 +454,9 @@ final class AppModel {
     }
 
     func selectFolderForPage(_ folderID: UUID?) async {
+        if folderID != nil {
+            markVaultWelcomeDismissedIfNeeded()
+        }
         selectedFolderID = folderID
         selectedBaseName = nil
         selectedNoteID = nil
@@ -520,6 +541,7 @@ final class AppModel {
         workspaceGateState = .incompatible(report)
         noteSummaries = []
         folderCatalog = FolderCatalog()
+        hasDismissedVaultWelcome = false
         selectedFolderID = nil
         selectedNoteID = nil
         selectedBaseName = nil
@@ -673,6 +695,7 @@ final class AppModel {
         Task { @MainActor in
             do {
                 let id = try await repository.createFolder(parentID: parentID, name: name)
+                markVaultWelcomeDismissedIfNeeded()
                 await refreshNotes()
                 selectedFolderID = id
                 await loadFolderPageDocuments()
@@ -846,6 +869,7 @@ final class AppModel {
             let targetFolder = selectedFolderID ?? FolderCatalog.rootFolderID
             do {
                 _ = try await repository.createNote(named: "untitled-note", folderID: targetFolder)
+                markVaultWelcomeDismissedIfNeeded()
                 await refreshNotes()
                 selectedFolderID = targetFolder
                 await loadFolderPageDocuments()

@@ -9,6 +9,8 @@ enum VaultPaths {
     static let folderCatalogFileName = "folder-catalog.json"
     static let pathIndexFileName = "path-index.json"
     static let externalBookmarksFileName = "external-bookmarks.json"
+    /// Marker file: user completed the one-time vault welcome (detail pane); stored under `.miran/`.
+    static let vaultWelcomeDismissedFileName = "vault-welcome-dismissed"
     static let auxDirName = "_aux"
 
     static func miranDirectory(vaultURL: URL) -> URL {
