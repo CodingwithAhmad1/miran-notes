@@ -20,4 +20,38 @@ final class AppModelUserAlertTests: XCTestCase {
 
         XCTAssertEqual(model.userAlert, .none)
     }
+
+    func testPerformUserAlertRecoveryClearsForVariousKinds() {
+        let vault = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MiranUserAlertKinds-\(UUID().uuidString)", isDirectory: true)
+        let repo = NoteRepository(vaultURL: vault)
+        let model = AppModel(repository: repo)
+        let noteID = UUID()
+
+        let kinds: [UserAlertRecoveryKind] = [
+            .retryBodySearchIndex,
+            .retryVaultStartupRecovery,
+            .retryStartupLinkGraphSync,
+            .retryManifestReconcileAfterDiskChange(invalidateCaches: false),
+            .retryManifestReconcileAfterDiskChange(invalidateCaches: true),
+            .retryRefreshNotesAndFolderUI,
+            .retryLoadFolderPageDocuments,
+            .retryRefreshBacklinks,
+            .retryLoadActiveNote,
+            .retryResolveNoteSelection(noteID: noteID),
+            .retryRefreshOnDiskFingerprints,
+            .retryFlushActiveNoteToDisk,
+            .retryVaultWatcher,
+            .retryProcessExternalDiskActivity,
+            .retryOpenExternalEditCompare,
+            .retryLoadViewPane(index: 1, baseName: "test-note"),
+            .retryFolderPageAutosave(noteID: noteID),
+        ]
+
+        for kind in kinds {
+            model.userAlert = .recoverable(message: "test", kind: kind)
+            model.performUserAlertRecovery(kind: kind)
+            XCTAssertEqual(model.userAlert, .none, "Expected alert cleared for \(kind)")
+        }
+    }
 }

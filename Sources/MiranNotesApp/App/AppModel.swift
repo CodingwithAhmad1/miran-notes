@@ -21,6 +21,21 @@ struct ExternalTextComparePayload: Identifiable, Equatable, Sendable {
 /// Recovery action offered alongside a user-visible error alert (no `RepairAdvisory` banner).
 enum UserAlertRecoveryKind: Equatable, Sendable {
     case retryBodySearchIndex
+    case retryVaultStartupRecovery
+    case retryStartupLinkGraphSync
+    case retryManifestReconcileAfterDiskChange(invalidateCaches: Bool)
+    case retryRefreshNotesAndFolderUI
+    case retryLoadFolderPageDocuments
+    case retryRefreshBacklinks
+    case retryLoadActiveNote
+    case retryResolveNoteSelection(noteID: UUID?)
+    case retryRefreshOnDiskFingerprints
+    case retryFlushActiveNoteToDisk
+    case retryVaultWatcher
+    case retryProcessExternalDiskActivity
+    case retryOpenExternalEditCompare
+    case retryLoadViewPane(index: Int, baseName: String)
+    case retryFolderPageAutosave(noteID: UUID)
 }
 
 /// Modal error presentation: plain message or retryable async failure.
@@ -228,6 +243,20 @@ final class AppModel {
         undoManager = manager
     }
 
+    private func runStartupRecoveryIfPossible() async {
+        do {
+            let recovery = try await repository.performStartupRecovery()
+            if recovery.resumedAndCompletedCount > 0 || recovery.discardedStagingCount > 0 {
+                repairAdvisory = RepairAdvisory.vaultRecoveryNotice(recovery)
+            }
+        } catch {
+            userAlert = .recoverable(
+                message: "Vault recovery failed: \(error.localizedDescription)",
+                kind: .retryVaultStartupRecovery
+            )
+        }
+    }
+
     func loadVault() {
         Task { @MainActor in
             workspaceGateState = .checking
@@ -238,14 +267,7 @@ final class AppModel {
             }
             workspaceGateState = .ready
 
-            do {
-                let recovery = try await repository.performStartupRecovery()
-                if recovery.resumedAndCompletedCount > 0 || recovery.discardedStagingCount > 0 {
-                    repairAdvisory = RepairAdvisory.vaultRecoveryNotice(recovery)
-                }
-            } catch {
-                userAlert = .message("Vault recovery failed: \(error.localizedDescription)")
-            }
+            await runStartupRecoveryIfPossible()
             await reconcileVaultState(invalidateCaches: false)
             await refreshNotes()
             await runStartupLinkGraphSync()
@@ -266,7 +288,10 @@ final class AppModel {
         do {
             relationshipCount = try await repository.noteLinkRelationshipCount()
         } catch {
-            userAlert = .message("Could not read relationship index for startup sync decision: \(error.localizedDescription)")
+            userAlert = .recoverable(
+                message: "Could not read relationship index for startup sync decision: \(error.localizedDescription)",
+                kind: .retryStartupLinkGraphSync
+            )
             return
         }
         let decision = LinkGraphStartupPolicy.decision(
@@ -288,7 +313,10 @@ final class AppModel {
                 applyVaultIntegrityAfterLoadIfNeeded(integrity)
                 recordStartupLinkGraphSyncDurationMs(Date().timeIntervalSince(start) * 1000.0)
             } catch {
-                userAlert = .message("Link index sync failed: \(error.localizedDescription)")
+                userAlert = .recoverable(
+                    message: "Link index sync failed: \(error.localizedDescription)",
+                    kind: .retryStartupLinkGraphSync
+                )
             }
         case .deferred:
             startupLinkGraphSyncTask = Task { @MainActor [weak self] in
@@ -302,7 +330,10 @@ final class AppModel {
                     await self.refreshBacklinks()
                 } catch {
                     guard !Task.isCancelled else { return }
-                    self.userAlert = .message("Deferred link index sync failed: \(error.localizedDescription)")
+                    self.userAlert = .recoverable(
+                        message: "Deferred link index sync failed: \(error.localizedDescription)",
+                        kind: .retryStartupLinkGraphSync
+                    )
                 }
             }
         }
@@ -339,7 +370,10 @@ final class AppModel {
             repository: repository,
             invalidateCaches: invalidateCaches
         ) {
-            userAlert = .message(err)
+            userAlert = .recoverable(
+                message: err,
+                kind: .retryManifestReconcileAfterDiskChange(invalidateCaches: invalidateCaches)
+            )
         }
     }
 
@@ -361,7 +395,10 @@ final class AppModel {
             folderCatalog = try await repository.loadFolderCatalog()
             scheduleBodySearchIndexRebuild()
         } catch {
-            userAlert = .message("Failed to list notes: \(error.localizedDescription)")
+            userAlert = .recoverable(
+                message: "Failed to list notes: \(error.localizedDescription)",
+                kind: .retryRefreshNotesAndFolderUI
+            )
         }
         if workspaceGateState == .ready {
             await syncFolderSelectionAfterRefresh()
@@ -414,7 +451,7 @@ final class AppModel {
         folderPageDocuments = result.documents
         folderPageLastPersisted = result.lastPersisted
         if let err = result.loadError {
-            userAlert = .message(err)
+            userAlert = .recoverable(message: err, kind: .retryLoadFolderPageDocuments)
         }
     }
 
@@ -454,7 +491,10 @@ final class AppModel {
             applyVaultIntegrityAfterSave(integrity)
             folderPageLastPersisted[noteID] = doc
         } catch {
-            userAlert = .message("Autosave failed: \(error.localizedDescription)")
+            userAlert = .recoverable(
+                message: "Autosave failed: \(error.localizedDescription)",
+                kind: .retryFolderPageAutosave(noteID: noteID)
+            )
         }
     }
 
@@ -511,6 +551,40 @@ final class AppModel {
         switch kind {
         case .retryBodySearchIndex:
             scheduleBodySearchIndexRebuild()
+        case .retryVaultStartupRecovery:
+            Task { await self.runStartupRecoveryIfPossible() }
+        case .retryStartupLinkGraphSync:
+            Task { await self.runStartupLinkGraphSync() }
+        case .retryManifestReconcileAfterDiskChange(let invalidateCaches):
+            Task { await self.reconcileVaultState(invalidateCaches: invalidateCaches) }
+        case .retryRefreshNotesAndFolderUI:
+            Task { await self.refreshNotes() }
+        case .retryLoadFolderPageDocuments:
+            Task { await self.loadFolderPageDocuments() }
+        case .retryRefreshBacklinks:
+            Task { await self.refreshBacklinks() }
+        case .retryLoadActiveNote:
+            Task { await self.loadSelectedNote() }
+        case .retryResolveNoteSelection(let noteID):
+            changeSelection(noteID: noteID)
+        case .retryRefreshOnDiskFingerprints:
+            Task {
+                if let path = self.selectedBaseName {
+                    await self.refreshOnDiskFingerprints(for: path)
+                }
+            }
+        case .retryFlushActiveNoteToDisk:
+            Task { await self.flushCurrentNoteToDiskIfDirty() }
+        case .retryVaultWatcher:
+            startVaultWatcher()
+        case .retryProcessExternalDiskActivity:
+            Task { await self.processExternalDiskActivity() }
+        case .retryOpenExternalEditCompare:
+            openExternalEditCompare()
+        case .retryLoadViewPane(let index, let baseName):
+            loadViewPane(index: index, baseName: baseName)
+        case .retryFolderPageAutosave(let noteID):
+            Task { await self.flushFolderPageNoteIfDirty(noteID: noteID) }
         }
     }
 
@@ -591,7 +665,10 @@ final class AppModel {
                 selectedFolderID = id
                 await loadFolderPageDocuments()
             } catch {
-                userAlert = .message(error.localizedDescription)
+                userAlert = .recoverable(
+                    message: error.localizedDescription,
+                    kind: .retryRefreshNotesAndFolderUI
+                )
             }
         }
     }
@@ -602,7 +679,10 @@ final class AppModel {
                 try await repository.deleteFolder(id: id)
                 await refreshNotes()
             } catch {
-                userAlert = .message(error.localizedDescription)
+                userAlert = .recoverable(
+                    message: error.localizedDescription,
+                    kind: .retryRefreshNotesAndFolderUI
+                )
             }
         }
     }
@@ -624,7 +704,10 @@ final class AppModel {
                 }
                 await loadSelectedNote()
             } catch {
-                userAlert = .message(error.localizedDescription)
+                userAlert = .recoverable(
+                    message: error.localizedDescription,
+                    kind: .retryRefreshNotesAndFolderUI
+                )
             }
         }
     }
@@ -674,7 +757,10 @@ final class AppModel {
             backlinks = result
         } catch {
             backlinks = []
-            userAlert = .message("Could not refresh backlinks: \(error.localizedDescription)")
+            userAlert = .recoverable(
+                message: "Could not refresh backlinks: \(error.localizedDescription)",
+                kind: .retryRefreshBacklinks
+            )
         }
     }
 
@@ -687,7 +773,10 @@ final class AppModel {
 
     func openNote(noteID: UUID) {
         guard noteSummaries.contains(where: { $0.noteID == noteID }) else {
-            userAlert = .message("Could not open note (not in vault list).")
+            userAlert = .recoverable(
+                message: "Could not open note (not in vault list).",
+                kind: .retryRefreshNotesAndFolderUI
+            )
             return
         }
         pendingEditorScroll = nil
@@ -729,7 +818,10 @@ final class AppModel {
                 selectedBaseName = newPath
                 await refreshBacklinks()
             } catch {
-                userAlert = .message("Rename failed: \(error.localizedDescription)")
+                userAlert = .recoverable(
+                    message: "Rename failed: \(error.localizedDescription)",
+                    kind: .retryRefreshNotesAndFolderUI
+                )
             }
         }
     }
@@ -751,7 +843,10 @@ final class AppModel {
                 lastPersistedDocument = nil
                 clearUndoStack()
             } catch {
-                userAlert = .message("Failed to create note: \(error.localizedDescription)")
+                userAlert = .recoverable(
+                    message: "Failed to create note: \(error.localizedDescription)",
+                    kind: .retryRefreshNotesAndFolderUI
+                )
             }
         }
     }
@@ -763,7 +858,10 @@ final class AppModel {
                 try await repository.renameFolder(id: id, newName: newName)
                 await refreshNotes()
             } catch {
-                userAlert = .message(error.localizedDescription)
+                userAlert = .recoverable(
+                    message: error.localizedDescription,
+                    kind: .retryRefreshNotesAndFolderUI
+                )
             }
         }
     }
@@ -775,7 +873,10 @@ final class AppModel {
                 try await repository.deleteNote(noteID: noteID)
                 await refreshNotes()
             } catch {
-                userAlert = .message(error.localizedDescription)
+                userAlert = .recoverable(
+                    message: error.localizedDescription,
+                    kind: .retryRefreshNotesAndFolderUI
+                )
             }
         }
     }
@@ -813,7 +914,10 @@ final class AppModel {
             clearUndoStack()
             await refreshBacklinks()
         } catch {
-            userAlert = .message("Failed to load note: \(error.localizedDescription)")
+            userAlert = .recoverable(
+                message: "Failed to load note: \(error.localizedDescription)",
+                kind: .retryLoadActiveNote
+            )
         }
         updateActiveNoteFilePresenter()
     }
@@ -1081,7 +1185,10 @@ final class AppModel {
                     Logger.vault.error(
                         "loadManifest failed during note selection: \(error.localizedDescription, privacy: .public)"
                     )
-                    userAlert = .message("Could not read the note list.")
+                    userAlert = .recoverable(
+                        message: "Could not read the note list.",
+                        kind: .retryResolveNoteSelection(noteID: id)
+                    )
                     path = nil
                 }
             } else {
@@ -1105,7 +1212,10 @@ final class AppModel {
             lastKnownDiskRevision = try await repository.noteRevisionToken(relativePath: path)
             lastKnownNoteTextSHA256 = try await repository.noteTextFileSHA256(relativePath: path)
         } catch {
-            userAlert = .message("Failed to read note on-disk state: \(error.localizedDescription)")
+            userAlert = .recoverable(
+                message: "Failed to read note on-disk state: \(error.localizedDescription)",
+                kind: .retryRefreshOnDiskFingerprints
+            )
         }
     }
 
@@ -1122,7 +1232,10 @@ final class AppModel {
             lastPersistedDocument = doc
             await refreshBacklinks()
         } catch {
-            userAlert = .message("Autosave failed: \(error.localizedDescription)")
+            userAlert = .recoverable(
+                message: "Autosave failed: \(error.localizedDescription)",
+                kind: .retryFlushActiveNoteToDisk
+            )
         }
     }
 
@@ -1153,7 +1266,10 @@ final class AppModel {
                 VaultTelemetry.logAutosave(latencyMs: max(0, latencyMs))
                 await self.refreshBacklinks()
             } catch {
-                userAlert = .message("Autosave failed: \(error.localizedDescription)")
+                userAlert = .recoverable(
+                    message: "Autosave failed: \(error.localizedDescription)",
+                    kind: .retryFlushActiveNoteToDisk
+                )
             }
         }
     }
@@ -1206,7 +1322,10 @@ final class AppModel {
         vaultWatcher = VaultDirectoryWatcher(
             vaultURL: repository.vaultURL,
             onSetupFailed: { [weak self] error in
-                self?.userAlert = .message("Vault watch failed: \(error.localizedDescription)")
+                self?.userAlert = .recoverable(
+                    message: "Vault watch failed: \(error.localizedDescription)",
+                    kind: .retryVaultWatcher
+                )
             },
             onEvent: { [weak self] in
                 guard let self else { return }
@@ -1235,7 +1354,10 @@ final class AppModel {
             diskDate = try await repository.noteModifiedDate(relativePath: path)
             diskRevision = try await repository.noteRevisionToken(relativePath: path)
         } catch {
-            userAlert = .message("Failed to read note timestamps: \(error.localizedDescription)")
+            userAlert = .recoverable(
+                message: "Failed to read note timestamps: \(error.localizedDescription)",
+                kind: .retryProcessExternalDiskActivity
+            )
             return
         }
         guard let diskDate else { return }
@@ -1259,7 +1381,10 @@ final class AppModel {
             }
             observedTextHash = h2
         } catch {
-            userAlert = .message("Failed to read note body fingerprint: \(error.localizedDescription)")
+            userAlert = .recoverable(
+                message: "Failed to read note body fingerprint: \(error.localizedDescription)",
+                kind: .retryProcessExternalDiskActivity
+            )
             return
         }
 
@@ -1268,7 +1393,10 @@ final class AppModel {
             let raw = try await repository.loadNote(baseName: path)
             loadedFromDisk = EditCommandEngine.apply(.repairMetadata, to: raw.document)
         } catch {
-            userAlert = .message("Failed to read external changes: \(error.localizedDescription)")
+            userAlert = .recoverable(
+                message: "Failed to read external changes: \(error.localizedDescription)",
+                kind: .retryProcessExternalDiskActivity
+            )
             return
         }
 
@@ -1312,7 +1440,10 @@ final class AppModel {
             do {
                 diskText = try await repository.readRawNoteText(relativePath: path)
             } catch {
-                userAlert = .message("Could not load disk copy: \(error.localizedDescription)")
+                userAlert = .recoverable(
+                    message: "Could not load disk copy: \(error.localizedDescription)",
+                    kind: .retryOpenExternalEditCompare
+                )
                 return
             }
             externalTextCompare = ExternalTextComparePayload(localText: doc.text, diskText: diskText)
@@ -1427,7 +1558,10 @@ final class AppModel {
                 guard slot < viewPaneStates.count, viewPaneStates[slot].noteBaseName == baseName else { return }
                 viewPaneStates[slot].document = result.document
             } catch {
-                userAlert = .message("Could not load view pane note: \(error.localizedDescription)")
+                userAlert = .recoverable(
+                    message: "Could not load view pane note: \(error.localizedDescription)",
+                    kind: .retryLoadViewPane(index: index, baseName: baseName)
+                )
             }
         }
     }
