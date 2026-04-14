@@ -109,6 +109,7 @@ private struct ActiveEditorPane: View {
     @Bindable var model: AppModel
     @Environment(\.undoManager) private var undoManager
     @State private var repairDetailsPresented = false
+    @State private var editorBodyFocusNonce = 0
 
     var body: some View {
         Group {
@@ -132,6 +133,9 @@ private struct ActiveEditorPane: View {
                             )
                         }
                     }
+                    NoteEditorTitleHeader(model: model) {
+                        editorBodyFocusNonce += 1
+                    }
                     SingleSurfaceNoteEditor(
                         document: Binding(
                             get: { model.activeDocument ?? current },
@@ -147,7 +151,8 @@ private struct ActiveEditorPane: View {
                             ? { targetID in model.openNote(noteID: targetID) }
                             : nil,
                         onFullReplaceWarning: { model.presentFullBufferAdvisory() },
-                        onSizeLimitExceeded: { model.presentSizeLimitAdvisory() }
+                        onSizeLimitExceeded: { model.presentSizeLimitAdvisory() },
+                        focusBodyNonce: editorBodyFocusNonce
                     )
                 }
             } else {

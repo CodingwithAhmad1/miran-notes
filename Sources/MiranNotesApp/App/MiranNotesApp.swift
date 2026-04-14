@@ -321,19 +321,25 @@ private struct WorkspaceDetailColumnView: View {
                         .foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button("Folder") {
-                            model.closeToFolderPage()
-                        }
-                        .help("Return to folder page")
-                    }
-                }
             } else {
                 FolderPageView(model: model)
             }
         }
         .searchable(text: detailSearchBinding, prompt: detailSearchPrompt)
+        .toolbar {
+            if model.selectedNoteID != nil {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button {
+                        model.closeToFolderPage()
+                    } label: {
+                        Image(systemName: "chevron.left")
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Back to folder")
+                    .accessibilityLabel("Back to folder")
+                }
+            }
+        }
     }
 }
 
@@ -342,6 +348,12 @@ struct EditorRootView: View {
     @Bindable var model: AppModel
     @Environment(\.undoManager) private var undoManager
     @State private var repairDetailsPresented = false
+    @State private var editorBodyFocusNonce = 0
+
+    private var noteNavigationTitle: String {
+        guard let path = model.selectedBaseName else { return "Note" }
+        return VaultPath.displayTitle(forRelativePath: path)
+    }
 
     var body: some View {
         Group {
@@ -367,6 +379,9 @@ struct EditorRootView: View {
                             )
                         }
                     }
+                    NoteEditorTitleHeader(model: model) {
+                        editorBodyFocusNonce += 1
+                    }
                     SingleSurfaceNoteEditor(
                         document: Binding(
                             get: { model.activeDocument ?? current },
@@ -386,18 +401,11 @@ struct EditorRootView: View {
                         },
                         onSizeLimitExceeded: {
                             model.presentSizeLimitAdvisory()
-                        }
+                        },
+                        focusBodyNonce: editorBodyFocusNonce
                     )
                 }
-                .navigationTitle("Editor")
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button("Folder") {
-                            model.closeToFolderPage()
-                        }
-                        .help("Return to folder page")
-                    }
-                }
+                .navigationTitle(noteNavigationTitle)
             }
         }
         .onAppear {

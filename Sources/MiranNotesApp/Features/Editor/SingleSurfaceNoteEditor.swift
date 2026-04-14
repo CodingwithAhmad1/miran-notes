@@ -155,6 +155,8 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
     var onFullReplaceWarning: (() -> Void)?
     /// Called when a typed insertion would push the note past the 1 MB UTF-16 size limit.
     var onSizeLimitExceeded: (() -> Void)?
+    /// Increment (e.g. after the title field submits) to move keyboard focus into the note body.
+    var focusBodyNonce: Int = 0
 
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
@@ -221,12 +223,20 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
             }
         }
         context.coordinator.applyDocumentText()
+        let nonce = focusBodyNonce
+        if nonce != context.coordinator.lastAppliedBodyFocusNonce {
+            context.coordinator.lastAppliedBodyFocusNonce = nonce
+            if let tv = nsView.documentView as? NSTextView {
+                tv.window?.makeFirstResponder(tv)
+            }
+        }
     }
 
     @MainActor
     final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: SingleSurfaceNoteEditor
         weak var textView: NSTextView?
+        fileprivate var lastAppliedBodyFocusNonce: Int = 0
         fileprivate let textStorageDelegateBridge = TextStorageDelegateBridge()
         private var isApplyingModelUpdate = false
         private var pendingSelection: NSRange?
