@@ -16,6 +16,11 @@ enum VaultRootBookmarkStore {
         bookmarkFileURLOverride = url
     }
 
+    /// When `true`, bookmark I/O uses a test path; callers may skip production-only bootstrap rules (e.g. rejecting vaults under the temp directory).
+    internal static var isBookmarkFileRedirectedForTesting: Bool {
+        bookmarkFileURLOverride != nil
+    }
+
     static func bookmarkFileURL() throws -> URL {
         if let override = bookmarkFileURLOverride {
             return override

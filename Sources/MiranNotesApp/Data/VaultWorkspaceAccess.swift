@@ -49,14 +49,19 @@ final class VaultWorkspaceAccess {
     static func bootstrap(defaultVaultURL: URL?) -> VaultBootstrapOutcome {
         if let data = VaultRootBookmarkStore.loadBookmarkData() {
             if let restored = resolveBookmarkData(data) {
-                switch WorkspaceCompatibilityScanner.scan(vaultRoot: restored) {
-                case .incompatible:
+                if !VaultRootBookmarkStore.isBookmarkFileRedirectedForTesting,
+                   isEphemeralVaultRoot(restored) {
                     VaultRootBookmarkStore.clearBookmarkData()
-                case .empty, .compatible:
-                    let started = restored.startAccessingSecurityScopedResource()
-                    return .resolved(
-                        VaultWorkspaceAccess(vaultRootURL: restored, isSecurityScopedAccessActive: started)
-                    )
+                } else {
+                    switch WorkspaceCompatibilityScanner.scan(vaultRoot: restored) {
+                    case .incompatible:
+                        VaultRootBookmarkStore.clearBookmarkData()
+                    case .empty, .compatible:
+                        let started = restored.startAccessingSecurityScopedResource()
+                        return .resolved(
+                            VaultWorkspaceAccess(vaultRootURL: restored, isSecurityScopedAccessActive: started)
+                        )
+                    }
                 }
             } else {
                 VaultRootBookmarkStore.clearBookmarkData()
@@ -91,6 +96,15 @@ final class VaultWorkspaceAccess {
         let data = try makeBookmarkData(for: standardized)
         try VaultRootBookmarkStore.saveBookmarkData(data)
         return VaultWorkspaceAccess(vaultRootURL: standardized, isSecurityScopedAccessActive: started)
+    }
+
+    /// Vault roots under the process temp tree are not restored on launch in production (see ``bootstrap(defaultVaultURL:)``).
+    internal static func isEphemeralVaultRoot(_ url: URL) -> Bool {
+        let tempRoot = FileManager.default.temporaryDirectory.standardizedFileURL
+        let path = url.standardizedFileURL.path
+        let tempPath = tempRoot.path
+        if path == tempPath { return true }
+        return path.hasPrefix(tempPath + "/")
     }
 
     private static func resolveBookmarkData(_ data: Data) -> URL? {
