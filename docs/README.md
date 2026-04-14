@@ -34,7 +34,7 @@ The [root README](../README.md) summarizes build commands, module layout, and fe
 | **ADRs** | |
 | [adr/README.md](adr/README.md) | Architecture Decision Records index |
 | **Plans and QA** | |
-| [plans/README.md](plans/README.md) | Planning docs index and completed plans |
+| [plans/README.md](plans/README.md) | Planning docs index, completed plans, and [**Active product surface**](plans/README.md#active-product-surface) (what ships vs preserved modules) |
 | [plans/longevity-and-migration-analysis.md](plans/longevity-and-migration-analysis.md) | Longevity assessment; `@Observable` and Swift 6 language mode **done**; TextKit 2 typing migration still planned |
 | [plans/editor-interaction-scenarios.md](plans/editor-interaction-scenarios.md) | Manual QA checklist (typing, blocks, IME, large notes) |
 | [plans/quality-dimensions-roadmap.md](plans/quality-dimensions-roadmap.md) | Six-dimension quality assessment: strengths, prioritized actionable improvements (reliability, architecture, goals, UX, performance, security) |

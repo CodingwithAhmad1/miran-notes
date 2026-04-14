@@ -123,6 +123,22 @@ Miran Notes treats **data durability** as a first-class concern: vault changes u
 - **Expected impact:** Clearer prioritization for maintainers.
 - **Constraints / dependencies:** Process change, not code; optional link from this document.
 
+#### Non-goals and backlog hygiene (maintainers)
+
+Treat the items below as **out of scope for the current product phase** unless a plan explicitly labels them as a **future phase** (see [Constraints.md](../../Constraints.md) § Product scope). That keeps this roadmap and other plans aligned with **local-first, single-writer** hardening.
+
+- **Real-time multi-user collaboration** or shared editing as a driver for core architecture.
+- **Hosted / mandatory cloud sync** or accounts as part of the default experience (users may still place vaults in sync folders on disk; that is an environmental choice, not a product pillar).
+- **Reactivating Miran Planning UI** without a deliberate product decision and ADR update.
+
+**Backlog hygiene:** In issues or planning docs, **tag or section** “Future phase / non-goal” ideas so they do not compete with actionable local-first work. This repository does not mandate a specific external tracker; if you use one, mirror the same labels there. The canonical **shipping vs preserved** map lives under [plans/README.md — Active product surface](README.md#active-product-surface).
+
+#### Completed (§3 — 2026-04-14)
+
+- **P1:** [plans/README.md — Active product surface](README.md#active-product-surface) table (ships vs preserved + code paths); [docs/README.md](../README.md) document map links to it.
+- **P2:** Empty-vault welcome copy in `FolderPageView` (`isEmptyVaultOnboardingState` on `AppModel`); `AppModelEmptyVaultOnboardingTests`.
+- **P3:** Maintainer subsection above (explicit non-goals + backlog hygiene pointer).
+
 ---
 
 ## 4. Usability
@@ -241,3 +257,4 @@ Miran Notes treats **data durability** as a first-class concern: vault changes u
 | 2026-04-14 | §1 Reliability P1–P3 shipped: stress tests, reliability-expectations doc, search/manifest observability (see Completed under §1). |
 | 2026-04-14 | §2 Architectural cleanliness P1–P3 shipped: `LinkGraphStartupPolicy`, `VaultManifestRefreshFacade`, `MiranNotesLegacyDatabase` + `VaultDatabasePaths` (see Completed under §2). |
 | 2026-04-14 | §2 follow-up: `AppModel` helpers — body search index controller, debounced scheduler, folder-page loading, undo checkpoint support types; unified `processVaultFilesystemRefreshPipeline` (see Completed under §2). |
+| 2026-04-14 | §3 Goal orientation P1–P3 shipped: active product surface doc, empty-vault welcome UX, non-goals / backlog hygiene (see Completed under §3). |

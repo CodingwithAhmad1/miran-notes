@@ -110,6 +110,11 @@ final class AppModel {
         noteSummaries.contains { $0.folderID == FolderCatalog.rootFolderID }
     }
 
+    /// True when the vault has no notes and no folder to show yet (same condition as ``pickDefaultFolderID()`` returning `nil`).
+    var isEmptyVaultOnboardingState: Bool {
+        noteSummaries.isEmpty && topLevelFolderEntries.isEmpty && !hasRootLevelNotes
+    }
+
     // MARK: - Layout state
 
     /// Active pane layout selection. Defaults to single-pane (the original behaviour).

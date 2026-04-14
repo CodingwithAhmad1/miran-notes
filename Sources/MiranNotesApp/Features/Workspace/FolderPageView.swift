@@ -6,11 +6,23 @@ struct FolderPageView: View {
     var body: some View {
         Group {
             if model.selectedFolderID == nil {
-                ContentUnavailableView(
-                    "No folder selected",
-                    systemImage: "folder",
-                    description: Text("Add a folder from the sidebar, or choose notes in the vault root.")
-                )
+                if model.isEmptyVaultOnboardingState {
+                    ContentUnavailableView {
+                        Label("Welcome to Miran Notes", systemImage: "note.text")
+                    } description: {
+                        Text(
+                            "Your notes are plain text files in this workspace—local-first and private.\n\n"
+                                + "Miran is for calm, personal knowledge—not cloud collaboration or a shared wiki by default.\n\n"
+                                + "Use New Folder or New Note in the Folders sidebar. Open Workspace… (Shift-Command-O) picks a different folder."
+                        )
+                    }
+                } else {
+                    ContentUnavailableView(
+                        "No folder selected",
+                        systemImage: "folder",
+                        description: Text("Add a folder from the sidebar, or choose notes in the vault root.")
+                    )
+                }
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 24) {
