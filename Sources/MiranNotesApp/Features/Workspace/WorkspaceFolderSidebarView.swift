@@ -7,27 +7,29 @@ struct WorkspaceFolderSidebarView: View {
     @State private var renameFieldText = ""
 
     var body: some View {
-        VStack(spacing: 0) {
-            List(selection: folderSelection) {
-                Label(model.sidebarNotesTrayTitle, systemImage: "tray.full")
-                    .tag(Optional(model.sidebarNotesTrayFolderID))
-                ForEach(model.visibleTopLevelFolderEntries, id: \.id) { folder in
-                    Text(folder.name)
-                        .tag(Optional(folder.id))
-                        .contextMenu {
-                            Button("Rename…") {
-                                renamingFolder = folder
-                                renameFieldText = folder.name
-                            }
-                            Button("Delete Folder", role: .destructive) {
-                                model.deleteFolder(id: folder.id)
-                            }
+        List(selection: folderSelection) {
+            Label(model.sidebarNotesTrayTitle, systemImage: "tray.full")
+                .tag(Optional(model.sidebarNotesTrayFolderID))
+            ForEach(model.visibleTopLevelFolderEntries, id: \.id) { folder in
+                Text(folder.name)
+                    .tag(Optional(folder.id))
+                    .contextMenu {
+                        Button("Rename…") {
+                            renamingFolder = folder
+                            renameFieldText = folder.name
                         }
-                }
+                        Button("Delete Folder", role: .destructive) {
+                            model.deleteFolder(id: folder.id)
+                        }
+                    }
             }
-            .frame(maxHeight: .infinity, alignment: .top)
-            sidebarActionsFooter
-            workspaceLocationFooter
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            VStack(spacing: 0) {
+                sidebarActionsFooter
+                workspaceLocationFooter
+            }
+            .background(.regularMaterial)
         }
         .simultaneousGesture(
             TapGesture().onEnded { _ in
