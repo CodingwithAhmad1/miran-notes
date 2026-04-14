@@ -883,29 +883,103 @@ actor NoteRepository {
         }
         var folderCatalog = try await index.loadFolderCatalog()
         folderCatalog.ensureRoot()
-        let pathIndex = try await index.loadPathIndex()
-        if !folderCatalog.childFolders(of: id).isEmpty {
-            throw NoteRepositoryError.folderNotEmpty(id)
+        guard folderCatalog.folder(id: id) != nil else {
+            throw NoteRepositoryError.folderNotFound(id)
         }
-        if pathIndex.entries.contains(where: { $0.folderID == id }) {
-            throw NoteRepositoryError.folderNotEmpty(id)
+
+        var folderIDsToDelete = [id]
+        var cursor = 0
+        while cursor < folderIDsToDelete.count {
+            let parentID = folderIDsToDelete[cursor]
+            let children = folderCatalog.childFolders(of: parentID).map(\.id)
+            folderIDsToDelete.append(contentsOf: children)
+            cursor += 1
         }
-        let dir = folderCatalog.directoryURL(vaultRoot: vaultURL, folderID: id)
-        try folderCatalog.removeFolderEntry(id: id)
+
+        var pathIndex = try await index.loadPathIndex()
+        let folderIDSet = Set(folderIDsToDelete)
+        let entriesToDelete = pathIndex.entries.filter { folderIDSet.contains($0.folderID) }
+        let noteIDsToDelete = Set(entriesToDelete.map(\.noteID))
+        let noteRelativePathsByID = Dictionary(uniqueKeysWithValues: entriesToDelete.map { ($0.noteID, $0.relativePath) })
+
         let manifest = try await loadOrRebuildManifest()
-        let graph = try await index.loadLinkGraph()
-        let rel = try await index.loadRelationshipIndex()
-        var toDelete: [URL] = []
-        if FileManager.default.fileExists(atPath: dir.path) {
-            toDelete.append(dir)
+        var updatedManifest = manifest
+        for noteID in noteIDsToDelete {
+            updatedManifest.remove(noteID: noteID)
         }
+
+        pathIndex.entries.removeAll { folderIDSet.contains($0.folderID) }
+        if !entriesToDelete.isEmpty {
+            pathIndex.isDirty = true
+        }
+
+        var graph = try await index.loadLinkGraph()
+        for noteID in noteIDsToDelete {
+            graph.removeNote(noteID)
+        }
+
+        var rel = try await index.loadRelationshipIndex()
+        for noteID in noteIDsToDelete {
+            rel.removeAllInvolvingNote(noteID)
+        }
+
+        var toDelete: [URL] = []
+        for noteID in noteIDsToDelete {
+            if let relPath = noteRelativePathsByID[noteID] {
+                let txt = VaultPath.fileURL(
+                    vaultRoot: vaultURL,
+                    relativePathWithoutExtension: relPath,
+                    extension: "txt"
+                )
+                let meta = VaultPath.fileURL(
+                    vaultRoot: vaultURL,
+                    relativePathWithoutExtension: relPath,
+                    extension: "meta.json"
+                )
+                if FileManager.default.fileExists(atPath: txt.path) {
+                    toDelete.append(txt)
+                }
+                if FileManager.default.fileExists(atPath: meta.path) {
+                    toDelete.append(meta)
+                }
+            }
+            let aux = VaultPaths.auxDirectory(vaultURL: vaultURL, noteID: noteID)
+            if FileManager.default.fileExists(atPath: aux.path) {
+                toDelete.append(aux)
+            }
+        }
+
+        let folderDepthByID = Dictionary(
+            uniqueKeysWithValues: folderIDsToDelete.map { folderID in
+                let depth = folderCatalog.relativeDirectoryPath(for: folderID).split(separator: "/").count
+                return (folderID, depth)
+            }
+        )
+        let sortedFolderIDsForRemoval = folderIDsToDelete.sorted {
+            folderDepthByID[$0, default: 0] > folderDepthByID[$1, default: 0]
+        }
+        for folderID in sortedFolderIDsForRemoval {
+            let dir = folderCatalog.directoryURL(vaultRoot: vaultURL, folderID: folderID)
+            if FileManager.default.fileExists(atPath: dir.path) {
+                toDelete.append(dir)
+            }
+            try folderCatalog.removeFolderEntry(id: folderID)
+        }
+
+        // Keep deletion list stable and avoid duplicate file-system operations.
+        var uniqueToDelete: [URL] = []
+        var seenDeletePaths = Set<String>()
+        for url in toDelete where seenDeletePaths.insert(url.path).inserted {
+            uniqueToDelete.append(url)
+        }
+
         await index.logIfIntegrityIssues(try await index.commitIndexOnly(
-            manifest: manifest,
+            manifest: updatedManifest,
             linkGraph: graph,
             relationshipIndex: rel,
             folderCatalog: folderCatalog,
             pathIndex: pathIndex,
-            deletePathsAfterCommit: toDelete
+            deletePathsAfterCommit: uniqueToDelete
         ))
     }
 

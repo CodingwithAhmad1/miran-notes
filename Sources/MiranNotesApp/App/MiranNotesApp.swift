@@ -298,8 +298,16 @@ private struct MiranNotesMainWindowContent: View {
                                     model.isFolderManagementPresented = false
                                 } label: {
                                     Image(systemName: "chevron.left")
+                                        .font(.system(size: 13, weight: .semibold))
+                                        .frame(width: 30, height: 30)
+                                        .background(
+                                            Circle().fill(Color(nsColor: .quaternarySystemFill))
+                                        )
+                                        .contentShape(Circle())
                                 }
-                                .buttonStyle(.borderless)
+                                .buttonStyle(.plain)
+                                .frame(width: 34, height: 34)
+                                .contentShape(Rectangle())
                                 .help("Back to vault")
                                 .accessibilityLabel("Back to vault")
                             } else if model.selectedNoteID != nil {
@@ -308,17 +316,27 @@ private struct MiranNotesMainWindowContent: View {
                                     model.closeToFolderPage()
                                 } label: {
                                     Image(systemName: "chevron.left")
+                                        .font(.system(size: 13, weight: .semibold))
+                                        .frame(width: 30, height: 30)
+                                        .background(
+                                            Circle().fill(Color(nsColor: .quaternarySystemFill))
+                                        )
+                                        .contentShape(Circle())
                                 }
-                                .buttonStyle(.borderless)
+                                .buttonStyle(.plain)
+                                .frame(width: 34, height: 34)
+                                .contentShape(Rectangle())
                                 .help("Back to folder")
                                 .accessibilityLabel("Back to folder")
                             }
 
-                            Text(toolbarPathLabel)
-                                .font(.headline)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                                .help(toolbarPathLabel)
+                            if model.selectedNoteID != nil || model.isFolderManagementPresented {
+                                Text(toolbarPathLabel)
+                                    .font(.headline)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                                    .help(toolbarPathLabel)
+                            }
                         }
                     }
                     ToolbarItem(placement: .principal) {

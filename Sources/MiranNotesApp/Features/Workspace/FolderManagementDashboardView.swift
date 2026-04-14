@@ -146,7 +146,7 @@ struct FolderManagementDashboardView: View {
                 Button("Cancel", role: .cancel) {}
             } message: {
                 Text(
-                    "This permanently removes each empty folder from the workspace (no notes and no subfolders). Folders that still contain items cannot be deleted."
+                    "This permanently removes each selected folder and everything inside it (notes, metadata, and subfolders). This cannot be undone."
                 )
             }
         }

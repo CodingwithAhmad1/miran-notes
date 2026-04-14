@@ -41,24 +41,43 @@ final class VaultStructureTests: XCTestCase {
         XCTAssertNil(manifest.entry(noteID: id))
     }
 
-    func testDeleteFolderFailsWhenFolderContainsNote() async throws {
+    func testDeleteFolderRecursivelyRemovesNotesMetadataAndSubfolders() async throws {
+        let vault = try tempVaultURL()
+        let repo = NoteRepository(vaultURL: vault)
+        try await repo.ensureVault()
+        let parentID = try await repo.createFolder(parentID: FolderCatalog.rootFolderID, name: "Inbox")
+        let (parentDoc, parentPath) = try await repo.createNote(named: "top-item", folderID: parentID)
+
+        let parentTxt = vault.appendingPathComponent("\(parentPath).txt")
+        let parentMeta = vault.appendingPathComponent("\(parentPath).meta.json")
+
+        try await repo.deleteFolder(id: parentID)
+
+        let manifest = try await repo.loadManifest()
+        XCTAssertNil(manifest.entry(noteID: parentDoc.metadata.noteID))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: parentTxt.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: parentMeta.path))
+
+        let catalog = try await repo.loadFolderCatalog()
+        XCTAssertNil(catalog.folder(id: parentID))
+    }
+
+    func testDeleteFolderRemovesNoteAuxDirectory() async throws {
         let vault = try tempVaultURL()
         let repo = NoteRepository(vaultURL: vault)
         try await repo.ensureVault()
         let folderID = try await repo.createFolder(parentID: FolderCatalog.rootFolderID, name: "Inbox")
-        _ = try await repo.createNote(named: "item", folderID: folderID)
+        let (doc, _) = try await repo.createNote(named: "item", folderID: folderID)
 
-        do {
-            try await repo.deleteFolder(id: folderID)
-            XCTFail("Expected folderNotEmpty")
-        } catch let error as NoteRepositoryError {
-            if case .folderNotEmpty = error {
-                return
-            }
-            XCTFail("Expected folderNotEmpty, got \(error)")
-        } catch {
-            XCTFail("Unexpected error: \(error)")
-        }
+        let auxDirectory = VaultPaths.auxDirectory(vaultURL: vault, noteID: doc.metadata.noteID)
+        try FileManager.default.createDirectory(at: auxDirectory, withIntermediateDirectories: true)
+        let auxFile = auxDirectory.appendingPathComponent("blob.bin")
+        try Data([0x01, 0x02, 0x03]).write(to: auxFile)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: auxFile.path))
+
+        try await repo.deleteFolder(id: folderID)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: auxDirectory.path))
     }
 
     func testMoveNoteToFolderUpdatesPathIndex() async throws {
