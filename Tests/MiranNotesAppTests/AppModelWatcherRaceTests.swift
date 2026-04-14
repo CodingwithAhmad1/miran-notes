@@ -128,7 +128,7 @@ final class AppModelWatcherRaceTests: XCTestCase {
             await model.simulateWatcherEvent()
         }
 
-        XCTAssertNil(model.lastError)
+        XCTAssertEqual(model.userAlert, .none)
         XCTAssertNil(model.externalEditConflictAlert)
         XCTAssertEqual(model.noteSummaries.count, 1)
         XCTAssertEqual(model.selectedBaseName, baseName)
@@ -148,12 +148,12 @@ final class AppModelWatcherRaceTests: XCTestCase {
         let model = AppModel(repository: repo, autosaveDebounceMilliseconds: 100)
         await model.refreshNotes()
 
-        XCTAssertNil(model.lastError)
+        XCTAssertEqual(model.userAlert, .none)
         XCTAssertEqual(model.noteSummaries.count, bulkCount)
 
         await model.simulateWatcherEvent()
 
-        XCTAssertNil(model.lastError)
+        XCTAssertEqual(model.userAlert, .none)
         XCTAssertEqual(model.noteSummaries.count, bulkCount)
     }
 }

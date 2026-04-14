@@ -173,6 +173,12 @@ Treat the items below as **out of scope for the current product phase** unless a
 - **Expected impact:** Users recover without guessing; complements reliability P3.
 - **Constraints / dependencies:** Coordinate with `RepairAdvisory` kinds—avoid duplicate banners.
 
+#### Completed (§4 — 2026-04-14)
+
+- **P1:** Empty-vault welcome in [`FolderPageView`](../../Sources/MiranNotesApp/Features/Workspace/FolderPageView.swift) shows the workspace path and Open Workspace… (Shift-Command-O); [`WorkspaceFolderSidebarView`](../../Sources/MiranNotesApp/Features/Workspace/WorkspaceFolderSidebarView.swift) footer shows a truncated path (full path in tooltip) for non-empty vaults.
+- **P2:** Help → **Editing in Miran Notes…** opens [`EditingHelpSheet`](../../Sources/MiranNotesApp/Features/Help/EditingHelpSheet.swift) (undo / multi-pane, large notes, wiki links).
+- **P3:** `AppModel.userAlert` (`UserAlertState` + `UserAlertRecoveryKind`) replaces string-only errors; body search index failure is `.recoverable` with **Retry** in [`MiranNotesApp`](../../Sources/MiranNotesApp/App/MiranNotesApp.swift). [`AppModelUserAlertTests`](../../Tests/MiranNotesAppTests/AppModelUserAlertTests.swift).
+
 ---
 
 ## 5. Performance
@@ -258,3 +264,4 @@ Treat the items below as **out of scope for the current product phase** unless a
 | 2026-04-14 | §2 Architectural cleanliness P1–P3 shipped: `LinkGraphStartupPolicy`, `VaultManifestRefreshFacade`, `MiranNotesLegacyDatabase` + `VaultDatabasePaths` (see Completed under §2). |
 | 2026-04-14 | §2 follow-up: `AppModel` helpers — body search index controller, debounced scheduler, folder-page loading, undo checkpoint support types; unified `processVaultFilesystemRefreshPipeline` (see Completed under §2). |
 | 2026-04-14 | §3 Goal orientation P1–P3 shipped: active product surface doc, empty-vault welcome UX, non-goals / backlog hygiene (see Completed under §3). |
+| 2026-04-14 | §4 Usability P1–P3 shipped: vault path onboarding + sidebar footer, Editing help sheet, `userAlert` with retry for body search index (see Completed under §4). |

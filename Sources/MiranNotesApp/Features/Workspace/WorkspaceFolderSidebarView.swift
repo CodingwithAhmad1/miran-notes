@@ -6,24 +6,28 @@ struct WorkspaceFolderSidebarView: View {
     @State private var renameFieldText = ""
 
     var body: some View {
-        List(selection: folderSelection) {
-            if model.hasRootLevelNotes {
-                Label("Vault", systemImage: "tray.full")
-                    .tag(Optional(FolderCatalog.rootFolderID))
-            }
-            ForEach(model.topLevelFolderEntries, id: \.id) { folder in
-                Text(folder.name)
-                    .tag(Optional(folder.id))
-                    .contextMenu {
-                        Button("Rename…") {
-                            renamingFolder = folder
-                            renameFieldText = folder.name
+        VStack(spacing: 0) {
+            List(selection: folderSelection) {
+                if model.hasRootLevelNotes {
+                    Label("Vault", systemImage: "tray.full")
+                        .tag(Optional(FolderCatalog.rootFolderID))
+                }
+                ForEach(model.topLevelFolderEntries, id: \.id) { folder in
+                    Text(folder.name)
+                        .tag(Optional(folder.id))
+                        .contextMenu {
+                            Button("Rename…") {
+                                renamingFolder = folder
+                                renameFieldText = folder.name
+                            }
+                            Button("Delete Folder", role: .destructive) {
+                                model.deleteFolder(id: folder.id)
+                            }
                         }
-                        Button("Delete Folder", role: .destructive) {
-                            model.deleteFolder(id: folder.id)
-                        }
-                    }
+                }
             }
+            .frame(maxHeight: .infinity, alignment: .top)
+            workspaceLocationFooter
         }
         .navigationTitle("Folders")
         .alert("Rename Folder", isPresented: renameBinding, presenting: renamingFolder) { folder in
@@ -71,5 +75,39 @@ struct WorkspaceFolderSidebarView: View {
             get: { renamingFolder != nil },
             set: { if !$0 { renamingFolder = nil } }
         )
+    }
+
+    private var workspaceLocationFooter: some View {
+        let path = model.repository.vaultURL.path
+        return VStack(alignment: .leading, spacing: 2) {
+            Text(Self.truncatedPath(path, maxCharacters: 52))
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .help(path)
+            Text("Open Workspace… — Shift-Command-O")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+    }
+
+    /// Middle ellipsis when the path is long; keeps start and end visible for Finder-style paths.
+    private static func truncatedPath(_ path: String, maxCharacters: Int) -> String {
+        guard path.count > maxCharacters else { return path }
+        let budget = max(3, maxCharacters - 1)
+        let head = budget / 2
+        let tail = budget - head
+        let s = path.startIndex
+        let e = path.endIndex
+        guard let headEnd = path.index(s, offsetBy: head, limitedBy: e),
+            let tailStart = path.index(e, offsetBy: -tail, limitedBy: s),
+            headEnd < tailStart
+        else {
+            return String(path.prefix(max(0, budget - 2))) + "…"
+        }
+        return String(path[s..<headEnd]) + "…" + String(path[tailStart..<e])
     }
 }

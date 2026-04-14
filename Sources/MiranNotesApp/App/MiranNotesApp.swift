@@ -15,6 +15,7 @@ struct MiranNotesApp: App {
     @State private var model: AppModel
     @State private var conflictDetailsPresented = false
     @State private var conflictDetailsDiskDate: Date?
+    @State private var editingHelpPresented = false
 
     init() {
         SlashCommandRegistry.registerBuiltins()
@@ -33,6 +34,11 @@ struct MiranNotesApp: App {
             .sheet(item: $model.externalTextCompare) { payload in
                 ExternalEditCompareSheet(payload: payload) {
                     model.externalTextCompare = nil
+                }
+            }
+            .sheet(isPresented: $editingHelpPresented) {
+                EditingHelpSheet {
+                    editingHelpPresented = false
                 }
             }
             .sheet(isPresented: $conflictDetailsPresented) {
@@ -57,15 +63,22 @@ struct MiranNotesApp: App {
             .alert(
                 "Error",
                 isPresented: Binding(
-                    get: { model.lastError != nil },
-                    set: { if !$0 { model.lastError = nil } }
+                    get: { model.userAlert != .none },
+                    set: { if !$0 { model.userAlert = .none } }
                 )
             ) {
-                Button("OK", role: .cancel) {
-                    model.lastError = nil
+                Group {
+                    if let kind = model.userAlertRecoveryKind {
+                        Button("Retry") {
+                            model.performUserAlertRecovery(kind: kind)
+                        }
+                    }
+                    Button("OK", role: .cancel) {
+                        model.userAlert = .none
+                    }
                 }
             } message: {
-                Text(model.lastError ?? "")
+                Text(model.userAlert.alertMessage)
             }
             .alert(
                 ExternalEditConflictCopy.alertTitle,
@@ -107,6 +120,11 @@ struct MiranNotesApp: App {
                     presentOpenWorkspacePanel()
                 }
                 .keyboardShortcut("o", modifiers: [.command, .shift])
+            }
+            CommandGroup(after: .help) {
+                Button("Editing in Miran Notes…") {
+                    editingHelpPresented = true
+                }
             }
             CommandMenu("Format") {
                 Button("Bold") {

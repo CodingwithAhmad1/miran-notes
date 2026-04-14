@@ -117,7 +117,7 @@ final class AppModelNavigationTests: XCTestCase {
         await model.refreshNotes()
         model.changeSelection(baseName: "n:\(id.uuidString)")
         try await waitForAsync { model.selectedBaseName == relPath && model.activeDocument?.metadata.noteID == id }
-        XCTAssertNil(model.lastError)
+        XCTAssertEqual(model.userAlert, .none)
     }
 
     func testEditorCursorOffsetResetOnNoteSwitch() async throws {

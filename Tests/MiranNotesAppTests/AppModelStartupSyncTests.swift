@@ -64,6 +64,6 @@ final class AppModelStartupSyncTests: XCTestCase {
             try await Task.sleep(for: .milliseconds(25))
         }
         XCTAssertTrue(loaded, "loadVault should load the folder page for root notes even when link graph sync is deferred")
-        XCTAssertNil(model.lastError)
+        XCTAssertEqual(model.userAlert, .none)
     }
 }
