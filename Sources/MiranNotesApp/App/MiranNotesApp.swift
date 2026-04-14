@@ -80,6 +80,7 @@ struct MiranNotesApp: App {
             }
             .environment(sessionRegistry)
         }
+        .windowToolbarStyle(.unified(showsTitle: false))
         .commands { appCommands }
     }
 
@@ -290,26 +291,34 @@ private struct MiranNotesMainWindowContent: View {
                 }
                 .toolbar {
                     ToolbarItem(placement: .navigation) {
-                        if model.isFolderManagementPresented {
-                            Button {
-                                isToolbarSearchFocused = false
-                                model.isFolderManagementPresented = false
-                            } label: {
-                                Image(systemName: "chevron.left")
+                        HStack(spacing: 8) {
+                            if model.isFolderManagementPresented {
+                                Button {
+                                    isToolbarSearchFocused = false
+                                    model.isFolderManagementPresented = false
+                                } label: {
+                                    Image(systemName: "chevron.left")
+                                }
+                                .buttonStyle(.borderless)
+                                .help("Back to vault")
+                                .accessibilityLabel("Back to vault")
+                            } else if model.selectedNoteID != nil {
+                                Button {
+                                    clearToolbarSearchFocus()
+                                    model.closeToFolderPage()
+                                } label: {
+                                    Image(systemName: "chevron.left")
+                                }
+                                .buttonStyle(.borderless)
+                                .help("Back to folder")
+                                .accessibilityLabel("Back to folder")
                             }
-                            .buttonStyle(.borderless)
-                            .help("Back to vault")
-                            .accessibilityLabel("Back to vault")
-                        } else if model.selectedNoteID != nil {
-                            Button {
-                                clearToolbarSearchFocus()
-                                model.closeToFolderPage()
-                            } label: {
-                                Image(systemName: "chevron.left")
-                            }
-                            .buttonStyle(.borderless)
-                            .help("Back to folder")
-                            .accessibilityLabel("Back to folder")
+
+                            Text(toolbarPathLabel)
+                                .font(.headline)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                                .help(toolbarPathLabel)
                         }
                     }
                     ToolbarItem(placement: .principal) {
@@ -325,20 +334,6 @@ private struct MiranNotesMainWindowContent: View {
                             model: model,
                             vaultSessionRegistry: vaultSessionRegistry,
                             onToolbarInteraction: clearToolbarSearchFocus
-                        )
-                        Button {
-                            clearToolbarSearchFocus()
-                            model.createNote()
-                        } label: {
-                            Label("New Note", systemImage: "plus")
-                        }
-                        .disabled(model.isFolderManagementPresented || !model.allowsToolbarNewNote)
-                        .help(
-                            model.isFolderManagementPresented
-                                ? "Close Folder Management to create a note"
-                                : model.allowsToolbarNewNote
-                                    ? "Create a new note in the selected folder"
-                                    : "Select a folder (not Vault) to create a note"
                         )
                         FolderManagementToolbarButton(model: model, onToolbarInteraction: clearToolbarSearchFocus)
                     }
@@ -397,6 +392,16 @@ private struct MiranNotesMainWindowContent: View {
             return Text("Search vault…")
         }
         return model.selectedNoteID != nil ? Text("Find in note…") : Text("Search vault…")
+    }
+
+    private var toolbarPathLabel: String {
+        if let notePath = model.selectedBaseName, !notePath.isEmpty {
+            return notePath
+        }
+        if !model.selectedFolderDisplayTitle.isEmpty {
+            return model.selectedFolderDisplayTitle
+        }
+        return model.sidebarNotesTrayTitle
     }
 }
 

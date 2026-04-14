@@ -26,6 +26,7 @@ struct WorkspaceFolderSidebarView: View {
                 }
             }
             .frame(maxHeight: .infinity, alignment: .top)
+            sidebarActionsFooter
             workspaceLocationFooter
         }
         .simultaneousGesture(
@@ -33,7 +34,7 @@ struct WorkspaceFolderSidebarView: View {
                 onClearToolbarSearchFocus()
             }
         )
-        .navigationTitle("Folders")
+        .navigationTitle("Vault")
         .alert("Rename Folder", isPresented: renameBinding, presenting: renamingFolder) { folder in
             TextField("Name", text: $renameFieldText)
             Button("Cancel", role: .cancel) {
@@ -49,28 +50,6 @@ struct WorkspaceFolderSidebarView: View {
         } message: { _ in
             Text("Enter a new name for this folder.")
         }
-        .toolbar {
-            ToolbarItemGroup(placement: .primaryAction) {
-                Button {
-                    onClearToolbarSearchFocus()
-                    model.createFolder()
-                } label: {
-                    Label("New Folder", systemImage: "folder.badge.plus")
-                }
-                Button {
-                    onClearToolbarSearchFocus()
-                    model.createNote()
-                } label: {
-                    Label("New Note", systemImage: "plus")
-                }
-                .disabled(!model.allowsToolbarNewNote)
-                .help(
-                    model.allowsToolbarNewNote
-                        ? "Create a new note in the selected folder"
-                        : "Select a folder (not Vault) to create a note"
-                )
-            }
-        }
     }
 
     private var folderSelection: Binding<UUID?> {
@@ -85,6 +64,39 @@ struct WorkspaceFolderSidebarView: View {
             get: { renamingFolder != nil },
             set: { if !$0 { renamingFolder = nil } }
         )
+    }
+
+    private var sidebarActionsFooter: some View {
+        HStack(spacing: 8) {
+            Button {
+                onClearToolbarSearchFocus()
+                model.createFolder()
+            } label: {
+                Image(systemName: "folder.badge.plus")
+            }
+            .buttonStyle(.plain)
+            .help("New Folder")
+
+            Spacer(minLength: 0)
+
+            Button {
+                onClearToolbarSearchFocus()
+                model.createNote()
+            } label: {
+                Image(systemName: "plus")
+            }
+            .buttonStyle(.plain)
+            .disabled(!model.allowsToolbarNewNote)
+            .help(
+                model.allowsToolbarNewNote
+                    ? "New Note"
+                    : "Select a folder (not Vault) to create a note"
+            )
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 10)
+        .padding(.top, 8)
+        .padding(.bottom, 4)
     }
 
     private var workspaceLocationFooter: some View {
