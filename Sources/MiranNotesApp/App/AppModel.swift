@@ -889,16 +889,24 @@ final class AppModel {
 
     func renameFolder(id: UUID, newName: String) {
         Task { @MainActor in
-            await flushAllFolderPageNotesIfDirty()
-            do {
-                try await repository.renameFolder(id: id, newName: newName)
-                await refreshNotes()
-            } catch {
-                userAlert = .recoverable(
-                    message: error.localizedDescription,
-                    kind: .retryRefreshNotesAndFolderUI
-                )
-            }
+            _ = await renameFolderAndWait(id: id, newName: newName)
+        }
+    }
+
+    /// Performs folder rename and refresh; on failure sets ``userAlert`` and returns `false`.
+    @discardableResult
+    func renameFolderAndWait(id: UUID, newName: String) async -> Bool {
+        await flushAllFolderPageNotesIfDirty()
+        do {
+            try await repository.renameFolder(id: id, newName: newName)
+            await refreshNotes()
+            return true
+        } catch {
+            userAlert = .recoverable(
+                message: error.localizedDescription,
+                kind: .retryRefreshNotesAndFolderUI
+            )
+            return false
         }
     }
 
