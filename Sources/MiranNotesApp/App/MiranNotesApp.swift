@@ -131,9 +131,9 @@ struct MiranNotesApp: App {
             model?.loadVault()
         } catch let adoption as VaultWorkspaceAdoptionError {
             if let model {
-                model.userAlert = .message(adoption.localizedDescription ?? "This folder cannot be used as a vault.")
+                model.userAlert = .message(adoption.localizedDescription)
             } else {
-                vaultPickerErrorMessage = adoption.localizedDescription ?? "This folder cannot be used as a vault."
+                vaultPickerErrorMessage = adoption.localizedDescription
             }
         } catch {
             let message =
