@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct WorkspaceFolderSidebarView: View {
@@ -8,12 +9,18 @@ struct WorkspaceFolderSidebarView: View {
 
     var body: some View {
         GeometryReader { geometry in
+            let safeBottom = geometry.safeAreaInsets.bottom
             let heights = Self.partitionListAndFooterHeights(
                 totalHeight: geometry.size.height,
-                sidebarWidth: geometry.size.width
+                sidebarWidth: geometry.size.width,
+                footerSafeBottomInset: safeBottom
             )
 
             VStack(spacing: 0) {
+                // Sidebar `List` is backed by AppKit `NSTableView` inside an `NSScrollView`. In sparse lists,
+                // that scroll view can paint (and hit-test) through the SwiftUI stack until something forces
+                // a relayout. Pinning `masksToBounds` on the enclosing scroll view keeps the table from
+                // overlapping the footer below this list.
                 List(selection: folderSelection) {
                     Label(model.sidebarNotesTrayTitle, systemImage: "tray.full")
                         .tag(Optional(model.sidebarNotesTrayFolderID))
@@ -33,8 +40,16 @@ struct WorkspaceFolderSidebarView: View {
                 }
                 .frame(width: geometry.size.width, height: heights.list, alignment: .top)
                 .clipped()
+                .overlay {
+                    ListEnclosingScrollViewClip()
+                        .allowsHitTesting(false)
+                }
 
-                sidebarFooterChrome(width: geometry.size.width, footerHeight: heights.footer)
+                sidebarFooterChrome(
+                    width: geometry.size.width,
+                    footerHeight: heights.footer,
+                    safeBottomInset: safeBottom
+                )
             }
             .frame(width: geometry.size.width, height: geometry.size.height, alignment: .top)
         }
@@ -77,13 +92,16 @@ struct WorkspaceFolderSidebarView: View {
     }
 
     @ViewBuilder
-    private func sidebarFooterChrome(width: CGFloat, footerHeight: CGFloat) -> some View {
+    private func sidebarFooterChrome(width: CGFloat, footerHeight: CGFloat, safeBottomInset: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             Spacer(minLength: 0)
             sidebarActionsFooter
             workspaceLocationFooter
+            if safeBottomInset > 0.5 {
+                Color.clear.frame(height: safeBottomInset)
+            }
         }
-        .frame(width: width, height: footerHeight, alignment: .bottomLeading)
+        .frame(width: width, height: footerHeight, alignment: .topLeading)
     }
 
     private var sidebarActionsFooter: some View {
@@ -138,7 +156,7 @@ struct WorkspaceFolderSidebarView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 10)
         .padding(.top, 2)
-        .padding(.bottom, 6)
+        .padding(.bottom, 8)
     }
 
     /// Middle ellipsis when the path is long; keeps start and end visible for Finder-style paths.
@@ -160,17 +178,20 @@ struct WorkspaceFolderSidebarView: View {
 
     /// Non-scrolling footer band; grows slightly on narrow sidebars if the path may wrap.
     private static func footerChromeHeight(forSidebarWidth width: CGFloat) -> CGFloat {
-        let base: CGFloat = 96
+        let base: CGFloat = 108
         guard width.isFinite, width > 0, width < 210 else { return base }
         return base + 18
     }
 
     private static let minListHeight: CGFloat = 72
 
-    private static func partitionListAndFooterHeights(totalHeight: CGFloat, sidebarWidth: CGFloat)
-        -> (list: CGFloat, footer: CGFloat)
-    {
-        let desiredFooter = footerChromeHeight(forSidebarWidth: sidebarWidth)
+    private static func partitionListAndFooterHeights(
+        totalHeight: CGFloat,
+        sidebarWidth: CGFloat,
+        footerSafeBottomInset: CGFloat = 0
+    ) -> (list: CGFloat, footer: CGFloat) {
+        let desiredFooter =
+            footerChromeHeight(forSidebarWidth: sidebarWidth) + max(0, footerSafeBottomInset)
         let listMin = minListHeight
         let footerMin: CGFloat = 56
         guard totalHeight.isFinite, totalHeight > 1 else {
@@ -186,5 +207,64 @@ struct WorkspaceFolderSidebarView: View {
         }
         let footer = min(footerMin, totalHeight)
         return (max(0, totalHeight - footer), footer)
+    }
+}
+
+// MARK: - AppKit clip fix (SwiftUI List / NSTableView)
+
+private final class ListClipAnchorView: NSView {
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        MainActor.assumeIsolated {
+            ListScrollViewClip.applyEnclosingScrollViewClipping(anchor: self)
+        }
+    }
+
+    override func viewDidMoveToSuperview() {
+        super.viewDidMoveToSuperview()
+        MainActor.assumeIsolated {
+            ListScrollViewClip.applyEnclosingScrollViewClipping(anchor: self)
+        }
+    }
+
+    override func layout() {
+        super.layout()
+        MainActor.assumeIsolated {
+            ListScrollViewClip.applyEnclosingScrollViewClipping(anchor: self)
+        }
+    }
+}
+
+@MainActor
+private enum ListScrollViewClip {
+    /// Clips every enclosing `NSScrollView` up to the window. With a very short sidebar list, the first
+    /// scroll view in the hierarchy is not always the `NSTableView` host; clipping only that view can miss
+    /// the view that still paints through the footer.
+    static func applyEnclosingScrollViewClipping(anchor: NSView) {
+        var current: NSView? = anchor
+        while let view = current {
+            if let scroll = view as? NSScrollView {
+                scroll.clipsToBounds = true
+                scroll.wantsLayer = true
+                scroll.layer?.masksToBounds = true
+                let clipView = scroll.contentView
+                clipView.wantsLayer = true
+                clipView.layer?.masksToBounds = true
+            }
+            current = view.superview
+        }
+    }
+}
+
+private struct ListEnclosingScrollViewClip: NSViewRepresentable {
+    func makeNSView(context: Context) -> ListClipAnchorView {
+        ListClipAnchorView()
+    }
+
+    func updateNSView(_ nsView: ListClipAnchorView, context: Context) {
+        ListScrollViewClip.applyEnclosingScrollViewClipping(anchor: nsView)
+        DispatchQueue.main.async {
+            ListScrollViewClip.applyEnclosingScrollViewClipping(anchor: nsView)
+        }
     }
 }
