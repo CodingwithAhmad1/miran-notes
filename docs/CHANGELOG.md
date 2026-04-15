@@ -24,7 +24,7 @@ Opening a folder as a workspace is gated by a **structural compatibility scan**:
 
 ## 1.0 — Core local-first notes app (baseline)
 
-Baseline after the **Apr 2026 pivot**: a minimal **knowledge storer** (editor, vault, links, folders, search). Miran Planning / calendar UI is **deactivated**; code remains under `Sources/MiranNotesApp/Features/Planning/`.
+Baseline after the **Apr 2026 pivot**: a minimal **knowledge storer** (editor, vault, links, folders, search). Miran Planning / calendar UI and related modules were **later removed** from the repository; see [ADR 0004](adr/0004-vault-level-databases-and-planning.md) amendment for vault-level databases.
 
 - **On disk:** `.txt` + `.meta.json`; indexes under `.miran/`; nested folders, manifest v2 ([ADR 0003](adr/0003-folders-paths-and-manifest-v2.md)).
 - **Editing:** `EditCommandEngine`, `SingleSurfaceNoteEditor`, slash discovery and auto-commit, wiki links ([ADR 0001](adr/0001-wiki-links-and-identity.md)).
@@ -33,7 +33,7 @@ Baseline after the **Apr 2026 pivot**: a minimal **knowledge storer** (editor, v
 - **Undo:** Hybrid inverse chains + full snapshots, capped stack ([Constraints.md](../Constraints.md), [plans/hybrid-undo-appmodel-wiring.md](plans/hybrid-undo-appmodel-wiring.md)).
 - **App shell:** `AppModel` as `@MainActor` `@Observable`; Swift 6 language mode in `Package.swift`.
 - **Legacy:** Per-note JSONL table feature removed from UI; `_aux` cleanup per [ADR 0002](adr/0002-auxiliary-storage-jsonl.md).
-- **Databases:** Vault-level `_databases/` per [ADR 0004](adr/0004-vault-level-databases-and-planning.md); planning-facing UI not active in the product shell.
+- **Databases:** Vault-level `_databases/` layout documented in [ADR 0004](adr/0004-vault-level-databases-and-planning.md); core types remain in `MiranNotesCore` for compatibility with older vaults.
 
 ### Git (thematic backtrace)
 

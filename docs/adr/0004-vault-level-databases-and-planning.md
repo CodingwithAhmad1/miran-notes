@@ -11,6 +11,10 @@ The goal was to integrate planning (tasks, sessions, calendar, dashboard) seamle
 
 ## Decision
 
+### Amendment (2026-04-15)
+
+The Swift actors **`DatabaseDocument`** and **`DatabaseRepository`** that implemented the persistence layer below were **removed** from the repository during the minimal-knowledge-storer pivot. **`MiranNotesCore`** still ships **`DatabaseModels`**, **`VaultDatabasePaths`**, **`DatabaseRegistry`**, and related types so existing vaults with `_databases/` and `database-registry.json` remain decodable. The subsections that follow record the **original design** and on-disk format.
+
 ### Vault-level database layer
 
 Promote databases from per-note auxiliary artifacts to **first-class vault-level entities** stored under `_databases/{databaseID}/`:
@@ -62,7 +66,7 @@ Cross-feature bridges: `/task` and `/session` slash commands, `linkActiveNoteToT
 ## Consequences
 
 - **Per-note table artifacts** (`_aux/…/tables/`) are no longer created by the app (see ADR 0002); vault-level databases under `_databases/` are the structured-data path.
-- Database persistence currently uses direct file I/O rather than participating in `VaultCommitCoordinator` atomic commits. This is acceptable because database writes are self-contained (not entangled with note saves), but a future enhancement could add a `DatabaseCommitParticipant` for coordinated multi-entity transactions.
+- **Update (2026-04-15):** The historical database persistence implementation used direct file I/O rather than participating in `VaultCommitCoordinator` atomic commits. A future reintroduction could add a `DatabaseCommitParticipant` for coordinated multi-entity transactions.
 - The `DatabaseRegistry` index adds a new file to `.miran/` that older Miran Notes versions will ignore (forward-compatible by convention).
 - Planning schemas are predefined but extensible — users can add columns, views, and filters.
 - The Zora Planning standalone app is superseded by the integrated feature module.

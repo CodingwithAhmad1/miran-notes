@@ -2,7 +2,7 @@
 
 A simple, minimalistic, Mac-native knowledge storer. Local-first, plain-text storage, zero cloud dependency.
 
-> **Pivot note (Apr 2026):** Miran Notes is being refocused as a pure knowledge-storage tool. The Miran Planning / calendar feature set (menu-bar extra, task and session databases, dashboard, calendar views) has been **deactivated** — code is preserved but not built into the active product. The new direction is a clean, distraction-free note-taking experience native to macOS.
+> **Pivot note (Apr 2026):** Miran Notes is being refocused as a pure knowledge-storage tool. The Miran Planning / calendar feature set (menu-bar extra, task and session databases, dashboard, calendar views) has been **removed from the codebase** as part of that pivot. The shipping product is a clean, distraction-free note-taking experience native to macOS.
 
 **Documentation hub:** [docs/README.md](docs/README.md) — index of [Constraints.md](Constraints.md), ADRs, architecture notes, plans, and code pointers. **Product / engineering brief:** [docs/investor-and-engineering-brief.md](docs/investor-and-engineering-brief.md).
 
@@ -18,15 +18,14 @@ A simple, minimalistic, Mac-native knowledge storer. Local-first, plain-text sto
 - **Extension hooks:** `SlashCommandRegistry` (open registration), `ExtensionRegistry` + ordered closure interceptors on `AppModel` (see [extension-registry-and-interceptors.md](docs/architecture/extension-registry-and-interceptors.md)).
 - **Navigation / search:** Folder sidebar outline, searchable list with body snippets, backlinks panel with snippets; vault-wide filesystem watch (subtree) and optional active-note file coordination where implemented.
 - **Backlinks:** Debounced refresh; `LinkGraph` is cached inside `VaultIndexActor` (invalidated on external vault events and updated after commits).
-- **Vault-level databases:** `DatabaseDocument` actor + `DatabaseRepository` actor provide schema-typed JSONL databases under `_databases/`. `DatabaseRegistry` in `.miran/` tracks all databases. 10 column types including `select`, `multiSelect`, `relation`, `noteLink`, `url`, `duration`. `DatabaseViewConfig` supports table, board, calendar, and list layouts with filters and sort keys. *(Infrastructure preserved; Planning UI deactivated — see pivot note above.)*
-- **Miran Planning *(deactivated)*:** Dashboard, calendar views, task/session databases, weekly review, inline embeds, `/task` and `/session` slash commands, and Zora migration engine. All source is preserved under `Sources/MiranNotesApp/Features/Planning/` but is not active in the current product direction.
+- **Vault-level databases (on-disk):** Vaults may still contain `_databases/{databaseID}/` trees and `database-registry.json` under `.miran/` from earlier builds ([ADR 0004](docs/adr/0004-vault-level-databases-and-planning.md)). **`MiranNotesCore`** keeps **`DatabaseModels`**, **`VaultDatabasePaths`**, and related types so those artifacts remain interpretable; the app does not ship persistence actors for structured databases or Planning UI.
+- **Miran Planning:** Removed. Prior integration (dashboard, calendar, task/session databases, Zora migration, `/task` and `/session`) is described only in ADRs and archived docs for historical context.
 
 ## Module layout
 
 - `Sources/MiranNotesCore` — `NoteDocument`, `EditCommandEngine`, `UndoInverseSupport`, `TextEditDiff`, `NoteIntegrity`, `ExtensionRegistry`, `CommandPipelineContract`, `DatabaseModels`, `LinkTarget`.
-- `Sources/MiranNotesApp/Data` — `AppModel`, `NoteRepository`, vault/commit/index types, `DatabaseDocument`, `DatabaseRepository`, `PlanningConfigManager`, `PlanningSchemas`.
+- `Sources/MiranNotesApp/Data` — `AppModel`, `NoteRepository`, vault/commit/index types (`VaultCommitCoordinator`, `LinkGraph`, `RelationshipIndex`, `FolderCatalog`, `PathIndex`, …).
 - `Sources/MiranNotesApp/Features/Editor` — `SingleSurfaceNoteEditor`, `SlashCommandRegistry`, editor features.
-- `Sources/MiranNotesApp/Features/Planning` — `PlanningModel`, dashboard, calendar (daily/weekly/monthly/review), database views (table/board), edit sheets, inline embeds, settings, migration, slash commands, daily template engine. *(Preserved but deactivated.)*
 - `Tests/MiranNotesTests`, `Tests/MiranNotesAppTests` — `swift test`.
 
 ## Milestones (historical)
@@ -46,11 +45,11 @@ A simple, minimalistic, Mac-native knowledge storer. Local-first, plain-text sto
 - [x] Repair / advisory surfaces for load repair, integrity, conflicts, size limit (see `RepairAdvisory`).  
 - [x] Hybrid + snapshot undo with cap, coalescing, and safe prune.  
 - [x] Slash commands + discovery menu; open registry.  
-- [x] Vault-level databases with typed schemas, JSONL rows, and multi-layout views. *(infrastructure preserved)*
+- [~] Vault-level databases: on-disk format and core **types** preserved; **persistence/UI** removed (see [ADR 0004](docs/adr/0004-vault-level-databases-and-planning.md) amendment).
 - [~] Miran Planning: dashboard, calendar, task/session databases — **deactivated** during pivot.
 - [~] Zora vault migration engine and CSV export — **deactivated** during pivot.
 - [~] `/task` and `/session` slash commands — **deactivated** during pivot.  
-- [x] Project builds; `swift test` passes (265 tests).
+- [x] Project builds; `swift test` passes (268 tests).
 
 ## Vault (first launch)
 

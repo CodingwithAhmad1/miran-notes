@@ -14,7 +14,7 @@ Tools such as Cursor may create plans under **`.cursor/plans/`** on a developer 
 
 ## Active product surface
 
-**Canonical map:** what the **shipping** macOS app (`MiranNotesApp`) exposes today versus code that remains **compiled but deactivated** or **reference-only** after the Apr 2026 pivot (see [root README](../../README.md) and [Constraints.md](../../Constraints.md) § Product scope). `MiranNotesCore` is shared library code; the **product** is the app shell plus vault/editor UX.
+**Canonical map:** what the **shipping** macOS app (`MiranNotesApp`) exposes today versus **historical** design that lives only in ADRs and archived notes after the Apr 2026 pivot (see [root README](../../README.md) and [Constraints.md](../../Constraints.md) § Product scope). `MiranNotesCore` is shared library code; the **product** is the app shell plus vault/editor UX.
 
 | Surface | Ships in active app | Preserved / not active as product | Primary code paths |
 |--------|---------------------|-----------------------------------|--------------------|
@@ -23,8 +23,8 @@ Tools such as Cursor may create plans under **`.cursor/plans/`** on a developer 
 | Folders, folder page, note list / search with body snippets | Yes | — | `FolderCatalog`, `FolderPageView`, `WorkspaceFolderSidebarView`, `NotesListView`; body index via `NoteBodySearchIndexController` |
 | Block editor, slash commands, wiki links, backlinks | Yes | — | `Features/Editor/` — `SingleSurfaceNoteEditor`, `SlashCommandRegistry`; core engine in `MiranNotesCore/EditCommandEngine`; backlinks via `LinkGraph` / `AppModel` |
 | Undo, repair advisories, external-edit conflict UX | Yes | — | `AppModel`, `RepairAdvisory`, `EditorRootView` |
-| **Miran Planning** (menu bar, calendar, dashboard, task/session DB UI, Zora migration, `/task` `/session` in product) | **No** — not wired into the active shell | Source preserved under `Sources/MiranNotesApp/Features/Planning/`; pivot details in root README | `PlanningModel`, calendar/database views, migration *(deactivated)* |
-| Vault-level **databases** (`_databases/` per [ADR 0004](../adr/0004-vault-level-databases-and-planning.md)) | On-disk format and types remain; **not** a user-facing Planning surface after pivot | `DatabaseDocument`, `DatabaseRepository` in `Data/`; legacy DB product isolated as `MiranNotesLegacyDatabase` for tests — see [architectural-refinements.md](../architecture/architectural-refinements.md) | `DatabaseModels` in core; `VaultDatabasePaths` |
+| **Miran Planning** (menu bar, calendar, dashboard, task/session DB UI, Zora migration, `/task` `/session`) | **No** — removed from tree | Historical behavior in [ADR 0004](../adr/0004-vault-level-databases-and-planning.md) and archived docs | — |
+| Vault-level **databases** (`_databases/` per [ADR 0004](../adr/0004-vault-level-databases-and-planning.md)) | On-disk artifacts and **core types** may still exist in older vaults; **no** app persistence layer | `DatabaseModels`, `VaultDatabasePaths` in `MiranNotesCore` — see [architectural-refinements.md](../architecture/architectural-refinements.md) | `VaultDatabasePaths`; index loaders in `MiranNotesApp/Data` |
 | Per-note `_aux` JSONL tables (historical) | Not surfaced in UI | Optional cleanup per [ADR 0002](../adr/0002-auxiliary-storage-jsonl.md) | — |
 
 ## Completed plans
@@ -36,7 +36,7 @@ Tools such as Cursor may create plans under **`.cursor/plans/`** on a developer 
 | [robustness-phased-plan.md](robustness-phased-plan.md) | Phased hardening: repair advisory, `adjustBlocks`, slash registry, sync `onCommands`, cursor binding | Implemented (see repo history for test counts) |
 | [hybrid-undo-appmodel-wiring.md](hybrid-undo-appmodel-wiring.md) | `UndoInverseSupport.replaceTextChainUndoCommands`, `AppModel` `UndoCheckpoint` hybrid storage, prune rebase, `Constraints` undo section | Implemented |
 | [longevity-and-migration-analysis.md](longevity-and-migration-analysis.md) (Part 2) | `AppModel`: `ObservableObject` / `@Published` → `@Observable`; root `@State`; `@Bindable` at binding sites (Apr 2026) | Implemented |
-| Vault-level databases & Miran Planning (see [ADR 0004](../adr/0004-vault-level-databases-and-planning.md), [planning-integration.md](../architecture/planning-integration.md)) | Database infrastructure, planning data layer, planning UI, cross-feature integration, Zora migration | Implemented |
+| Vault-level databases & Miran Planning (see [ADR 0004](../adr/0004-vault-level-databases-and-planning.md)) | Originally: database infrastructure, planning data layer, planning UI, Zora migration — **persistence/UI later removed** (Apr 2026); ADR amended | Superseded by minimal product; on-disk format retained in ADR |
 | Workspace compatibility & import/drift (see [CHANGELOG.md](../CHANGELOG.md), [guides/ImportingNotes.md](../guides/ImportingNotes.md)) | Structural scan before open; incompatible-folder UI; `NoteIdentityResolution`; `validateVaultDrift` / `VaultDriftReport`; scanner and policy tests | Implemented |
 
 ## Active / reference plans

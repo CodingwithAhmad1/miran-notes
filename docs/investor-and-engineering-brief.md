@@ -1,6 +1,6 @@
 # Miran Notes — Engineering Brief
 
-> **Pivot note (Apr 2026):** Miran Notes is pivoting to a **simple, minimalistic, Mac-native knowledge storer**. The Miran Planning / calendar feature set (menu-bar extra, task and session databases, dashboard, calendar views, Zora migration) has been **deactivated** — source is preserved but the active product no longer surfaces it. References to Planning and investor narrative below are retained for historical context only. Current engineering focus is the core note-taking experience: vault, editor, wiki links, search, and atomic persistence.
+> **Pivot note (Apr 2026):** Miran Notes is pivoting to a **simple, minimalistic, Mac-native knowledge storer**. The Miran Planning / calendar feature set (menu-bar extra, task and session databases, dashboard, calendar views, Zora migration) has been **removed from the codebase** — the active product is the core note-taking experience: vault, editor, wiki links, search, and atomic persistence. References to Planning below are retained for historical context only.
 
 **Purpose:** This document explains what Miran Notes is, how it works under the hood, and where the codebase is headed. It is written primarily for **software engineers** who need a map of the system, honest gaps, and improvement areas.
 
@@ -254,7 +254,7 @@ flowchart TB
 
 1. **Student preparing for exams** — Course folders per subject, search across notes, callouts and lists, links between topics (`[[…]]`). **Architecture:** fast autosave, offline-only, no account.  
 2. **Lawyer organizing matters** — Nested folders per client or matter; internal links between memos; conflict prompts if a file is edited outside the app. **Architecture:** identity-first links reduce breakage when paths change.  
-3. **Developer documenting a system** — Code blocks, wiki links between design docs; structured reference data can live in **vault-level databases** (`_databases/`, ADR 0004) when Planning/database UIs are enabled; the core app stays text-first.
+3. **Developer documenting a system** — Code blocks, wiki links between design docs; structured reference data could again live in **vault-level databases** (`_databases/`, ADR 0004) if a future product surface reintroduces database UIs; the core app stays text-first.
 
 ---
 
@@ -262,7 +262,7 @@ flowchart TB
 
 ### Product direction summary
 
-Miran Notes is a **native, local-first** Mac knowledge storer: clean editor, wiki links, nested folders, fast search, and atomic persistence — nothing more. The **Miran Planning** feature set (calendar, tasks, sessions, dashboard) has been deactivated as part of a deliberate pivot toward minimalism. The codebase retains a disciplined architecture (core vs app, ADRs, constraints, tests) that can support future small features without accumulating complexity.
+Miran Notes is a **native, local-first** Mac knowledge storer: clean editor, wiki links, nested folders, fast search, and atomic persistence — nothing more. The **Miran Planning** feature set (calendar, tasks, sessions, dashboard) was removed from the codebase as part of a deliberate pivot toward minimalism. The repository retains a disciplined architecture (core vs app, ADRs, constraints, tests) that can support future small features without accumulating complexity.
 
 ### Guidance for the implementing engineer
 

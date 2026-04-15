@@ -11,8 +11,7 @@ let package = Package(
         .macOS(.v14)
     ],
     products: [
-        .executable(name: "MiranNotes", targets: ["MiranNotesApp"]),
-        .library(name: "MiranNotesLegacyDatabase", targets: ["MiranNotesLegacyDatabase"])
+        .executable(name: "MiranNotes", targets: ["MiranNotesApp"])
     ],
     targets: [
         .target(
@@ -26,12 +25,6 @@ let package = Package(
             path: "Sources/MiranNotesApp",
             swiftSettings: swift6Settings
         ),
-        .target(
-            name: "MiranNotesLegacyDatabase",
-            dependencies: ["MiranNotesCore"],
-            path: "Sources/MiranNotesLegacyDatabase",
-            swiftSettings: swift6Settings
-        ),
         .testTarget(
             name: "MiranNotesTests",
             dependencies: ["MiranNotesCore"],
@@ -40,7 +33,7 @@ let package = Package(
         ),
         .testTarget(
             name: "MiranNotesAppTests",
-            dependencies: ["MiranNotesApp", "MiranNotesCore", "MiranNotesLegacyDatabase"],
+            dependencies: ["MiranNotesApp", "MiranNotesCore"],
             path: "Tests/MiranNotesAppTests",
             swiftSettings: swift6Settings
         )

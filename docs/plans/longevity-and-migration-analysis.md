@@ -108,24 +108,21 @@ SwiftUI now tracks fine-grained property access on `AppModel` instead of invalid
 **Intentionally deferred / unchanged**
 
 - **`ActiveNoteFilePresenter`:** still calls `onChange()` synchronously from `presentedItemDidChange`; `presentedItemOperationQueue` remains `OperationQueue.main` (no `Task` hop added — avoids `@Sendable` closure churn while keeping behavior).
-- **`DatabaseRepository`:** fire-and-forget `Task { await doc... }` for row ops unchanged (async flush ordering unchanged).
 - **`WikiLinkTextView`:** not `@MainActor`; main-thread isolation is carried by `Coordinator` and the storage delegate bridge.
 
-`swift build` and `swift test` (228 tests) pass with the settings above.
+`swift build` and `swift test` pass with the settings above (see root [README.md](../../README.md) for the current test count).
 
 ### Current concurrency posture
 
 *Snapshot below is largely historical context from the pre–Swift 6 audit; the **Status** subsection above describes what shipped.*
 
-**Actors (6):**
+**Actors (4):**
 
 | Actor | File | Risk |
 |-------|------|------|
 | `VaultIndexActor` | `Data/VaultIndexActor.swift` | Low — clear isolation |
 | `NoteFileActor` | `Data/NoteFileActor.swift` | Low |
 | `NoteRepository` | `Data/NoteRepository.swift` | Low–medium — many APIs; ensure payloads are Sendable |
-| `DatabaseDocument` | `Data/DatabaseDocument.swift` | Low |
-| `DatabaseRepository` | `Data/DatabaseRepository.swift` | Medium — fire-and-forget `Task` usage |
 | `ExternalBookmarkStore` | `Data/ExternalBookmarkStore.swift` | Low |
 
 **`@MainActor` annotations:**
@@ -134,7 +131,7 @@ SwiftUI now tracks fine-grained property access on `AppModel` instead of invalid
 - `VaultDirectoryWatcher.onEvent` and `onSetupFailed` closures.
 - 12+ test classes.
 
-**`nonisolated` usage (7 sites, all low risk):**
+**`nonisolated` usage (5 sites, all low risk):**
 
 | File | What | Risk |
 |------|------|------|
@@ -143,7 +140,6 @@ SwiftUI now tracks fine-grained property access on `AppModel` instead of invalid
 | `NoteFileActor.swift` | `private nonisolated static func documentAfterLoadRepair(...)` | Low — pure transform |
 | `NoteRepository.swift` | `nonisolated let vaultURL` | Low |
 | `NoteRepository.swift` | `nonisolated static func validateBaseName` | Low — pure |
-| `DatabaseRepository.swift` | `nonisolated let vaultURL` | Low |
 | `LinkGraphStartupPolicy.swift` | `nonisolated static func decision(...)` | Low — pure decision helper (extracted from `AppModel`) |
 
 **`@unchecked Sendable` (1 site):**
@@ -201,7 +197,7 @@ The recommended workflow is: enable strict concurrency warnings (not errors) →
 
 ### Risk assessment
 
-**Confidence: ~80%.** Mechanical parts (Tier 1) are reliable. Primary risk: if any type in the `NoteDocument` / `EditCommand` / `NoteMetadata` hierarchy contains a reference type or mutable class field, making it `Sendable` becomes non-trivial. The codebase's preference for structs makes this likely straightforward. The `DatabaseRepository` fire-and-forget `Task` pattern (`Task { await doc.insertRow(...) }`) needs ordering review.
+**Confidence: ~80%.** Mechanical parts (Tier 1) are reliable. Primary risk: if any type in the `NoteDocument` / `EditCommand` / `NoteMetadata` hierarchy contains a reference type or mutable class field, making it `Sendable` becomes non-trivial. The codebase's preference for structs makes this likely straightforward.
 
 ---
 

@@ -1,7 +1,7 @@
 import Foundation
 
 /// On-disk layout for vault-level databases (`_databases/`) and `database-registry.json` under `.miran/`.
-/// Shared by the app index layer and the preserved `MiranNotesLegacyDatabase` module.
+/// Shared by the app index layer and any future vault-database persistence code.
 public enum VaultDatabasePaths {
     public static let databasesDirName = "_databases"
     public static let databaseRegistryFileName = "database-registry.json"

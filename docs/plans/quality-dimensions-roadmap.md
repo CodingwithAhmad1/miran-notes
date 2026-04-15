@@ -76,17 +76,15 @@ Miran Notes treats **data durability** as a first-class concern: vault changes u
 - **Expected impact:** Easier onboarding; clearer place for “read-only list vs reconcile” rules ([vault-data-layer.md](../architecture/vault-data-layer.md)).
 - **Constraints / dependencies:** Do not duplicate ADR content; link ADRs from code headers.
 
-#### P3 — Classify preserved Planning / database code paths in the build
+#### P3 — Classify preserved Planning / database code paths in the build *(resolved 2026-04-15)*
 
-- **Why it matters:** Deactivated features under `Features/Planning/` and database infrastructure still compile; contributors may not know what is **shipping vs legacy**.
-- **Expected impact:** Fewer mistaken edits; optional **compiler flags** or target separation if the team wants a hard boundary (see §3).
-- **Constraints / dependencies:** Product decision: keep single target vs split targets; migration cost vs clarity.
+- **Outcome:** Miran Planning UI and the `MiranNotesLegacyDatabase` target were **removed** from the repository; only **`DatabaseModels`** / **`VaultDatabasePaths`** (and related core types) remain for compatibility with older vaults. Contributors should treat [ADR 0004](../adr/0004-vault-level-databases-and-planning.md) as historical format documentation, not a map of active Swift modules.
 
 #### Completed (§2 — 2026-04-14)
 
 - **P1:** [`LinkGraphStartupPolicy`](../../Sources/MiranNotesApp/App/LinkGraphStartupPolicy.swift) holds startup link-graph sync mode/decision pure logic; `AppModel` keeps I/O and `UserDefaults` EMA.
 - **P2:** [`VaultManifestRefreshFacade`](../../Sources/MiranNotesApp/Data/VaultManifestRefreshFacade.swift) centralizes invalidate + `reconcileManifest` for disk-driven refresh; header links `vault-data-layer.md` and ADR 0003.
-- **P3:** [`MiranNotesLegacyDatabase`](../../Sources/MiranNotesLegacyDatabase/) library product for `DatabaseRepository` / `DatabaseDocument` (tests-only dependency of the app executable); [`VaultDatabasePaths`](../../Sources/MiranNotesCore/VaultDatabasePaths.swift) + `DatabaseRegistry.loadFromVault` in `MiranNotesCore`. See [architectural-refinements.md](../architecture/architectural-refinements.md).
+- **P3 (2026-04-14):** Introduced a tests-only `MiranNotesLegacyDatabase` library for `DatabaseRepository` / `DatabaseDocument` plus [`VaultDatabasePaths`](../../Sources/MiranNotesCore/VaultDatabasePaths.swift) in core. **Superseded 2026-04-15:** that target and `DatabaseRepositoryTests` were **removed**; `VaultDatabasePaths` and `DatabaseModels` remain in `MiranNotesCore`. See [architectural-refinements.md](../architecture/architectural-refinements.md).
 - **Later pass (same §2 theme):** Further `AppModel` decomposition — [`NoteBodySearchIndexController`](../../Sources/MiranNotesApp/Data/NoteBodySearchIndexController.swift), [`DebouncedAsyncWorkScheduler`](../../Sources/MiranNotesApp/Data/DebouncedAsyncWorkScheduler.swift), [`FolderPageNoteLoading`](../../Sources/MiranNotesApp/Data/FolderPageNoteLoading.swift), [`AppModelUndoCheckpointSupport`](../../Sources/MiranNotesApp/App/AppModelUndoCheckpointSupport.swift); shared vault FS pipeline `processVaultFilesystemRefreshPipeline()` on `AppModel`. Optional deeper `NoteRepository` facades deferred until call-site churn justifies them.
 
 ---
@@ -95,7 +93,7 @@ Miran Notes treats **data durability** as a first-class concern: vault changes u
 
 ### Current status and strengths
 
-**Product pivot is explicit:** The app is positioned as a **simple, local-first, Mac-native knowledge storer**; Miran Planning (calendar, menu bar, task/session DB UI) is **deactivated** while source is preserved ([README.md](../../README.md), [investor-and-engineering-brief.md](../investor-and-engineering-brief.md)).
+**Product pivot is explicit:** The app is positioned as a **simple, local-first, Mac-native knowledge storer**; Miran Planning (calendar, menu bar, task/session DB UI) has been **removed from the tree** ([README.md](../../README.md), [investor-and-engineering-brief.md](../investor-and-engineering-brief.md)).
 
 **Core user journeys match positioning:** Vault open, nested folders, search with body snippets, block-aware editor, slash commands, wiki links by stable `noteID`, backlinks with snippets, atomic saves—consistent with “ownership of files” and “trustworthy place to store ideas.”
 
@@ -275,6 +273,7 @@ Treat the items below as **out of scope for the current product phase** unless a
 | 2026-04-14 | Initial roadmap derived from repository review and engineering quality dimensions. |
 | 2026-04-14 | §1 Reliability P1–P3 shipped: stress tests, reliability-expectations doc, search/manifest observability (see Completed under §1). |
 | 2026-04-14 | §2 Architectural cleanliness P1–P3 shipped: `LinkGraphStartupPolicy`, `VaultManifestRefreshFacade`, `MiranNotesLegacyDatabase` + `VaultDatabasePaths` (see Completed under §2). |
+| 2026-04-15 | Legacy `MiranNotesLegacyDatabase` target, `DatabaseRepositoryTests`, and stale planning-integration doc **removed**; docs and ADR 0004 amended to match the minimal product. |
 | 2026-04-14 | §2 follow-up: `AppModel` helpers — body search index controller, debounced scheduler, folder-page loading, undo checkpoint support types; unified `processVaultFilesystemRefreshPipeline` (see Completed under §2). |
 | 2026-04-14 | §3 Goal orientation P1–P3 shipped: active product surface doc, empty-vault welcome UX, non-goals / backlog hygiene (see Completed under §3). |
 | 2026-04-14 | §4 Usability P1–P3 shipped: vault path onboarding + sidebar footer, Editing help sheet, `userAlert` with retry for body search index (see Completed under §4). |

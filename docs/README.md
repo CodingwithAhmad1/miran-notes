@@ -6,7 +6,7 @@
 
 Miran Notes is a **simple, minimalistic, local-first** macOS knowledge storer: canonical text in per-note `.txt` files, structured metadata in a sidecar, edits through `EditCommandEngine`, and a SwiftUI + AppKit editor.
 
-> **Pivot (Apr 2026):** Miran Planning (menu-bar calendar, task/session databases, dashboard) has been **deactivated**. The active product is the core note-taking experience — vault, editor, wiki links, folders, and search. Planning source is preserved under `Features/Planning/` but is not wired into the active app.
+> **Pivot (Apr 2026):** Miran Planning (menu-bar calendar, task/session databases, dashboard) has been **removed from the codebase**. The active product is the core note-taking experience — vault, editor, wiki links, folders, and search. Historical design remains in ADRs and archived notes.
 
 The [root README](../README.md) summarizes build commands, module layout, and features.
 
@@ -30,13 +30,12 @@ The [root README](../README.md) summarizes build commands, module layout, and fe
 | [architecture/slash-command-framework.md](architecture/slash-command-framework.md) | Slash contracts, discovery UX, extension pattern |
 | [architecture/block-chrome-interaction-model.md](architecture/block-chrome-interaction-model.md) | Block chrome design for future interactive handles |
 | [architecture/vault-data-layer.md](architecture/vault-data-layer.md) | Repository, on-disk layout, text hash vs revision token, TOCTOU |
-| [architecture/planning-integration.md](architecture/planning-integration.md) | Miran Planning architecture: databases, PlanningModel, UI, migration *(deactivated — preserved for reference)* |
 | **Archive** | |
 | [archive/README.md](archive/README.md) | Superseded 2026 briefs (historical context only); live story in ADRs and [CHANGELOG.md](CHANGELOG.md) |
 | **ADRs** | |
 | [adr/README.md](adr/README.md) | Architecture Decision Records index (includes [0006](adr/0006-threat-model-app-sandbox-vault-access.md) threat model / vault bookmarks) |
 | **Plans and QA** | |
-| [plans/README.md](plans/README.md) | Planning docs index, completed plans, and [**Active product surface**](plans/README.md#active-product-surface) (what ships vs preserved modules) |
+| [plans/README.md](plans/README.md) | Planning docs index, completed plans, and [**Active product surface**](plans/README.md#active-product-surface) (what ships vs historical design) |
 | [plans/longevity-and-migration-analysis.md](plans/longevity-and-migration-analysis.md) | Longevity assessment; `@Observable` and Swift 6 language mode **done**; TextKit 2 typing migration still planned |
 | [plans/editor-interaction-scenarios.md](plans/editor-interaction-scenarios.md) | Manual QA checklist (typing, blocks, IME, large notes) |
 | [plans/quality-dimensions-roadmap.md](plans/quality-dimensions-roadmap.md) | Six-dimension quality assessment: strengths, prioritized actionable improvements (reliability, architecture, goals, UX, performance, security) |
@@ -56,10 +55,9 @@ The [root README](../README.md) summarizes build commands, module layout, and fe
 ## Code pointers (quick orientation)
 
 - **Core:** `Sources/MiranNotesCore/` — `NoteDocument`, `EditCommandEngine`, `UndoInverseSupport`, `TextEditDiff`, `NoteIntegrity`, `ExtensionRegistry`, `CommandPipelineContract`, `DatabaseModels`, `LinkTarget`.
-- **App / Data:** `Sources/MiranNotesApp/Data/` — `NoteRepository`, `VaultCommitCoordinator`, indexes (`LinkGraph`, `RelationshipIndex`, `FolderCatalog`, `PathIndex`), `DatabaseDocument`, `DatabaseRepository`, `PlanningConfigManager`, `PlanningSchemas`.
+- **App / Data:** `Sources/MiranNotesApp/Data/` — `NoteRepository`, `VaultCommitCoordinator`, indexes (`LinkGraph`, `RelationshipIndex`, `FolderCatalog`, `PathIndex`), and related vault I/O types.
 - **App / Editor:** `Sources/MiranNotesApp/Features/Editor/` — `SingleSurfaceNoteEditor`, `EditorVisualStyle`, `SlashCommandRegistry`.
 - **App / Workspace:** `Sources/MiranNotesApp/Features/Workspace/` — folder workspace shell (`FolderPageView`, `WorkspaceFolderSidebarView`), `WorkspaceIncompatibleView` when a chosen folder fails the compatibility scan (see `Data/WorkspaceCompatibility.swift`).
-- **App / Planning *(deactivated)*:** `Sources/MiranNotesApp/Features/Planning/` — `PlanningModel`, dashboard, calendar, database views, edit sheets, inline embeds, settings, migration engine, slash commands, daily template. Source preserved; `MenuBarExtra` and planning slash commands are commented out during the pivot.
 - **App shell:** `Sources/MiranNotesApp/App/` — `AppModel`, `MiranNotesApp`.
 - **Tests:** `Tests/MiranNotesTests/`, `Tests/MiranNotesAppTests/` (`swift test`).
 

@@ -27,10 +27,9 @@ This document tracks major structural work aligned with the long-term plan:
 - [`FolderPageNoteLoading`](../../Sources/MiranNotesApp/Data/FolderPageNoteLoading.swift) — loads folder-page note buffers from `NoteRepository`.
 - [`AppModelUndoCheckpointSupport.swift`](../../Sources/MiranNotesApp/App/AppModelUndoCheckpointSupport.swift) — `UndoCheckpoint` state, materialization, and action naming shared with `AppModel` undo registration (still registers on `AppModel` via `UndoManager`).
 
-## Preserved vault databases (not linked by app)
+## Vault-level database paths (core only)
 
-- **`MiranNotesLegacyDatabase`** ([`Package.swift`](../../Package.swift) library product) holds [`DatabaseRepository`](../../Sources/MiranNotesLegacyDatabase/DatabaseRepository.swift) and [`DatabaseDocument`](../../Sources/MiranNotesLegacyDatabase/DatabaseDocument.swift). The **`MiranNotes` executable** does **not** depend on this target; [`MiranNotesAppTests`](../../Tests/MiranNotesAppTests/DatabaseRepositoryTests.swift) does, so the on-disk vault database format stays covered without shipping the code in the app binary.
-- On-disk paths for `_databases/` and `database-registry.json` live in **`MiranNotesCore`** as [`VaultDatabasePaths`](../../Sources/MiranNotesCore/VaultDatabasePaths.swift) (shared with the app’s index loaders).
+- On-disk paths for `_databases/` and `database-registry.json` live in **`MiranNotesCore`** as [`VaultDatabasePaths`](../../Sources/MiranNotesCore/VaultDatabasePaths.swift), alongside [`DatabaseModels`](../../Sources/MiranNotesCore/DatabaseModels.swift), so vaults created by older builds remain interpretable. The **`DatabaseDocument` / `DatabaseRepository`** persistence layer described in [ADR 0004](../adr/0004-vault-level-databases-and-planning.md) was **removed** from the repository during the Apr 2026 minimal-product pivot.
 
 ## Undo (hybrid roadmap)
 
