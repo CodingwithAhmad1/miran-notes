@@ -1,4 +1,5 @@
 import AppKit
+import KeyboardShortcuts
 import MiranNotesCore
 import SwiftUI
 
@@ -6,6 +7,7 @@ private final class MiranNotesAppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
+        WorkspaceShortcutCarbonPolicy.suppressGlobalHotkeysForMenuShortcuts()
     }
 }
 
@@ -19,6 +21,8 @@ struct MiranNotesApp: App {
     @State private var conflictDetailsDiskDate: Date?
     @State private var editingHelpPresented = false
     @State private var vaultPickerErrorMessage: String?
+    /// Forces ``appCommands`` to re-read shortcuts from `KeyboardShortcuts` / UserDefaults.
+    @State private var menuShortcutEpoch = 0
 
     init() {
         SlashCommandRegistry.registerBuiltins()
@@ -35,6 +39,16 @@ struct MiranNotesApp: App {
             _vaultAccess = State(initialValue: nil)
             _model = State(initialValue: nil)
         }
+
+        Self.seedWorkspaceShortcutDefaultsAndUseMenuOnlyHotkeys()
+    }
+
+    /// Ensures `KeyboardShortcuts` UserDefaults entries exist and disables Carbon hotkeys so File menu shortcuts still fire.
+    private static func seedWorkspaceShortcutDefaultsAndUseMenuOnlyHotkeys() {
+        for command in WorkspaceShortcutCommand.allCases {
+            _ = command.keyboardShortcutName
+        }
+        WorkspaceShortcutCarbonPolicy.suppressGlobalHotkeysForMenuShortcuts()
     }
 
     /// When `MIRAN_USE_DEFAULT_VAULT=1` is set, restores the legacy `~/MiranNotesVault` bootstrap for local iteration without picking a folder.
@@ -82,15 +96,31 @@ struct MiranNotesApp: App {
         }
         .windowToolbarStyle(.unified(showsTitle: false))
         .commands { appCommands }
+
+        Settings {
+            MiranNotesSettingsView {
+                menuShortcutEpoch &+= 1
+                WorkspaceShortcutCarbonPolicy.suppressGlobalHotkeysForMenuShortcuts()
+            }
+        }
     }
 
     @CommandsBuilder
     private var appCommands: some Commands {
+        let _ = menuShortcutEpoch
         CommandGroup(after: .newItem) {
             Button("Open Workspace…") {
                 presentOpenWorkspacePanel()
             }
             .keyboardShortcut("o", modifiers: [.command, .shift])
+            Button("New Folder") {
+                model?.performNewFolderFromShortcut()
+            }
+            .workspaceMenuKeyboardShortcut(.newFolder)
+            Button("New Note") {
+                model?.performNewNoteFromShortcut()
+            }
+            .workspaceMenuKeyboardShortcut(.newNote)
         }
         CommandGroup(after: .help) {
             Button("Editing in Miran Notes…") {
@@ -168,27 +198,52 @@ private struct MiranNotesMainWindowContent: View {
     @Binding var conflictDetailsDiskDate: Date?
     @Binding var editingHelpPresented: Bool
     @State private var isToolbarSearchFocused = false
+    /// Per-tile search field focus in multi-pane layouts (principal search lives in each tile’s `NavigationStack`).
+    @State private var multipaneSearchFocused: [Bool] = []
     /// Width of the split view’s detail column (where the unified toolbar lays out). Drives compact search sizing
     /// so AppKit never inserts the toolbar overflow chevron.
     @State private var measuredDetailColumnWidth: CGFloat = 0
 
     private func clearToolbarSearchFocus() {
         isToolbarSearchFocused = false
+        for i in multipaneSearchFocused.indices {
+            multipaneSearchFocused[i] = false
+        }
+    }
+
+    private func multipaneSearchFieldBinding(paneIndex: Int) -> Binding<Bool> {
+        Binding(
+            get: {
+                paneIndex < multipaneSearchFocused.count ? multipaneSearchFocused[paneIndex] : false
+            },
+            set: { newValue in
+                if multipaneSearchFocused.count <= paneIndex {
+                    multipaneSearchFocused.append(
+                        contentsOf: Array(repeating: false, count: paneIndex + 1 - multipaneSearchFocused.count)
+                    )
+                }
+                multipaneSearchFocused[paneIndex] = newValue
+            }
+        )
     }
 
     var body: some View {
         workspaceRootView
+            .onChange(of: model.currentLayout) { _, newLayout in
+                multipaneSearchFocused = Array(repeating: false, count: newLayout.paneCount)
+            }
             .onChange(of: controlActiveState) { _, newValue in
                 if newValue == .inactive {
-                    isToolbarSearchFocused = false
+                    clearToolbarSearchFocus()
                 }
             }
             .onChange(of: scenePhase) { _, phase in
                 if phase != .active {
-                    isToolbarSearchFocused = false
+                    clearToolbarSearchFocus()
                 }
             }
             .onAppear {
+                multipaneSearchFocused = Array(repeating: false, count: model.currentLayout.paneCount)
                 vaultSessionRegistry.registerSession()
             }
             .onDisappear {
@@ -310,15 +365,37 @@ private struct MiranNotesMainWindowContent: View {
             detail: measuredDetailColumnWidth,
             window: windowContentWidth
         )
+        let outerToolbarLayoutWidth =
+            model.currentLayout == .single
+            ? toolbarLayoutWidth
+            : max(windowContentWidth * 0.45, 320)
+        let activePane = model.activePaneIndex
+        let activeNote = model.workspacePanes.indices.contains(activePane)
+            ? model.workspacePanes[activePane].selectedNoteID : nil
         let showsBackNavigation =
-            model.isFolderManagementPresented || model.selectedNoteID != nil
-        NavigationSplitView {
-            WorkspaceFolderSidebarView(model: model, onClearToolbarSearchFocus: clearToolbarSearchFocus)
-                .navigationSplitViewColumnWidth(min: 180, ideal: 240, max: 420)
-                .toolbar(removing: .sidebarToggle)
-        } detail: {
-            NavigationStack {
-                WorkspaceDetailColumnView(model: model, onClearToolbarSearchFocus: clearToolbarSearchFocus)
+            model.isFolderManagementPresented || activeNote != nil
+
+        NavigationStack {
+            Group {
+                if model.currentLayout == .single {
+                    NavigationSplitView {
+                        WorkspaceFolderSidebarView(
+                            model: model,
+                            paneIndex: 0,
+                            onClearToolbarSearchFocus: clearToolbarSearchFocus
+                        )
+                        .navigationSplitViewColumnWidth(min: 180, ideal: 240, max: 420)
+                        .toolbar(removing: .sidebarToggle)
+                    } detail: {
+                        WorkspaceDetailColumnView(
+                            model: model,
+                            paneIndex: 0,
+                            onClearToolbarSearchFocus: clearToolbarSearchFocus
+                        )
+                    }
+                } else {
+                    workspaceMultiPaneGrid()
+                }
             }
             .toolbar {
                 ToolbarItem(placement: .navigation) {
@@ -341,7 +418,7 @@ private struct MiranNotesMainWindowContent: View {
                             .contentShape(Rectangle())
                             .help("Back to vault")
                             .accessibilityLabel("Back to vault")
-                        } else if model.selectedNoteID != nil {
+                        } else if activeNote != nil {
                             Button {
                                 clearToolbarSearchFocus()
                                 model.closeToFolderPage()
@@ -362,13 +439,15 @@ private struct MiranNotesMainWindowContent: View {
                         }
                     }
                 }
-                ToolbarItem(placement: .principal) {
-                    vaultToolbarSearchField(
-                        toolbarLayoutWidth: toolbarLayoutWidth,
-                        showsBackNavigation: showsBackNavigation
-                    )
+                if model.currentLayout == .single {
+                    ToolbarItem(placement: .principal) {
+                        vaultToolbarSearchField(
+                            toolbarLayoutWidth: toolbarLayoutWidth,
+                            showsBackNavigation: showsBackNavigation
+                        )
+                    }
                 }
-                if !Self.shouldHideTrailingToolbarControls(width: toolbarLayoutWidth) {
+                if !Self.shouldHideTrailingToolbarControls(width: outerToolbarLayoutWidth) {
                     ToolbarItemGroup(placement: .primaryAction) {
                         LayoutToolbarItem(
                             model: model,
@@ -381,6 +460,69 @@ private struct MiranNotesMainWindowContent: View {
             }
         }
         .onPreferenceChange(DetailColumnWidthPreferenceKey.self) { measuredDetailColumnWidth = $0 }
+    }
+
+    @ViewBuilder
+    private func workspaceMultiPaneGrid() -> some View {
+        switch model.currentLayout {
+        case .single:
+            EmptyView()
+        case .twoPane:
+            HSplitView {
+                workspaceTile(paneIndex: 0).frame(minWidth: 280)
+                workspaceTile(paneIndex: 1).frame(minWidth: 200)
+            }
+        case .threePane:
+            HSplitView {
+                workspaceTile(paneIndex: 0).frame(minWidth: 280)
+                VSplitView {
+                    workspaceTile(paneIndex: 1).frame(minHeight: 120)
+                    workspaceTile(paneIndex: 2).frame(minHeight: 120)
+                }
+                .frame(minWidth: 200)
+            }
+        case .fourPane:
+            HSplitView {
+                VSplitView {
+                    workspaceTile(paneIndex: 0).frame(minHeight: 120)
+                    workspaceTile(paneIndex: 1).frame(minHeight: 120)
+                }
+                .frame(minWidth: 240)
+                VSplitView {
+                    workspaceTile(paneIndex: 2).frame(minHeight: 120)
+                    workspaceTile(paneIndex: 3).frame(minHeight: 120)
+                }
+                .frame(minWidth: 200)
+            }
+        }
+    }
+
+    private func workspaceTile(paneIndex: Int) -> some View {
+        NavigationSplitView {
+            WorkspaceFolderSidebarView(
+                model: model,
+                paneIndex: paneIndex,
+                onClearToolbarSearchFocus: clearToolbarSearchFocus
+            )
+            .navigationSplitViewColumnWidth(min: 180, ideal: 240, max: 420)
+            .toolbar(removing: .sidebarToggle)
+        } detail: {
+            NavigationStack {
+                WorkspaceDetailColumnView(
+                    model: model,
+                    paneIndex: paneIndex,
+                    onClearToolbarSearchFocus: clearToolbarSearchFocus,
+                    multipaneSearchFocused: multipaneSearchFieldBinding(paneIndex: paneIndex)
+                )
+            }
+        }
+        .overlay {
+            if model.currentLayout != .single, model.activePaneIndex == paneIndex {
+                Rectangle()
+                    .strokeBorder(Color.accentColor.opacity(0.5), lineWidth: 2)
+                    .allowsHitTesting(false)
+            }
+        }
     }
 
     /// Prefer the measured detail column width (toolbar row); fall back to full window width before first layout.
@@ -415,7 +557,8 @@ private struct MiranNotesMainWindowContent: View {
         let chrome =
             showsBackNavigation ? toolbarSearchLeadingChromeWhenBackVisible : toolbarSearchLeadingChromeWhenNoBack
         let budget = max(96, toolbarLayoutWidth - chrome)
-        let minW = min(toolbarSearchFieldMinWidth, budget)
+        let rawMin = min(toolbarSearchFieldMinWidth, budget)
+        let minW = max(200, rawMin)
         let idealW = min(toolbarSearchFieldIdealWidth, max(minW, budget))
         let maxW = min(toolbarSearchFieldMaxWidth, max(idealW, budget))
         return (minW, idealW, maxW)
@@ -434,16 +577,20 @@ private struct MiranNotesMainWindowContent: View {
         ToolbarSearchField(
             text: workspaceSearchBinding,
             isFocused: $isToolbarSearchFocused,
-            placeholder: workspaceSearchPlaceholder
+            placeholder: workspaceSearchPlaceholderText
         )
         .padding(.horizontal, 8)
         .padding(.vertical, 3)
+        .background(Capsule().fill(Color(nsColor: .quaternarySystemFill)))
         .overlay {
             if showsSearchRing {
                 Capsule().strokeBorder(Color.accentColor.opacity(0.55), lineWidth: 1.5)
             }
         }
         .frame(minWidth: frames.min, idealWidth: frames.ideal, maxWidth: frames.max)
+        .frame(minHeight: 28)
+        .accessibilityLabel(workspaceSearchAccessibilityLabel)
+        .accessibilityHint(workspaceSearchAccessibilityHint)
     }
 
     private var workspaceSearchBinding: Binding<String> {
@@ -466,7 +613,7 @@ private struct MiranNotesMainWindowContent: View {
         )
     }
 
-    private var workspaceSearchPlaceholder: String {
+    private var workspaceSearchPlaceholderText: String {
         if model.isFolderManagementPresented {
             return String(localized: "Search vault…")
         }
@@ -475,44 +622,163 @@ private struct MiranNotesMainWindowContent: View {
             : String(localized: "Search vault…")
     }
 
+    private var workspaceSearchAccessibilityLabel: String {
+        workspaceSearchPlaceholderText
+    }
+
+    private var workspaceSearchAccessibilityHint: String {
+        if model.selectedNoteID != nil, !model.isFolderManagementPresented {
+            return String(localized: "Searches text in the open note.")
+        }
+        return String(localized: "Searches note titles in the vault.")
+    }
+
 }
 
 // MARK: - Workspace detail (folder list vs note editor)
 
 private struct WorkspaceDetailColumnView: View {
     @Bindable var model: AppModel
+    var paneIndex: Int
     var onClearToolbarSearchFocus: () -> Void
+    /// When non-`nil`, this column shows a per-tile search field in its local toolbar (multi-pane layouts).
+    var multipaneSearchFocused: Binding<Bool>? = nil
+    @Environment(\.controlActiveState) private var controlActiveState
 
-    private var showsLoadedEditor: Bool {
-        guard let doc = model.activeDocument, let id = model.selectedNoteID else { return false }
+    private func showsLoadedEditor(forPane pane: Int) -> Bool {
+        guard model.workspacePanes.indices.contains(pane) else { return false }
+        let s = model.workspacePanes[pane]
+        guard let doc = s.activeDocument, let id = s.selectedNoteID else { return false }
         return doc.metadata.noteID == id
+    }
+
+    private var paneSearchPlaceholder: String {
+        if model.isFolderManagementPresented {
+            return String(localized: "Search vault…")
+        }
+        guard model.workspacePanes.indices.contains(paneIndex) else { return "" }
+        let s = model.workspacePanes[paneIndex]
+        return s.selectedNoteID != nil
+            ? String(localized: "Find in note…")
+            : String(localized: "Search vault…")
+    }
+
+    private func paneSearchTextBinding() -> Binding<String> {
+        Binding(
+            get: {
+                if model.isFolderManagementPresented {
+                    return model.vaultSearchQuery
+                }
+                guard model.workspacePanes.indices.contains(paneIndex) else { return "" }
+                let s = model.workspacePanes[paneIndex]
+                return s.selectedNoteID != nil ? s.editorFindQuery : s.vaultSearchQuery
+            },
+            set: { newValue in
+                if model.isFolderManagementPresented {
+                    model.vaultSearchQuery = newValue
+                } else {
+                    guard model.workspacePanes.indices.contains(paneIndex) else { return }
+                    if model.workspacePanes[paneIndex].selectedNoteID != nil {
+                        model.workspacePanes[paneIndex].editorFindQuery = newValue
+                    } else {
+                        model.workspacePanes[paneIndex].vaultSearchQuery = newValue
+                    }
+                }
+            }
+        )
+    }
+
+    private static let paneSearchMinWidth: CGFloat = 140
+    private static let paneSearchIdealWidth: CGFloat = 220
+    private static let paneSearchMaxWidth: CGFloat = 480
+
+    @ViewBuilder
+    private func paneToolbarSearchField(focusBinding: Binding<Bool>) -> some View {
+        let showsSearchRing = focusBinding.wrappedValue && controlActiveState == .active
+        ToolbarSearchField(
+            text: paneSearchTextBinding(),
+            isFocused: focusBinding,
+            placeholder: paneSearchPlaceholder
+        )
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
+        .background(Capsule().fill(Color(nsColor: .quaternarySystemFill)))
+        .overlay {
+            if showsSearchRing {
+                Capsule().strokeBorder(Color.accentColor.opacity(0.55), lineWidth: 1.5)
+            }
+        }
+        .frame(minWidth: Self.paneSearchMinWidth, idealWidth: Self.paneSearchIdealWidth, maxWidth: Self.paneSearchMaxWidth)
+        .frame(minHeight: 28)
+        .accessibilityLabel(paneSearchPlaceholder)
+        .onChange(of: focusBinding.wrappedValue) { _, focused in
+            if focused {
+                model.activatePane(index: paneIndex)
+            }
+        }
+    }
+
+    private var showsMultipaneToolbarSearch: Bool {
+        guard multipaneSearchFocused != nil, model.currentLayout != .single else { return false }
+        if model.isFolderManagementPresented {
+            return paneIndex == model.activePaneIndex
+        }
+        return true
     }
 
     var body: some View {
         Group {
-            if model.isFolderManagementPresented {
-                FolderManagementDashboardView(model: model)
-            } else if showsLoadedEditor {
-                TiledEditorView(model: model)
-            } else if model.selectedNoteID != nil {
-                VStack(spacing: 12) {
-                    ProgressView()
-                    Text("Loading note…")
-                        .foregroundStyle(.secondary)
+            if model.workspacePanes.indices.contains(paneIndex) {
+                Group {
+                    if model.isFolderManagementPresented {
+                        if paneIndex == model.activePaneIndex {
+                            FolderManagementDashboardView(model: model)
+                        } else {
+                            ContentUnavailableView(
+                                "Folder management",
+                                systemImage: "folder.badge.gearshape",
+                                description: Text("Open in the highlighted pane to manage folders.")
+                            )
+                        }
+                    } else if showsLoadedEditor(forPane: paneIndex) {
+                        EditorRootView(model: model, paneIndex: paneIndex)
+                    } else if model.workspacePanes[paneIndex].selectedNoteID != nil {
+                        VStack(spacing: 12) {
+                            ProgressView()
+                            Text("Loading note…")
+                                .foregroundStyle(.secondary)
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else {
+                        FolderPageView(model: model, paneIndex: paneIndex)
+                    }
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                FolderPageView(model: model)
-            }
-        }
-        .simultaneousGesture(
-            TapGesture().onEnded { _ in
-                onClearToolbarSearchFocus()
-            }
-        )
-        .background {
-            GeometryReader { geo in
-                Color.clear.preference(key: DetailColumnWidthPreferenceKey.self, value: geo.size.width)
+                .frame(minHeight: 0, maxHeight: .infinity)
+                .simultaneousGesture(
+                    TapGesture().onEnded { _ in
+                        onClearToolbarSearchFocus()
+                        model.activatePane(index: paneIndex)
+                    }
+                )
+                .background {
+                    if paneIndex == model.activePaneIndex || model.currentLayout == .single {
+                        GeometryReader { geo in
+                            Color.clear.preference(key: DetailColumnWidthPreferenceKey.self, value: geo.size.width)
+                        }
+                    }
+                }
+                .toolbar {
+                    if showsMultipaneToolbarSearch, let multipaneSearchFocused {
+                        ToolbarItem(placement: .principal) {
+                            paneToolbarSearchField(focusBinding: multipaneSearchFocused)
+                        }
+                    }
+                }
+                .onChange(of: model.activePaneIndex) { _, newIdx in
+                    if let binding = multipaneSearchFocused, newIdx != paneIndex {
+                        binding.wrappedValue = false
+                    }
+                }
             }
         }
     }
@@ -521,69 +787,110 @@ private struct WorkspaceDetailColumnView: View {
 
 struct EditorRootView: View {
     @Bindable var model: AppModel
+    var paneIndex: Int = 0
     @Environment(\.undoManager) private var undoManager
     @State private var repairDetailsPresented = false
     @State private var editorBodyFocusNonce = 0
 
     var body: some View {
         Group {
-            if let current = model.activeDocument {
-                VStack(spacing: 0) {
-                    if let diskHint = model.diskActivityBanner {
-                        DiskActivityBanner(text: diskHint, onDismiss: { model.dismissDiskActivityBanner() })
-                    }
-                    if let advisory = model.repairAdvisory {
-                        RepairNoticeBanner(
-                            advisory: advisory,
-                            onDismiss: { model.dismissRepairAdvisory() },
-                            onShowInFinder: { model.revealSelectedNoteFileInFinder() },
-                            onDetails: {
-                                repairDetailsPresented = true
-                            },
-                            showDetailsButton: advisory.detailsPlainText != nil
-                        )
-                        .sheet(isPresented: $repairDetailsPresented) {
-                            RepairAdvisoryDetailsSheet(
-                                detailsText: advisory.detailsPlainText ?? "",
-                                onDone: { repairDetailsPresented = false }
-                            )
-                        }
-                    }
-                    NoteEditorTitleHeader(model: model) {
-                        editorBodyFocusNonce += 1
-                    }
-                    SingleSurfaceNoteEditor(
-                        document: Binding(
-                            get: { model.activeDocument ?? current },
-                            set: { model.activeDocument = $0 }
-                        ),
-                        cursorOffset: $model.editorCursorOffset,
-                        editorTextSelection: $model.editorTextSelection,
-                        editorFindQuery: $model.editorFindQuery,
-                        pendingEditorScroll: model.pendingEditorScroll,
-                        onPendingEditorScrollConsumed: { model.clearPendingEditorScroll() },
-                        onCommands: { commands in model.apply(commands) },
-                        onWikiLinkClick: WikiLinkPresentationPolicy.isFrontendEnabled
-                            ? { targetID in model.openNote(noteID: targetID) }
-                            : nil,
-                        onFullReplaceWarning: {
-                            model.presentFullBufferAdvisory()
-                        },
-                        onSizeLimitExceeded: {
-                            model.presentSizeLimitAdvisory()
-                        },
-                        focusBodyNonce: editorBodyFocusNonce
-                    )
-                }
-                .navigationTitle("")
+            if model.workspacePanes.indices.contains(paneIndex),
+                let current = model.workspacePanes[paneIndex].activeDocument {
+                editorChrome(for: current)
             }
         }
         .onAppear {
-            model.setUndoManager(undoManager)
+            if paneIndex == model.activePaneIndex {
+                model.setUndoManager(undoManager)
+            }
         }
         .onChange(of: undoManager) { _, newValue in
-            model.setUndoManager(newValue)
+            if paneIndex == model.activePaneIndex {
+                model.setUndoManager(newValue)
+            }
         }
+        .onChange(of: model.activePaneIndex) { _, newValue in
+            if newValue == paneIndex {
+                model.setUndoManager(undoManager)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func editorChrome(for current: NoteDocument) -> some View {
+        VStack(spacing: 0) {
+            if let diskHint = model.diskActivityBanner {
+                DiskActivityBanner(text: diskHint, onDismiss: { model.dismissDiskActivityBanner() })
+            }
+            if let advisory = model.workspacePanes[paneIndex].repairAdvisory {
+                RepairNoticeBanner(
+                    advisory: advisory,
+                    onDismiss: { model.dismissRepairAdvisory(pane: paneIndex) },
+                    onShowInFinder: { model.revealSelectedNoteFileInFinder(pane: paneIndex) },
+                    onDetails: { repairDetailsPresented = true },
+                    showDetailsButton: advisory.detailsPlainText != nil
+                )
+                .sheet(isPresented: $repairDetailsPresented) {
+                    RepairAdvisoryDetailsSheet(
+                        detailsText: advisory.detailsPlainText ?? "",
+                        onDone: { repairDetailsPresented = false }
+                    )
+                }
+            }
+            NoteEditorTitleHeader(model: model, paneIndex: paneIndex) {
+                editorBodyFocusNonce += 1
+            }
+            noteEditorSurface(fallbackDocument: current)
+        }
+        .navigationTitle("")
+        .simultaneousGesture(
+            TapGesture().onEnded { _ in
+                if model.activePaneIndex != paneIndex {
+                    model.activatePane(index: paneIndex)
+                }
+            }
+        )
+    }
+
+    private func noteEditorSurface(fallbackDocument: NoteDocument) -> SingleSurfaceNoteEditor {
+        let p = paneIndex
+        let wiki: ((UUID) -> Void)? =
+            WikiLinkPresentationPolicy.isFrontendEnabled
+            ? { targetID in
+                model.activatePane(index: p)
+                model.openNote(noteID: targetID, pane: p)
+            }
+            : nil
+        return SingleSurfaceNoteEditor(
+            document: Binding(
+                get: { model.workspacePanes[p].activeDocument ?? fallbackDocument },
+                set: { model.workspacePanes[p].activeDocument = $0 }
+            ),
+            cursorOffset: Binding(
+                get: { model.workspacePanes[p].editorCursorOffset },
+                set: { model.workspacePanes[p].editorCursorOffset = $0 }
+            ),
+            editorTextSelection: Binding(
+                get: { model.workspacePanes[p].editorTextSelection },
+                set: { model.workspacePanes[p].editorTextSelection = $0 }
+            ),
+            editorFindQuery: Binding(
+                get: { model.workspacePanes[p].editorFindQuery },
+                set: { model.workspacePanes[p].editorFindQuery = $0 }
+            ),
+            pendingEditorScroll: model.pendingEditorScroll,
+            onPendingEditorScrollConsumed: { model.clearPendingEditorScroll() },
+            onCommands: { commands in
+                if model.activePaneIndex != p {
+                    model.activatePaneForEditingSync(p)
+                }
+                return model.apply(commands)
+            },
+            onWikiLinkClick: wiki,
+            onFullReplaceWarning: { model.presentFullBufferAdvisory(pane: p) },
+            onSizeLimitExceeded: { model.presentSizeLimitAdvisory(pane: p) },
+            focusBodyNonce: editorBodyFocusNonce
+        )
     }
 }
 

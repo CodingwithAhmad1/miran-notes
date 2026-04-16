@@ -13,6 +13,9 @@ let package = Package(
     products: [
         .executable(name: "MiranNotes", targets: ["MiranNotesApp"])
     ],
+    dependencies: [
+        .package(url: "https://github.com/sindresorhus/KeyboardShortcuts", from: "2.4.0")
+    ],
     targets: [
         .target(
             name: "MiranNotesCore",
@@ -21,7 +24,10 @@ let package = Package(
         ),
         .executableTarget(
             name: "MiranNotesApp",
-            dependencies: ["MiranNotesCore"],
+            dependencies: [
+                "MiranNotesCore",
+                .product(name: "KeyboardShortcuts", package: "KeyboardShortcuts")
+            ],
             path: "Sources/MiranNotesApp",
             swiftSettings: swift6Settings
         ),

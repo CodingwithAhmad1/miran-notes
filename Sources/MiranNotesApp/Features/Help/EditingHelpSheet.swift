@@ -10,6 +10,13 @@ enum EditingHelpContent {
         In the usual single-pane layout, this does not come up.
         """
 
+    static let multiPaneTitle = "Multi-pane layouts"
+    static let multiPaneBody = """
+        Split layouts show a full sidebar and folder page (or note) in each tile, all using the same vault. The \
+        highlighted tile is the active pane: the window toolbar search, back button, and undo stack follow that \
+        tile. Click a tile or start typing in its editor to make it active.
+        """
+
     static let largeNotesTitle = "Large notes"
     static let largeNotesBody = """
         Each note has a maximum size (about one million characters). If you reach the limit, Miran stops adding \
@@ -32,6 +39,7 @@ struct EditingHelpSheet: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     section(title: EditingHelpContent.undoTitle, body: EditingHelpContent.undoBody)
+                    section(title: EditingHelpContent.multiPaneTitle, body: EditingHelpContent.multiPaneBody)
                     section(title: EditingHelpContent.largeNotesTitle, body: EditingHelpContent.largeNotesBody)
                     section(title: EditingHelpContent.linksTitle, body: EditingHelpContent.linksBody)
                 }

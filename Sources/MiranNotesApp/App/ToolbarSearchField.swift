@@ -18,6 +18,7 @@ struct ToolbarSearchField: NSViewRepresentable {
         textField.drawsBackground = false
         textField.focusRingType = .none
         textField.placeholderString = placeholder
+        textField.textColor = .labelColor
         textField.delegate = context.coordinator
         textField.font = NSFont.systemFont(ofSize: NSFont.systemFontSize)
         textField.maximumNumberOfLines = 1
@@ -35,19 +36,30 @@ struct ToolbarSearchField: NSViewRepresentable {
             textField.placeholderString = placeholder
         }
 
+        textField.textColor = .labelColor
+
         if textField.stringValue != text {
             textField.stringValue = text
         }
 
-        if isFocused, textField.window?.firstResponder !== textField {
+        let fieldIsFirstResponder = Self.isToolbarFieldActiveFirstResponder(textField)
+        if isFocused, !fieldIsFirstResponder {
             DispatchQueue.main.async {
                 textField.window?.makeFirstResponder(textField)
             }
-        } else if !isFocused, textField.window?.firstResponder as AnyObject? === textField {
+        } else if !isFocused, fieldIsFirstResponder {
             DispatchQueue.main.async {
                 textField.window?.makeFirstResponder(nil)
             }
         }
+    }
+
+    /// While editing, AppKit makes the shared field-editor `NSTextView` the window first responder, not the `NSTextField`.
+    private static func isToolbarFieldActiveFirstResponder(_ textField: NSTextField) -> Bool {
+        guard let fr = textField.window?.firstResponder else { return false }
+        if fr === textField { return true }
+        if let editor = textField.currentEditor(), fr === editor { return true }
+        return false
     }
 
     final class Coordinator: NSObject, NSTextFieldDelegate {

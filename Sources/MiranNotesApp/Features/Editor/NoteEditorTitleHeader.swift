@@ -3,6 +3,8 @@ import SwiftUI
 /// In-content note title: editable display name (backed by `renameActiveNote`), separated from the body; Return moves the caret into the note.
 struct NoteEditorTitleHeader: View {
     @Bindable var model: AppModel
+    /// Which workspace tile this header belongs to.
+    var paneIndex: Int = 0
     var onRequestFocusNoteBody: () -> Void
 
     @Environment(\.scenePhase) private var scenePhase
@@ -12,7 +14,7 @@ struct NoteEditorTitleHeader: View {
     /// Suppresses duplicate renames while `selectedBaseName` is still updating after submit.
     @State private var pendingDisplayedTitleUntilPathUpdates: String?
 
-    private var canonicalTitle: String { model.selectedNoteHeaderTitle }
+    private var canonicalTitle: String { model.selectedNoteHeaderTitle(forPane: paneIndex) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -32,11 +34,11 @@ struct NoteEditorTitleHeader: View {
         .onAppear {
             syncDraftFromModel()
         }
-        .onChange(of: model.selectedBaseName) { _, _ in
+        .onChange(of: model.workspacePanes[paneIndex].selectedBaseName) { _, _ in
             pendingDisplayedTitleUntilPathUpdates = nil
             syncDraftFromModel()
         }
-        .onChange(of: model.selectedNoteID) { oldID, newID in
+        .onChange(of: model.workspacePanes[paneIndex].selectedNoteID) { oldID, newID in
             if oldID != nil, newID == nil {
                 commitTitle(moveCaretToBody: false)
             }
@@ -80,7 +82,7 @@ struct NoteEditorTitleHeader: View {
         }
 
         pendingDisplayedTitleUntilPathUpdates = trimmed
-        model.renameActiveNote(newTitle: trimmed)
+        model.renameActiveNote(newTitle: trimmed, pane: paneIndex)
         if moveCaretToBody { onRequestFocusNoteBody() }
     }
 }

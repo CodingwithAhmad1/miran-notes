@@ -737,6 +737,8 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
         private func applyEditorFindFromQuery() {
             guard let textView else { return }
             guard !textView.hasMarkedText() else { return }
+            // Selecting in the note steals first responder from the toolbar search field; only apply when the body is active.
+            guard textView.window?.firstResponder === textView else { return }
             let trimmed = parent.editorFindQuery.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { return }
 

@@ -33,7 +33,7 @@ enum UserAlertRecoveryKind: Equatable, Sendable {
     case retryVaultWatcher
     case retryProcessExternalDiskActivity
     case retryOpenExternalEditCompare
-    case retryLoadViewPane(index: Int, baseName: String)
+    case retryLoadNoteInPane(pane: Int, baseName: String)
 }
 
 /// Modal error presentation: plain message or retryable async failure.
@@ -75,19 +75,10 @@ enum SidebarOutlineEntry: Identifiable {
 @Observable
 final class AppModel {
     var noteSummaries: [NoteSummary] = []
-    /// Manifest `relativePath` for the open note (stable selection for tests and shell).
-    var selectedBaseName: String?
-    /// Stable UUID identity of the selected note. This is the canonical UI selection key;
-    /// `selectedBaseName` is the companion disk-I/O key kept in sync alongside it.
-    var selectedNoteID: UUID?
-    var activeDocument: NoteDocument?
-    var backlinks: [BacklinkItem] = []
+    /// One session per layout tile (size == ``currentLayout/paneCount``).
+    var workspacePanes: [WorkspacePaneSession] = [WorkspacePaneSession()]
     /// When set, the editor scrolls to this range once that note is loaded.
     var pendingEditorScroll: PendingEditorScroll?
-    /// Search string for vault-wide note name / path filtering (folder page and legacy outline).
-    var vaultSearchQuery: String = ""
-    /// Find-in-note query driven by the detail column search field when a note is open.
-    var editorFindQuery: String = ""
     /// Raw note body text per `noteID`, built asynchronously after `refreshNotes()` for substring search.
     private(set) var bodySearchIndex: [UUID: String] = [:]
     /// True while `buildBodySearchIndex` is in flight after the latest `scheduleBodySearchIndexRebuild()` (excludes cancelled superseded work).
@@ -100,9 +91,6 @@ final class AppModel {
         if case let .recoverable(_, kind) = userAlert { return kind }
         return nil
     }
-    /// Non-nil when load-time adjustment ran, editor fallback fired, or size limit was hit.
-    /// Shown as a dismissible advisory banner — the editor is always open.
-    var repairAdvisory: RepairAdvisory?
     /// When non-nil, shows the external-edit conflict alert (`diskDate` is the on-disk modification time that triggered it).
     var externalEditConflictAlert: ExternalEditConflict?
     /// Non-blocking hint when disk changes conflict with a dirty buffer (set together with ``externalEditConflictAlert``).
@@ -122,9 +110,6 @@ final class AppModel {
 
     /// Blocks the main shell until the workspace passes ``WorkspaceCompatibilityScanner``.
     var workspaceGateState: WorkspaceGateState = .checking
-
-    /// Selected topic folder (or vault root) for the folder-page column.
-    var selectedFolderID: UUID?
 
     /// When true, the one-time vault welcome in the detail pane will not be shown again for this vault (see ``VaultWelcomeDismissalStore``).
     private(set) var hasDismissedVaultWelcome = false
@@ -162,21 +147,34 @@ final class AppModel {
     }
 
     var selectedFolderDisplayTitle: String {
-        guard let id = selectedFolderID else { return "" }
+        selectedFolderDisplayTitle(forPane: activePaneIndex)
+    }
+
+    func selectedFolderDisplayTitle(forPane pane: Int) -> String {
+        guard let id = workspacePanes[pane].selectedFolderID else { return "" }
         return folderCatalog.folder(id: id)?.name ?? ""
     }
 
     /// Title shown in the note header and aligned with list rows (manifest-backed when available).
     var selectedNoteHeaderTitle: String {
-        if let id = selectedNoteID, let summary = noteSummaries.first(where: { $0.noteID == id }) {
+        selectedNoteHeaderTitle(forPane: activePaneIndex)
+    }
+
+    func selectedNoteHeaderTitle(forPane pane: Int) -> String {
+        if let id = workspacePanes[pane].selectedNoteID,
+            let summary = noteSummaries.first(where: { $0.noteID == id }) {
             return summary.title
         }
-        guard let path = selectedBaseName else { return "" }
+        guard let path = workspacePanes[pane].selectedBaseName else { return "" }
         return VaultPath.displayTitle(forRelativePath: path)
     }
 
     var folderPageNoteSummaries: [NoteSummary] {
-        guard let id = selectedFolderID else { return [] }
+        folderPageNoteSummaries(forPane: activePaneIndex)
+    }
+
+    func folderPageNoteSummaries(forPane pane: Int) -> [NoteSummary] {
+        guard let id = workspacePanes[pane].selectedFolderID else { return [] }
         return noteSummaries.filter { $0.folderID == id }
     }
 
@@ -191,8 +189,41 @@ final class AppModel {
 
     /// Whether the sidebar may create a note in the current folder (excludes welcome/`nil` and the vault root tray).
     var allowsToolbarNewNote: Bool {
-        guard let id = selectedFolderID else { return false }
+        allowsToolbarNewNote(forPane: activePaneIndex)
+    }
+
+    func allowsToolbarNewNote(forPane pane: Int) -> Bool {
+        guard let id = workspacePanes[pane].selectedFolderID else { return false }
         return id != FolderCatalog.rootFolderID
+    }
+
+    /// Menu / keyboard entry point for new folder; gates on workspace readiness, then delegates to ``createFolder()``.
+    func performNewFolderFromShortcut() {
+        guard ensureWorkspaceReadyForVaultShortcuts() else { return }
+        createFolder()
+    }
+
+    /// Menu / keyboard entry point for new note; gates on workspace readiness, then delegates to ``createNote()`` (including folder selection rules).
+    func performNewNoteFromShortcut() {
+        guard ensureWorkspaceReadyForVaultShortcuts() else { return }
+        createNote()
+    }
+
+    private func ensureWorkspaceReadyForVaultShortcuts() -> Bool {
+        switch workspaceGateState {
+        case .ready:
+            return true
+        case .checking:
+            userAlert = .message(
+                String(localized: "The workspace is still loading. Try again in a moment.")
+            )
+            return false
+        case .incompatible:
+            userAlert = .message(
+                String(localized: "This workspace isn’t available. Choose another folder or resolve compatibility issues before creating items.")
+            )
+            return false
+        }
     }
 
     /// Folder ID for the sidebar row that lists notes sitting at the “root” of the visible tree.
@@ -224,10 +255,8 @@ final class AppModel {
 
     /// Active pane layout selection. Defaults to single-pane (the original behaviour).
     var currentLayout: PaneLayout = .single
-    /// Index of the pane that is currently editable (0 = top-left / first pane).
+    /// Index of the pane that receives toolbar search, back affordances, and primary editing focus.
     var activePaneIndex: Int = 0
-    /// State for the non-active (read-only) view panes. Count is always `currentLayout.paneCount - 1`.
-    var viewPaneStates: [ViewPaneState] = []
 
     /// Limits sidebar/navigation to a folder subtree when not ``WorkspaceScope/fullVault``.
     var workspaceScope: WorkspaceScope = .fullVault
@@ -236,38 +265,28 @@ final class AppModel {
     private let manifestRefreshFacade = VaultManifestRefreshFacade()
     private let bodySearchIndexController = NoteBodySearchIndexController()
     private let backlinkRefreshScheduler = DebouncedAsyncWorkScheduler()
-    private var saveTask: Task<Void, Never>?
+    /// In-flight debounced autosave tasks keyed by pane index.
+    private var saveTasks: [Int: Task<Void, Never>] = [:]
     private var vaultWatcherSubscription: VaultWatcherSubscription?
     /// Set when the vault watcher fires; processed after autosave finishes so events are not dropped.
     private var pendingExternalDiskCheck = false
-    /// Last snapshot known to match on-disk files (after load or successful save). Used with `activeDocument` to detect dirty state.
-    private var lastPersistedDocument: NoteDocument?
-    private var lastKnownDiskDate: Date?
-    private var lastKnownDiskRevision: DocumentRevisionToken?
-    /// Last observed SHA256 of raw `.txt` bytes (hex), aligned with load/save and conflict handling.
-    private var lastKnownNoteTextSHA256: String?
     private var undoManager: UndoManager?
-    /// Bumped when the selected note identity changes so debounced autosave completions cannot apply stale persistence state.
-    private var navigationGeneration = 0
-    /// Current cursor offset (UTF-16) in the active editor surface, updated by the coordinator on selection change.
-    var editorCursorOffset: Int = 0
-    /// Full UTF-16 selection in the active editor (`length == 0` for caret-only).
-    var editorTextSelection: MiranNotesCore.TextRange = MiranNotesCore.TextRange(start: 0, length: 0)
     private let undoPolicy: UndoPolicy
-    /// One checkpoint per document version: `checkpoints[0]` is the oldest retained state, `checkpoints.last` materializes to `activeDocument` after each recorded edit.
-    /// Uses ``UndoCheckpoint/replaceTextOnly`` to avoid retaining full ``NoteDocument`` copies for pure ``EditCommand/replaceText`` steps when inverses apply.
-    private var undoCheckpoints: [UndoCheckpoint] = []
-    /// One name per undo step (`count == checkpoints.count - 1`).
-    private var undoActionNames: [String] = []
-    private var lastUndoRegistrationDate: Date?
-    private var lastRecordedUndoWasSingleReplaceText = false
-    /// Action names for each undo step (internal for tests; same cardinality as former `UndoStep` array).
-    var undoHistory: [String] { undoActionNames }
-    /// Approximate retained undo state for diagnostics / `swift test` (materialized document sizes plus command overhead for hybrid steps).
+    /// Pane index used by window-level bindings (toolbar, menu); always in range of ``workspacePanes``.
+    private var keyPaneIndex: Int {
+        guard !workspacePanes.isEmpty else { return 0 }
+        return min(max(0, activePaneIndex), workspacePanes.count - 1)
+    }
+
+    /// Action names for each undo step on the **active** pane (internal for tests).
+    var undoHistory: [String] { workspacePanes[keyPaneIndex].undoActionNames }
+    /// Approximate retained undo state for diagnostics / `swift test` (active pane).
     var undoRetentionMemoryEstimateBytes: Int {
-        undoCheckpoints.enumerated().reduce(0) { sum, entry in
+        let kp = keyPaneIndex
+        let cps = workspacePanes[kp].undoCheckpoints
+        return cps.enumerated().reduce(0) { sum, entry in
             let (i, cp) = entry
-            let mat = materializeCheckpoint(at: i)
+            let mat = materializeCheckpoint(forPane: kp, at: i)
             let cmdOverhead: Int
             if case let .replaceTextOnly(forward, undo) = cp {
                 cmdOverhead = (forward.count + undo.count) * 64
@@ -276,6 +295,58 @@ final class AppModel {
             }
             return sum + mat.estimatedUndoMemoryBytes + cmdOverhead
         }
+    }
+
+    // MARK: - Active pane convenience (toolbar & tests; indexes ``activePaneIndex``)
+
+    var selectedFolderID: UUID? {
+        get { workspacePanes[keyPaneIndex].selectedFolderID }
+        set { workspacePanes[keyPaneIndex].selectedFolderID = newValue }
+    }
+
+    var selectedNoteID: UUID? {
+        get { workspacePanes[keyPaneIndex].selectedNoteID }
+        set { workspacePanes[keyPaneIndex].selectedNoteID = newValue }
+    }
+
+    var selectedBaseName: String? {
+        get { workspacePanes[keyPaneIndex].selectedBaseName }
+        set { workspacePanes[keyPaneIndex].selectedBaseName = newValue }
+    }
+
+    var activeDocument: NoteDocument? {
+        get { workspacePanes[keyPaneIndex].activeDocument }
+        set { workspacePanes[keyPaneIndex].activeDocument = newValue }
+    }
+
+    var vaultSearchQuery: String {
+        get { workspacePanes[keyPaneIndex].vaultSearchQuery }
+        set { workspacePanes[keyPaneIndex].vaultSearchQuery = newValue }
+    }
+
+    var editorFindQuery: String {
+        get { workspacePanes[keyPaneIndex].editorFindQuery }
+        set { workspacePanes[keyPaneIndex].editorFindQuery = newValue }
+    }
+
+    var editorCursorOffset: Int {
+        get { workspacePanes[keyPaneIndex].editorCursorOffset }
+        set { workspacePanes[keyPaneIndex].editorCursorOffset = newValue }
+    }
+
+    var editorTextSelection: MiranNotesCore.TextRange {
+        get { workspacePanes[keyPaneIndex].editorTextSelection }
+        set { workspacePanes[keyPaneIndex].editorTextSelection = newValue }
+    }
+
+    var repairAdvisory: RepairAdvisory? {
+        get { workspacePanes[keyPaneIndex].repairAdvisory }
+        set { workspacePanes[keyPaneIndex].repairAdvisory = newValue }
+    }
+
+    var backlinks: [BacklinkItem] {
+        get { workspacePanes[keyPaneIndex].backlinks }
+        set { workspacePanes[keyPaneIndex].backlinks = newValue }
     }
     private let commandPipelineContract: CommandPipelineContract
     /// Public registration API for typed extensions; runs before ``localCommandInterceptors`` (see `ExtensionRegistry` docs).
@@ -332,11 +403,30 @@ final class AppModel {
         undoManager = manager
     }
 
+    /// Ensures ``workspacePanes`` count matches ``currentLayout/paneCount``.
+    func ensureWorkspacePaneCount() {
+        let n = currentLayout.paneCount
+        if workspacePanes.count > n {
+            activePaneIndex = min(max(0, activePaneIndex), max(0, n - 1))
+            workspacePanes = Array(workspacePanes.prefix(n))
+        }
+        while workspacePanes.count < n {
+            workspacePanes.append(WorkspacePaneSession())
+        }
+        if activePaneIndex >= workspacePanes.count {
+            activePaneIndex = max(0, workspacePanes.count - 1)
+        }
+    }
+
+    private func materializeCheckpoint(forPane pane: Int, at index: Int) -> NoteDocument {
+        UndoCheckpointSupport.materialize(checkpoints: workspacePanes[pane].undoCheckpoints, at: index)
+    }
+
     private func runStartupRecoveryIfPossible() async {
         do {
             let recovery = try await repository.performStartupRecovery()
             if recovery.resumedAndCompletedCount > 0 || recovery.discardedStagingCount > 0 {
-                repairAdvisory = RepairAdvisory.vaultRecoveryNotice(recovery)
+                workspacePanes[0].repairAdvisory = RepairAdvisory.vaultRecoveryNotice(recovery)
             }
         } catch {
             userAlert = .recoverable(
@@ -362,11 +452,11 @@ final class AppModel {
             await reconcileVaultState(invalidateCaches: false)
             await refreshNotes()
             await runStartupLinkGraphSync()
-            selectedBaseName = nil
-            selectedNoteID = nil
-            activeDocument = nil
-            await loadSelectedNote()
-            await refreshBacklinks()
+            currentLayout = .single
+            activePaneIndex = 0
+            workspacePanes = [WorkspacePaneSession()]
+            await loadSelectedNote(pane: 0)
+            await refreshBacklinks(forPane: activePaneIndex)
             startVaultWatcher()
         }
     }
@@ -469,13 +559,17 @@ final class AppModel {
     }
 
     private func applyVaultIntegrityAfterLoadIfNeeded(_ result: VaultIntegrityResult) {
-        guard !result.isClean, repairAdvisory == nil else { return }
-        repairAdvisory = RepairAdvisory.vaultIntegrityNotice(result)
+        guard !result.isClean else { return }
+        guard !workspacePanes.contains(where: { $0.repairAdvisory != nil }) else { return }
+        workspacePanes[0].repairAdvisory = RepairAdvisory.vaultIntegrityNotice(result)
     }
 
     private func applyVaultIntegrityAfterSave(_ result: VaultIntegrityResult) {
         guard !result.isClean else { return }
-        repairAdvisory = RepairAdvisory.vaultIntegrityNotice(result)
+        let kp = keyPaneIndex
+        if workspacePanes.indices.contains(kp) {
+            workspacePanes[kp].repairAdvisory = RepairAdvisory.vaultIntegrityNotice(result)
+        }
     }
 
     func refreshNotes() async {
@@ -517,8 +611,10 @@ final class AppModel {
         guard !ids.isEmpty else { return }
         hiddenTopLevelFolderIDs.formUnion(ids)
         persistHiddenTopLevelFolderIDs()
-        if let selected = selectedFolderID, ids.contains(selected) {
-            selectedFolderID = pickDefaultFolderID()
+        for i in workspacePanes.indices {
+            if let selected = workspacePanes[i].selectedFolderID, ids.contains(selected) {
+                workspacePanes[i].selectedFolderID = pickDefaultFolderID()
+            }
         }
     }
 
@@ -529,8 +625,10 @@ final class AppModel {
     }
 
     private func syncFolderSelectionAfterRefresh() async {
-        if let id = selectedFolderID, !isSelectedFolderStillValid() {
-            selectedFolderID = pickDefaultFolderID()
+        for i in workspacePanes.indices {
+            if let id = workspacePanes[i].selectedFolderID, !isSelectedFolderStillValid(id) {
+                workspacePanes[i].selectedFolderID = pickDefaultFolderID()
+            }
         }
         // When `selectedFolderID` is nil, keep it nil: either the one-time welcome is showing
         // (`!hasDismissedVaultWelcome`) or the user cleared selection after dismissing the welcome.
@@ -548,8 +646,7 @@ final class AppModel {
         }
     }
 
-    private func isSelectedFolderStillValid() -> Bool {
-        guard let id = selectedFolderID else { return false }
+    private func isSelectedFolderStillValid(_ id: UUID) -> Bool {
         switch workspaceScope {
         case .fullVault:
             if id == FolderCatalog.rootFolderID { return true }
@@ -572,16 +669,18 @@ final class AppModel {
         return nil
     }
 
-    func selectFolderForPage(_ folderID: UUID?) {
+    func selectFolderForPage(_ folderID: UUID?, pane: Int? = nil) {
+        let p = pane ?? activePaneIndex
+        guard workspacePanes.indices.contains(p) else { return }
         if folderID != nil {
             markVaultWelcomeDismissedIfNeeded()
         }
-        selectedFolderID = folderID
-        selectedBaseName = nil
-        selectedNoteID = nil
-        activeDocument = nil
-        lastPersistedDocument = nil
-        clearUndoStack()
+        workspacePanes[p].selectedFolderID = folderID
+        workspacePanes[p].selectedBaseName = nil
+        workspacePanes[p].selectedNoteID = nil
+        workspacePanes[p].activeDocument = nil
+        workspacePanes[p].lastPersistedDocument = nil
+        clearUndoStack(forPane: p)
     }
 
     private func applyIncompatibleWorkspaceReport(_ report: CompatibilityReport) {
@@ -590,15 +689,11 @@ final class AppModel {
         noteSummaries = []
         folderCatalog = FolderCatalog()
         hasDismissedVaultWelcome = false
-        selectedFolderID = nil
-        selectedNoteID = nil
-        selectedBaseName = nil
-        activeDocument = nil
-        lastPersistedDocument = nil
-        backlinks = []
-        repairAdvisory = nil
+        workspacePanes = [WorkspacePaneSession()]
+        activePaneIndex = 0
+        currentLayout = .single
         isFolderManagementPresented = false
-        clearUndoStack()
+        clearUndoStack(forPane: 0)
         bodySearchIndexController.cancel()
         bodySearchIndex = [:]
         isBodySearchIndexBuilding = false
@@ -647,9 +742,10 @@ final class AppModel {
             changeSelection(noteID: noteID)
         case .retryRefreshOnDiskFingerprints:
             Task {
-                if let path = self.selectedBaseName {
-                    await self.refreshOnDiskFingerprints(for: path)
-                }
+                let p = self.activePaneIndex
+                guard self.workspacePanes.indices.contains(p),
+                    let path = self.workspacePanes[p].selectedBaseName else { return }
+                await self.refreshOnDiskFingerprints(for: path, pane: p)
             }
         case .retryFlushActiveNoteToDisk:
             Task { await self.flushCurrentNoteToDiskIfDirty() }
@@ -659,16 +755,22 @@ final class AppModel {
             Task { await self.processExternalDiskActivity() }
         case .retryOpenExternalEditCompare:
             openExternalEditCompare()
-        case .retryLoadViewPane(let index, let baseName):
-            loadViewPane(index: index, baseName: baseName)
+        case .retryLoadNoteInPane(let pane, let baseName):
+            Task { @MainActor in
+                await self.reloadNoteInPane(pane: pane, baseName: baseName)
+            }
         }
     }
 
     /// Hierarchical rows for the sidebar (`FolderCatalog` + notes from `filteredNoteSummaries`).
     var sidebarOutline: [SidebarOutlineEntry] {
+        sidebarOutline(forPane: activePaneIndex)
+    }
+
+    func sidebarOutline(forPane pane: Int) -> [SidebarOutlineEntry] {
         Self.buildSidebarOutline(
             folderCatalog: folderCatalog,
-            notes: filteredNoteSummaries,
+            notes: filteredNoteSummaries(forPane: pane),
             parentID: FolderCatalog.rootFolderID,
             searchSnippet: { self.searchSnippet(for: $0) }
         )
@@ -705,13 +807,14 @@ final class AppModel {
         nil
     }
 
-    func createFolder(parentID: UUID = FolderCatalog.rootFolderID, name: String = "New Folder") {
+    func createFolder(parentID: UUID = FolderCatalog.rootFolderID, name: String = "New Folder", pane: Int? = nil) {
+        let targetPane = pane ?? activePaneIndex
         Task { @MainActor in
             do {
                 let id = try await repository.createFolder(parentID: parentID, name: name)
                 markVaultWelcomeDismissedIfNeeded()
                 await refreshNotes()
-                selectedFolderID = id
+                self.workspacePanes[targetPane].selectedFolderID = id
             } catch {
                 userAlert = .recoverable(
                     message: error.localizedDescription,
@@ -763,8 +866,9 @@ final class AppModel {
         }
     }
 
-    func deleteSelectedNote() {
-        guard let path = selectedBaseName else { return }
+    func deleteSelectedNote(pane: Int? = nil) {
+        let pane = pane ?? activePaneIndex
+        guard let path = workspacePanes[pane].selectedBaseName else { return }
         Task { @MainActor in
             do {
                 let manifest = try await repository.loadManifest()
@@ -772,13 +876,22 @@ final class AppModel {
                 try await repository.deleteNote(noteID: id)
                 await refreshNotes()
                 if noteSummaries.isEmpty {
-                    selectedBaseName = nil
-                    selectedNoteID = nil
+                    self.workspacePanes[pane].selectedBaseName = nil
+                    self.workspacePanes[pane].selectedNoteID = nil
                 } else {
-                    selectedBaseName = noteSummaries.first?.relativePath
-                    selectedNoteID = noteSummaries.first?.noteID
+                    self.workspacePanes[pane].selectedBaseName = noteSummaries.first?.relativePath
+                    self.workspacePanes[pane].selectedNoteID = noteSummaries.first?.noteID
                 }
-                await loadSelectedNote()
+                for i in self.workspacePanes.indices where i != pane {
+                    if self.workspacePanes[i].selectedNoteID == id {
+                        self.workspacePanes[i].selectedBaseName = nil
+                        self.workspacePanes[i].selectedNoteID = nil
+                        self.workspacePanes[i].activeDocument = nil
+                        self.workspacePanes[i].lastPersistedDocument = nil
+                        self.clearUndoStack(forPane: i)
+                    }
+                }
+                await loadSelectedNote(pane: pane)
             } catch {
                 userAlert = .recoverable(
                     message: error.localizedDescription,
@@ -790,14 +903,22 @@ final class AppModel {
 
     /// Filtered list for vault search UI: **title and relative path only** (no body matching).
     var filteredNoteSummaries: [NoteSummary] {
-        let q = vaultSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        filteredNoteSummaries(forPane: activePaneIndex)
+    }
+
+    func filteredNoteSummaries(forPane pane: Int) -> [NoteSummary] {
+        let q = workspacePanes[pane].vaultSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !q.isEmpty else { return noteSummaries }
         return noteSummaries.filter { vaultNameOrPathMatches($0, queryLowercased: q) }
     }
 
-    /// Vault-wide note rows matching ``vaultSearchQuery`` (sorted by title).
+    /// Vault-wide note rows matching the pane's vault search (sorted by title).
     var vaultSearchMatchingNoteSummaries: [NoteSummary] {
-        let q = vaultSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        vaultSearchMatchingNoteSummaries(forPane: activePaneIndex)
+    }
+
+    func vaultSearchMatchingNoteSummaries(forPane pane: Int) -> [NoteSummary] {
+        let q = workspacePanes[pane].vaultSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !q.isEmpty else { return [] }
         return noteSummaries
             .filter { vaultNameOrPathMatches($0, queryLowercased: q) }
@@ -818,8 +939,13 @@ final class AppModel {
     }
 
     func refreshBacklinks() async {
-        guard let doc = activeDocument else {
-            backlinks = []
+        await refreshBacklinks(forPane: activePaneIndex)
+    }
+
+    func refreshBacklinks(forPane pane: Int) async {
+        guard workspacePanes.indices.contains(pane) else { return }
+        guard let doc = workspacePanes[pane].activeDocument else {
+            workspacePanes[pane].backlinks = []
             return
         }
         let targetNoteID = doc.metadata.noteID
@@ -852,9 +978,9 @@ final class AppModel {
                     )
                 )
             }
-            backlinks = result
+            workspacePanes[pane].backlinks = result
         } catch {
-            backlinks = []
+            workspacePanes[pane].backlinks = []
             userAlert = .recoverable(
                 message: "Could not refresh backlinks: \(error.localizedDescription)",
                 kind: .retryRefreshBacklinks
@@ -862,14 +988,14 @@ final class AppModel {
         }
     }
 
-    private func scheduleBacklinkRefresh() {
+    private func scheduleBacklinkRefresh(forPane pane: Int) {
         backlinkRefreshScheduler.schedule(delay: .milliseconds(1500)) { [weak self] in
             guard let self else { return }
-            await self.refreshBacklinks()
+            await self.refreshBacklinks(forPane: pane)
         }
     }
 
-    func openNote(noteID: UUID) {
+    func openNote(noteID: UUID, pane: Int? = nil) {
         guard noteSummaries.contains(where: { $0.noteID == noteID }) else {
             userAlert = .recoverable(
                 message: "Could not open note (not in vault list).",
@@ -878,40 +1004,42 @@ final class AppModel {
             return
         }
         pendingEditorScroll = nil
-        changeSelection(noteID: noteID)
+        changeSelection(noteID: noteID, pane: pane ?? activePaneIndex)
     }
 
     /// Leaves the note editor and returns to the folder page (same sidebar folder stays selected when applicable).
-    func closeToFolderPage() {
-        changeSelection(noteID: nil)
+    func closeToFolderPage(pane: Int? = nil) {
+        changeSelection(noteID: nil, pane: pane ?? activePaneIndex)
     }
 
-    func openBacklinkSource(_ item: BacklinkItem) {
+    func openBacklinkSource(_ item: BacklinkItem, pane: Int? = nil) {
+        let p = pane ?? activePaneIndex
         if !item.linkRange.isEmpty {
             pendingEditorScroll = PendingEditorScroll(noteID: item.sourceNoteID, range: item.linkRange)
         } else {
             pendingEditorScroll = nil
         }
-        if activeDocument?.metadata.noteID == item.sourceNoteID {
+        if workspacePanes[p].activeDocument?.metadata.noteID == item.sourceNoteID {
             return
         }
-        changeSelection(noteID: item.sourceNoteID)
+        changeSelection(noteID: item.sourceNoteID, pane: p)
     }
 
     func clearPendingEditorScroll() {
         pendingEditorScroll = nil
     }
 
-    func renameActiveNote(newTitle: String) {
-        guard let oldPath = selectedBaseName else { return }
+    func renameActiveNote(newTitle: String, pane: Int? = nil) {
+        let pane = pane ?? activePaneIndex
+        guard let oldPath = workspacePanes[pane].selectedBaseName else { return }
         Task { @MainActor in
-            await flushCurrentNoteToDiskIfDirty()
-            navigationGeneration += 1
+            await flushPaneIfDirty(pane)
+            self.workspacePanes[pane].navigationGeneration += 1
             do {
                 let newPath = try await repository.renameNote(from: oldPath, to: newTitle)
                 await refreshNotes()
-                selectedBaseName = newPath
-                await refreshBacklinks()
+                self.workspacePanes[pane].selectedBaseName = newPath
+                await refreshBacklinks(forPane: pane)
             } catch {
                 userAlert = .recoverable(
                     message: "Rename failed: \(error.localizedDescription)",
@@ -921,26 +1049,27 @@ final class AppModel {
         }
     }
 
-    func createNote() {
+    func createNote(pane: Int? = nil) {
         Task { @MainActor in
-            guard let targetFolder = selectedFolderID, targetFolder != FolderCatalog.rootFolderID else {
+            let pane = pane ?? activePaneIndex
+            guard let targetFolder = workspacePanes[pane].selectedFolderID, targetFolder != FolderCatalog.rootFolderID else {
                 userAlert = .message(
                     "Select a folder in the sidebar before creating a note. New notes cannot be added at the vault root."
                 )
                 return
             }
-            await flushCurrentNoteToDiskIfDirty()
-            navigationGeneration += 1
+            await flushPaneIfDirty(pane)
+            self.workspacePanes[pane].navigationGeneration += 1
             do {
                 _ = try await repository.createNote(named: "untitled-note", folderID: targetFolder)
                 markVaultWelcomeDismissedIfNeeded()
                 await refreshNotes()
-                selectedFolderID = targetFolder
-                selectedBaseName = nil
-                selectedNoteID = nil
-                activeDocument = nil
-                lastPersistedDocument = nil
-                clearUndoStack()
+                self.workspacePanes[pane].selectedFolderID = targetFolder
+                self.workspacePanes[pane].selectedBaseName = nil
+                self.workspacePanes[pane].selectedNoteID = nil
+                self.workspacePanes[pane].activeDocument = nil
+                self.workspacePanes[pane].lastPersistedDocument = nil
+                clearUndoStack(forPane: pane)
             } catch {
                 userAlert = .recoverable(
                     message: "Failed to create note: \(error.localizedDescription)",
@@ -987,52 +1116,71 @@ final class AppModel {
     }
 
     func loadSelectedNote() async {
-        editorCursorOffset = 0
-        editorTextSelection = MiranNotesCore.TextRange(start: 0, length: 0)
-        if let raw = selectedBaseName {
+        await loadSelectedNote(pane: activePaneIndex)
+    }
+
+    func loadSelectedNote(pane: Int) async {
+        guard workspacePanes.indices.contains(pane) else { return }
+        workspacePanes[pane].editorCursorOffset = 0
+        workspacePanes[pane].editorTextSelection = MiranNotesCore.TextRange(start: 0, length: 0)
+        if let raw = workspacePanes[pane].selectedBaseName {
             let resolved = await resolvedSelectionPath(from: raw)
             if resolved != raw {
-                selectedBaseName = resolved
+                workspacePanes[pane].selectedBaseName = resolved
             }
         }
-        guard let path = selectedBaseName else {
+        guard let path = workspacePanes[pane].selectedBaseName else {
             pendingEditorScroll = nil
-            activeDocument = nil
-            selectedNoteID = nil
-            lastPersistedDocument = nil
-            lastKnownDiskDate = nil
-            lastKnownDiskRevision = nil
-            lastKnownNoteTextSHA256 = nil
-            repairAdvisory = nil
-            backlinks = []
-            clearUndoStack()
-            updateActiveNoteFilePresenter()
+            workspacePanes[pane].activeDocument = nil
+            workspacePanes[pane].selectedNoteID = nil
+            workspacePanes[pane].lastPersistedDocument = nil
+            workspacePanes[pane].lastKnownDiskDate = nil
+            workspacePanes[pane].lastKnownDiskRevision = nil
+            workspacePanes[pane].lastKnownNoteTextSHA256 = nil
+            workspacePanes[pane].repairAdvisory = nil
+            workspacePanes[pane].backlinks = []
+            clearUndoStack(forPane: pane)
+            if pane == activePaneIndex {
+                updateActiveNoteFilePresenter()
+            }
             return
         }
         do {
             let result = try await repository.loadNote(baseName: path)
-            activeDocument = result.document
-            selectedNoteID = result.document.metadata.noteID
-            lastPersistedDocument = result.document
-            repairAdvisory = RepairDiagnosticsBuilder.buildLoadAdvisory(result: result)
-            await refreshOnDiskFingerprints(for: path)
-            clearUndoStack()
-            await refreshBacklinks()
+            workspacePanes[pane].activeDocument = result.document
+            workspacePanes[pane].selectedNoteID = result.document.metadata.noteID
+            workspacePanes[pane].lastPersistedDocument = result.document
+            workspacePanes[pane].repairAdvisory = RepairDiagnosticsBuilder.buildLoadAdvisory(result: result)
+            await refreshOnDiskFingerprints(for: path, pane: pane)
+            clearUndoStack(forPane: pane)
+            await refreshBacklinks(forPane: pane)
         } catch {
             userAlert = .recoverable(
                 message: "Failed to load note: \(error.localizedDescription)",
                 kind: .retryLoadActiveNote
             )
         }
-        updateActiveNoteFilePresenter()
+        if pane == activePaneIndex {
+            updateActiveNoteFilePresenter()
+        }
     }
 
-    func dismissRepairAdvisory() {
-        repairAdvisory = nil
+    private func reloadNoteInPane(pane: Int, baseName: String) async {
+        guard workspacePanes.indices.contains(pane) else { return }
+        workspacePanes[pane].selectedBaseName = baseName
+        await loadSelectedNote(pane: pane)
     }
 
-    func presentFullBufferAdvisory() {
-        repairAdvisory = RepairAdvisory(
+    func dismissRepairAdvisory(pane: Int? = nil) {
+        let p = pane ?? activePaneIndex
+        guard workspacePanes.indices.contains(p) else { return }
+        workspacePanes[p].repairAdvisory = nil
+    }
+
+    func presentFullBufferAdvisory(pane: Int? = nil) {
+        let p = pane ?? activePaneIndex
+        guard workspacePanes.indices.contains(p) else { return }
+        workspacePanes[p].repairAdvisory = RepairAdvisory(
             kind: .fullBufferFallback,
             title: "We updated how this note is structured",
             explanation:
@@ -1041,8 +1189,10 @@ final class AppModel {
         )
     }
 
-    func presentSizeLimitAdvisory() {
-        repairAdvisory = RepairAdvisory(
+    func presentSizeLimitAdvisory(pane: Int? = nil) {
+        let p = pane ?? activePaneIndex
+        guard workspacePanes.indices.contains(p) else { return }
+        workspacePanes[p].repairAdvisory = RepairAdvisory(
             kind: .sizeLimitExceeded,
             title: "This note can't grow further",
             explanation: "This note is at the maximum size, so the new text was not added.",
@@ -1050,10 +1200,15 @@ final class AppModel {
         )
     }
 
-    func revealSelectedNoteFileInFinder() {
-        guard let path = selectedBaseName else { return }
+    func revealSelectedNoteFileInFinder(pane: Int? = nil) {
+        let p = pane ?? activePaneIndex
+        guard let path = workspacePanes[p].selectedBaseName else { return }
         let url = VaultPath.fileURL(vaultRoot: repository.vaultURL, relativePathWithoutExtension: path, extension: "txt")
         NSWorkspace.shared.activateFileViewerSelecting([url])
+    }
+
+    func revealSelectedNoteFileInFinder() {
+        revealSelectedNoteFileInFinder(pane: activePaneIndex)
     }
 
     @discardableResult
@@ -1081,8 +1236,12 @@ final class AppModel {
         let maxBatch = commandPipelineContract.maxCommandsPerBatch
         if commands.count > maxBatch {
             Logger.editEngine.error("Command batch truncated from \(commands.count, privacy: .public) to \(maxBatch, privacy: .public)")
-            if repairAdvisory == nil {
-                repairAdvisory = RepairAdvisory.commandBatchTruncated(originalCount: commands.count, appliedCap: maxBatch)
+            let kp = keyPaneIndex
+            if workspacePanes[kp].repairAdvisory == nil {
+                workspacePanes[kp].repairAdvisory = RepairAdvisory.commandBatchTruncated(
+                    originalCount: commands.count,
+                    appliedCap: maxBatch
+                )
             }
         }
         let sanitized = Array(commands.prefix(maxBatch))
@@ -1099,141 +1258,143 @@ final class AppModel {
         guard doc != before else { return doc }
 
         if recordUndo, undoManager != nil {
+            let undoPane = activePaneIndex
             let after = doc
             let name = UndoActionNaming.actionName(for: intercepted)
             let singleReplace = UndoActionNaming.isSingleReplaceTextOnly(intercepted)
             let now = Date()
             let windowSeconds = Double(undoPolicy.coalesceReplaceTextWindowNanoseconds) / 1_000_000_000.0
 
+            let cps = workspacePanes[undoPane].undoCheckpoints
             let lastMatchesBefore =
-                !undoCheckpoints.isEmpty
-                && materializeCheckpoint(at: undoCheckpoints.count - 1) == before
+                !cps.isEmpty
+                && materializeCheckpoint(forPane: undoPane, at: cps.count - 1) == before
 
             let canTryCoalesce =
                 undoPolicy.coalesceReplaceTextWindowNanoseconds > 0
                 && singleReplace
-                && lastRecordedUndoWasSingleReplaceText
+                && workspacePanes[undoPane].lastRecordedUndoWasSingleReplaceText
                 && lastMatchesBefore
 
             var didCoalesce = false
-            if canTryCoalesce, let lastDate = lastUndoRegistrationDate {
+            if canTryCoalesce, let lastDate = workspacePanes[undoPane].lastUndoRegistrationDate {
                 let elapsed = now.timeIntervalSince(lastDate)
                 if elapsed < windowSeconds {
-                    let lastIdx = undoCheckpoints.count - 1
+                    let lastIdx = workspacePanes[undoPane].undoCheckpoints.count - 1
                     let beforeIdx = lastIdx - 1
-                    let docBeforeStep = materializeCheckpoint(at: beforeIdx)
-                    switch undoCheckpoints[lastIdx] {
+                    let docBeforeStep = materializeCheckpoint(forPane: undoPane, at: beforeIdx)
+                    switch workspacePanes[undoPane].undoCheckpoints[lastIdx] {
                     case .replaceTextOnly(let forward, _):
                         let combined = forward + intercepted
                         if let rebuilt = UndoInverseSupport.replaceTextChainUndoCommands(forward: combined, documentBefore: docBeforeStep),
                            rebuilt.after == after {
-                            undoCheckpoints[lastIdx] = .replaceTextOnly(forward: combined, undoCommands: rebuilt.undoCommands)
+                            workspacePanes[undoPane].undoCheckpoints[lastIdx] = .replaceTextOnly(
+                                forward: combined,
+                                undoCommands: rebuilt.undoCommands
+                            )
                         } else {
-                            undoCheckpoints[lastIdx] = .full(after)
+                            workspacePanes[undoPane].undoCheckpoints[lastIdx] = .full(after)
                         }
                     case .full:
-                        undoCheckpoints[lastIdx] = .full(after)
+                        workspacePanes[undoPane].undoCheckpoints[lastIdx] = .full(after)
                     }
-                    if !undoActionNames.isEmpty {
-                        undoActionNames[undoActionNames.count - 1] = name
+                    if !workspacePanes[undoPane].undoActionNames.isEmpty {
+                        workspacePanes[undoPane].undoActionNames[workspacePanes[undoPane].undoActionNames.count - 1] = name
                     }
-                    reregisterAllUndoActions()
+                    reregisterAllUndoActions(forPane: undoPane)
                     didCoalesce = true
                 }
             }
 
             if !didCoalesce {
-                if undoCheckpoints.isEmpty {
+                if workspacePanes[undoPane].undoCheckpoints.isEmpty {
                     let second = UndoCheckpointSupport.checkpointForRecordedStep(
                         after: after,
                         before: before,
                         intercepted: intercepted
                     )
-                    undoCheckpoints = [.full(before), second]
-                    undoActionNames = [name]
+                    workspacePanes[undoPane].undoCheckpoints = [.full(before), second]
+                    workspacePanes[undoPane].undoActionNames = [name]
                     let top = 1
+                    let capturedPane = undoPane
                     undoManager?.registerUndo(withTarget: self) { model in
-                        model.applyCheckpointUndo(fromIndex: top, toIndex: top - 1)
+                        model.applyCheckpointUndo(fromIndex: top, toIndex: top - 1, pane: capturedPane)
                     }
                     undoManager?.setActionName(name)
                 } else {
-                    assert(materializeCheckpoint(at: undoCheckpoints.count - 1) == before)
+                    assert(materializeCheckpoint(forPane: undoPane, at: workspacePanes[undoPane].undoCheckpoints.count - 1) == before)
                     let newCheckpoint = UndoCheckpointSupport.checkpointForRecordedStep(
                         after: after,
                         before: before,
                         intercepted: intercepted
                     )
-                    undoCheckpoints.append(newCheckpoint)
-                    undoActionNames.append(name)
-                    let top = undoCheckpoints.count - 1
+                    workspacePanes[undoPane].undoCheckpoints.append(newCheckpoint)
+                    workspacePanes[undoPane].undoActionNames.append(name)
+                    let top = workspacePanes[undoPane].undoCheckpoints.count - 1
+                    let capturedPane = undoPane
                     undoManager?.registerUndo(withTarget: self) { model in
-                        model.applyCheckpointUndo(fromIndex: top, toIndex: top - 1)
+                        model.applyCheckpointUndo(fromIndex: top, toIndex: top - 1, pane: capturedPane)
                     }
                     undoManager?.setActionName(name)
                 }
             }
 
-            lastRecordedUndoWasSingleReplaceText = singleReplace
-            lastUndoRegistrationDate = now
-            enforceUndoPolicyIfNeeded()
+            workspacePanes[undoPane].lastRecordedUndoWasSingleReplaceText = singleReplace
+            workspacePanes[undoPane].lastUndoRegistrationDate = now
+            enforceUndoPolicyIfNeeded(forPane: undoPane)
         }
 
         activeDocument = doc
-        scheduleAutosave()
-        scheduleBacklinkRefresh()
+        scheduleAutosave(forPane: activePaneIndex)
+        scheduleBacklinkRefresh(forPane: activePaneIndex)
         return doc
     }
 
-    private func applyCheckpointUndo(fromIndex: Int, toIndex: Int) {
-        guard undoCheckpoints.indices.contains(toIndex) else { return }
-        activeDocument = materializeCheckpoint(at: toIndex)
-        scheduleAutosave()
-        scheduleBacklinkRefresh()
+    private func applyCheckpointUndo(fromIndex: Int, toIndex: Int, pane: Int) {
+        guard workspacePanes[pane].undoCheckpoints.indices.contains(toIndex) else { return }
+        workspacePanes[pane].activeDocument = materializeCheckpoint(forPane: pane, at: toIndex)
+        scheduleAutosave(forPane: pane)
+        scheduleBacklinkRefresh(forPane: pane)
         undoManager?.registerUndo(withTarget: self) { model in
-            model.applyCheckpointUndo(fromIndex: toIndex, toIndex: fromIndex)
+            model.applyCheckpointUndo(fromIndex: toIndex, toIndex: fromIndex, pane: pane)
         }
     }
 
-    /// Materializes the document at the given checkpoint index (index 0 is always a full snapshot).
-    private func materializeCheckpoint(at index: Int) -> NoteDocument {
-        UndoCheckpointSupport.materialize(checkpoints: undoCheckpoints, at: index)
-    }
-
-    private func reregisterAllUndoActions() {
+    private func reregisterAllUndoActions(forPane pane: Int) {
         undoManager?.removeAllActions(withTarget: self)
-        guard undoCheckpoints.count >= 2 else { return }
-        for i in 1..<undoCheckpoints.count {
+        let cps = workspacePanes[pane].undoCheckpoints
+        guard cps.count >= 2 else { return }
+        for i in 1..<cps.count {
             let fromIdx = i
             let toIdx = i - 1
-            let name = undoActionNames[i - 1]
+            let name = workspacePanes[pane].undoActionNames[i - 1]
+            let capturedPane = pane
             undoManager?.registerUndo(withTarget: self) { model in
-                model.applyCheckpointUndo(fromIndex: fromIdx, toIndex: toIdx)
+                model.applyCheckpointUndo(fromIndex: fromIdx, toIndex: toIdx, pane: capturedPane)
             }
             undoManager?.setActionName(name)
         }
     }
 
-    private func clearUndoStack() {
+    private func clearUndoStack(forPane pane: Int) {
         undoManager?.removeAllActions(withTarget: self)
-        undoCheckpoints.removeAll()
-        undoActionNames.removeAll()
-        lastUndoRegistrationDate = nil
-        lastRecordedUndoWasSingleReplaceText = false
+        workspacePanes[pane].undoCheckpoints.removeAll()
+        workspacePanes[pane].undoActionNames.removeAll()
+        workspacePanes[pane].lastUndoRegistrationDate = nil
+        workspacePanes[pane].lastRecordedUndoWasSingleReplaceText = false
     }
 
-    private func enforceUndoPolicyIfNeeded() {
+    private func enforceUndoPolicyIfNeeded(forPane pane: Int) {
         let max = undoPolicy.maxUndoSteps
-        let steps = undoCheckpoints.count - 1
+        let steps = workspacePanes[pane].undoCheckpoints.count - 1
         guard steps > max else { return }
         let dropCount = steps - max
-        // Rebasing: `suffix` would leave a `.replaceTextOnly` at index 0 without its parent. Materialize each
-        // retained checkpoint to `.full` so the timeline stays self-contained after pruning.
-        let newCheckpoints: [UndoCheckpoint] = (dropCount..<undoCheckpoints.count).map { i in
-            .full(materializeCheckpoint(at: i))
+        let newCheckpoints: [UndoCheckpoint] = (dropCount..<workspacePanes[pane].undoCheckpoints.count).map { i in
+            .full(materializeCheckpoint(forPane: pane, at: i))
         }
-        undoCheckpoints = newCheckpoints
-        undoActionNames = Array(undoActionNames.suffix(max))
-        reregisterAllUndoActions()
+        workspacePanes[pane].undoCheckpoints = newCheckpoints
+        workspacePanes[pane].undoActionNames = Array(workspacePanes[pane].undoActionNames.suffix(max))
+        reregisterAllUndoActions(forPane: pane)
         Logger.vault.info("Undo stack pruned to \(max, privacy: .public) steps")
     }
 
@@ -1255,12 +1416,17 @@ final class AppModel {
     }
 
     func changeSelection(baseName: String?) {
+        changeSelection(baseName: baseName, pane: activePaneIndex)
+    }
+
+    func changeSelection(baseName: String?, pane: Int) {
         externalEditConflictAlert = nil
         diskActivityBanner = nil
         externalTextCompare = nil
         Task { @MainActor in
+            guard self.workspacePanes.indices.contains(pane) else { return }
             let resolved = await resolvedSelectionPath(from: baseName)
-            if selectedBaseName == resolved { return }
+            if self.workspacePanes[pane].selectedBaseName == resolved { return }
             if let p = pendingEditorScroll, let path = resolved {
                 let manifest = try? await repository.loadManifest()
                 let newID = manifest?.entry(relativePath: path)?.noteID
@@ -1268,21 +1434,26 @@ final class AppModel {
             } else if resolved == nil {
                 pendingEditorScroll = nil
             }
-            await flushCurrentNoteToDiskIfDirty()
-            navigationGeneration += 1
-            selectedBaseName = resolved
-            selectedNoteID = noteSummaries.first(where: { $0.relativePath == resolved })?.noteID
-            syncActivePaneBaseName()
-            await loadSelectedNote()
+            await flushPaneIfDirty(pane)
+            self.workspacePanes[pane].navigationGeneration += 1
+            self.workspacePanes[pane].selectedBaseName = resolved
+            self.workspacePanes[pane].selectedNoteID =
+                noteSummaries.first(where: { $0.relativePath == resolved })?.noteID
+            await loadSelectedNote(pane: pane)
         }
     }
 
     func changeSelection(noteID: UUID?) {
+        changeSelection(noteID: noteID, pane: activePaneIndex)
+    }
+
+    func changeSelection(noteID: UUID?, pane: Int) {
         externalEditConflictAlert = nil
         diskActivityBanner = nil
         externalTextCompare = nil
-        selectedNoteID = noteID
         Task { @MainActor in
+            guard self.workspacePanes.indices.contains(pane) else { return }
+            self.workspacePanes[pane].selectedNoteID = noteID
             let path: String?
             if let id = noteID {
                 do {
@@ -1301,23 +1472,24 @@ final class AppModel {
             } else {
                 path = nil
             }
-            if selectedBaseName == path, activeDocument?.metadata.noteID == noteID { return }
+            if self.workspacePanes[pane].selectedBaseName == path,
+                self.workspacePanes[pane].activeDocument?.metadata.noteID == noteID { return }
             if let p = pendingEditorScroll, p.noteID != noteID {
                 pendingEditorScroll = nil
             }
-            await flushCurrentNoteToDiskIfDirty()
-            navigationGeneration += 1
-            selectedBaseName = path
-            syncActivePaneBaseName()
-            await loadSelectedNote()
+            await flushPaneIfDirty(pane)
+            self.workspacePanes[pane].navigationGeneration += 1
+            self.workspacePanes[pane].selectedBaseName = path
+            await loadSelectedNote(pane: pane)
         }
     }
 
-    private func refreshOnDiskFingerprints(for path: String) async {
+    private func refreshOnDiskFingerprints(for path: String, pane: Int) async {
+        guard workspacePanes.indices.contains(pane) else { return }
         do {
-            lastKnownDiskDate = try await repository.noteModifiedDate(relativePath: path)
-            lastKnownDiskRevision = try await repository.noteRevisionToken(relativePath: path)
-            lastKnownNoteTextSHA256 = try await repository.noteTextFileSHA256(relativePath: path)
+            workspacePanes[pane].lastKnownDiskDate = try await repository.noteModifiedDate(relativePath: path)
+            workspacePanes[pane].lastKnownDiskRevision = try await repository.noteRevisionToken(relativePath: path)
+            workspacePanes[pane].lastKnownNoteTextSHA256 = try await repository.noteTextFileSHA256(relativePath: path)
         } catch {
             userAlert = .recoverable(
                 message: "Failed to read note on-disk state: \(error.localizedDescription)",
@@ -1326,18 +1498,24 @@ final class AppModel {
         }
     }
 
-    /// Cancels any debounced save, then persists the current buffer if it differs from the last known on-disk snapshot.
-    private func flushCurrentNoteToDiskIfDirty() async {
-        saveTask?.cancel()
-        saveTask = nil
-        guard let doc = activeDocument, let path = selectedBaseName else { return }
-        guard doc != lastPersistedDocument else { return }
+    /// Cancels any debounced save for the pane, then persists if dirty.
+    private func flushPaneIfDirty(_ pane: Int) async {
+        if let t = saveTasks[pane] {
+            t.cancel()
+            saveTasks.removeValue(forKey: pane)
+        }
+        guard workspacePanes.indices.contains(pane) else { return }
+        let doc = workspacePanes[pane].activeDocument
+        let path = workspacePanes[pane].selectedBaseName
+        let last = workspacePanes[pane].lastPersistedDocument
+        guard let doc, let path else { return }
+        guard doc != last else { return }
         do {
             let integrity = try await repository.save(doc, asBaseName: path)
             applyVaultIntegrityAfterSave(integrity)
-            await refreshOnDiskFingerprints(for: path)
-            lastPersistedDocument = doc
-            await refreshBacklinks()
+            await refreshOnDiskFingerprints(for: path, pane: pane)
+            workspacePanes[pane].lastPersistedDocument = doc
+            await refreshBacklinks(forPane: pane)
         } catch {
             userAlert = .recoverable(
                 message: "Autosave failed: \(error.localizedDescription)",
@@ -1346,32 +1524,41 @@ final class AppModel {
         }
     }
 
-    private func scheduleAutosave() {
-        saveTask?.cancel()
-        guard let expectedPath = selectedBaseName, activeDocument != nil else { return }
-        let gen = navigationGeneration
+    private func flushCurrentNoteToDiskIfDirty() async {
+        await flushPaneIfDirty(activePaneIndex)
+    }
+
+    private func scheduleAutosave(forPane pane: Int) {
+        saveTasks[pane]?.cancel()
+        saveTasks.removeValue(forKey: pane)
+        guard workspacePanes.indices.contains(pane) else { return }
+        guard let expectedPath = workspacePanes[pane].selectedBaseName, workspacePanes[pane].activeDocument != nil else {
+            return
+        }
+        let gen = workspacePanes[pane].navigationGeneration
         let startedAt = Date()
-        saveTask = Task { @MainActor in
+        let task = Task { @MainActor in
             defer {
                 Task { @MainActor in
-                    self.saveTask = nil
+                    self.saveTasks.removeValue(forKey: pane)
                     await self.runPendingExternalDiskReconciliationIfNeeded()
                 }
             }
             try? await Task.sleep(for: .milliseconds(autosaveDebounceMilliseconds))
             guard !Task.isCancelled else { return }
-            guard gen == navigationGeneration else { return }
-            guard selectedBaseName == expectedPath else { return }
-            guard let latest = activeDocument else { return }
+            guard gen == self.workspacePanes[pane].navigationGeneration else { return }
+            guard self.workspacePanes[pane].selectedBaseName == expectedPath else { return }
+            guard let latest = self.workspacePanes[pane].activeDocument else { return }
             do {
                 let integrity = try await repository.save(latest, asBaseName: expectedPath)
-                guard gen == navigationGeneration, selectedBaseName == expectedPath else { return }
+                guard gen == self.workspacePanes[pane].navigationGeneration,
+                    self.workspacePanes[pane].selectedBaseName == expectedPath else { return }
                 applyVaultIntegrityAfterSave(integrity)
-                await refreshOnDiskFingerprints(for: expectedPath)
-                lastPersistedDocument = latest
+                await refreshOnDiskFingerprints(for: expectedPath, pane: pane)
+                self.workspacePanes[pane].lastPersistedDocument = latest
                 let latencyMs = Int(Date().timeIntervalSince(startedAt) * 1000)
                 VaultTelemetry.logAutosave(latencyMs: max(0, latencyMs))
-                await self.refreshBacklinks()
+                await self.refreshBacklinks(forPane: pane)
             } catch {
                 userAlert = .recoverable(
                     message: "Autosave failed: \(error.localizedDescription)",
@@ -1379,6 +1566,7 @@ final class AppModel {
                 )
             }
         }
+        saveTasks[pane] = task
     }
 
     func reloadFromDisk() {
@@ -1393,17 +1581,18 @@ final class AppModel {
         let diskRevision = externalEditConflictAlert?.revisionToken
         externalEditConflictAlert = nil
         diskActivityBanner = nil
+        let pane = activePaneIndex
         if reloadFromDisk {
             Task { @MainActor in
-                await loadSelectedNote()
+                await loadSelectedNote(pane: pane)
             }
-        } else if let path = selectedBaseName {
+        } else if let path = workspacePanes[pane].selectedBaseName {
             Task { @MainActor in
-                await refreshOnDiskFingerprints(for: path)
+                await refreshOnDiskFingerprints(for: path, pane: pane)
             }
         } else if let diskDate {
-            lastKnownDiskDate = diskDate
-            lastKnownDiskRevision = diskRevision
+            workspacePanes[pane].lastKnownDiskDate = diskDate
+            workspacePanes[pane].lastKnownDiskRevision = diskRevision
         }
     }
 
@@ -1445,7 +1634,7 @@ final class AppModel {
 
     func runPendingExternalDiskReconciliationIfNeeded() async {
         guard pendingExternalDiskCheck else { return }
-        guard saveTask == nil else { return }
+        guard saveTasks.isEmpty else { return }
         pendingExternalDiskCheck = false
         await processExternalDiskActivity()
     }
@@ -1453,7 +1642,9 @@ final class AppModel {
     /// Package-internal for tests that simulate vault changes without relying on filesystem timing.
     func processExternalDiskActivity() async {
         guard externalEditConflictAlert == nil else { return }
-        guard let path = selectedBaseName, activeDocument != nil else { return }
+        let pane = activePaneIndex
+        guard workspacePanes.indices.contains(pane) else { return }
+        guard let path = workspacePanes[pane].selectedBaseName, workspacePanes[pane].activeDocument != nil else { return }
 
         let diskDate: Date?
         let diskRevision: DocumentRevisionToken?
@@ -1468,14 +1659,14 @@ final class AppModel {
             return
         }
         guard let diskDate else { return }
-        if let diskRevision, diskRevision == lastKnownDiskRevision {
-            lastKnownDiskDate = diskDate
+        if let diskRevision, diskRevision == workspacePanes[pane].lastKnownDiskRevision {
+            workspacePanes[pane].lastKnownDiskDate = diskDate
             if let h = try? await repository.noteTextFileSHA256(relativePath: path) {
-                lastKnownNoteTextSHA256 = h
+                workspacePanes[pane].lastKnownNoteTextSHA256 = h
             }
             return
         }
-        if let lastKnown = lastKnownDiskDate, diskDate <= lastKnown {
+        if let lastKnown = workspacePanes[pane].lastKnownDiskDate, diskDate <= lastKnown {
             return
         }
 
@@ -1507,30 +1698,30 @@ final class AppModel {
             return
         }
 
-        let isDirty = lastPersistedDocument != activeDocument
+        let isDirty = workspacePanes[pane].lastPersistedDocument != workspacePanes[pane].activeDocument
 
         if !isDirty {
-            if loadedFromDisk == activeDocument {
-                lastKnownDiskDate = diskDate
-                lastKnownDiskRevision = diskRevision
-                lastKnownNoteTextSHA256 = observedTextHash
+            if loadedFromDisk == workspacePanes[pane].activeDocument {
+                workspacePanes[pane].lastKnownDiskDate = diskDate
+                workspacePanes[pane].lastKnownDiskRevision = diskRevision
+                workspacePanes[pane].lastKnownNoteTextSHA256 = observedTextHash
                 return
             }
-            clearUndoStack()
-            activeDocument = loadedFromDisk
-            lastPersistedDocument = loadedFromDisk
-            lastKnownDiskDate = diskDate
-            lastKnownDiskRevision = diskRevision
-            lastKnownNoteTextSHA256 = observedTextHash
-            Task { @MainActor in await refreshBacklinks() }
+            clearUndoStack(forPane: pane)
+            workspacePanes[pane].activeDocument = loadedFromDisk
+            workspacePanes[pane].lastPersistedDocument = loadedFromDisk
+            workspacePanes[pane].lastKnownDiskDate = diskDate
+            workspacePanes[pane].lastKnownDiskRevision = diskRevision
+            workspacePanes[pane].lastKnownNoteTextSHA256 = observedTextHash
+            Task { @MainActor in await refreshBacklinks(forPane: pane) }
             return
         }
 
-        if loadedFromDisk == activeDocument {
-            lastPersistedDocument = loadedFromDisk
-            lastKnownDiskDate = diskDate
-            lastKnownDiskRevision = diskRevision
-            lastKnownNoteTextSHA256 = observedTextHash
+        if loadedFromDisk == workspacePanes[pane].activeDocument {
+            workspacePanes[pane].lastPersistedDocument = loadedFromDisk
+            workspacePanes[pane].lastKnownDiskDate = diskDate
+            workspacePanes[pane].lastKnownDiskRevision = diskRevision
+            workspacePanes[pane].lastKnownNoteTextSHA256 = observedTextHash
             return
         }
 
@@ -1564,23 +1755,26 @@ final class AppModel {
     private func updateActiveNoteFilePresenter() {
         activeNoteFilePresenter?.stop()
         activeNoteFilePresenter = nil
-        guard let path = selectedBaseName else { return }
+        let pane = activePaneIndex
+        guard workspacePanes.indices.contains(pane),
+            let path = workspacePanes[pane].selectedBaseName else { return }
         let url = VaultPath.fileURL(vaultRoot: repository.vaultURL, relativePathWithoutExtension: path, extension: "txt")
         let presenter = ActiveNoteFilePresenter(fileURL: url) { [weak self] in
             guard let self else { return }
             Task { @MainActor in
-                await self.handleActiveNotePresenterDidChange(noteRelativePath: path)
+                await self.handleActiveNotePresenterDidChange(noteRelativePath: path, pane: pane)
             }
         }
         presenter.start()
         activeNoteFilePresenter = presenter
     }
 
-    /// `NSFilePresenter` only observes the active note `.txt`. If its body bytes still match ``lastKnownNoteTextSHA256``, skip queuing a full reconciliation (avoids churn from our own save or no-op events).
-    private func handleActiveNotePresenterDidChange(noteRelativePath path: String) async {
+    /// `NSFilePresenter` only observes the active note `.txt`. If its body bytes still match the pane's last known hash, skip queuing a full reconciliation.
+    private func handleActiveNotePresenterDidChange(noteRelativePath path: String, pane: Int) async {
+        guard workspacePanes.indices.contains(pane) else { return }
         do {
             let h = try await repository.noteTextFileSHA256(relativePath: path)
-            if let known = lastKnownNoteTextSHA256, h == known {
+            if let known = workspacePanes[pane].lastKnownNoteTextSHA256, h == known {
                 return
             }
         } catch {
@@ -1594,113 +1788,52 @@ final class AppModel {
 
     // MARK: - Layout management
 
-    /// Switches to a new pane layout. Flushes the current note to disk and resizes `viewPaneStates`.
-    ///
-    /// When **shrinking**, auxiliary panes are removed in **decreasing pane index** order: the last
-    /// auxiliary slot (`viewPaneStates` suffix) corresponds to the highest-index pane and is dropped
-    /// first (e.g. 4→3 drops pane 3; 3→2 drops pane 2). Remaining prefix slots keep their ``ViewPaneState``.
-    /// 3- vs 4-pane geometry differs, so a note may appear in a different on-screen region after a
-    /// topology change without an explicit remap.
+    /// Switches to a new pane layout. Flushes the active pane, then grows or shrinks ``workspacePanes``.
     func setLayout(_ layout: PaneLayout) {
         Task { @MainActor in
-            await flushCurrentNoteToDiskIfDirty()
-
-            let newAuxiliaryCount = layout.paneCount - 1
-            let previousActiveIndex = activePaneIndex
-
-            // If the editable pane is an auxiliary, copy its live buffer into that slot when the slot
-            // survives the resize so read-only panes stay coherent.
-            if previousActiveIndex > 0 {
-                let slot = previousActiveIndex - 1
-                if slot < viewPaneStates.count, slot < newAuxiliaryCount {
-                    viewPaneStates[slot].noteBaseName = selectedBaseName
-                    viewPaneStates[slot].document = activeDocument
+            let newCount = layout.paneCount
+            let flushIndex = keyPaneIndex
+            await flushPaneIfDirty(flushIndex)
+            activePaneIndex = min(max(0, activePaneIndex), max(0, newCount - 1))
+            if workspacePanes.count < newCount {
+                while workspacePanes.count < newCount {
+                    workspacePanes.append(WorkspacePaneSession())
                 }
+            } else if workspacePanes.count > newCount {
+                workspacePanes = Array(workspacePanes.prefix(newCount))
             }
-
-            if viewPaneStates.count > newAuxiliaryCount {
-                viewPaneStates = Array(viewPaneStates.prefix(newAuxiliaryCount))
-            } else {
-                while viewPaneStates.count < newAuxiliaryCount {
-                    viewPaneStates.append(ViewPaneState())
-                }
-            }
-
-            if previousActiveIndex >= layout.paneCount {
-                activePaneIndex = 0
-                clearUndoStack()
-                await loadSelectedNote()
-            }
-
             currentLayout = layout
+            undoManager?.removeAllActions(withTarget: self)
+            reregisterAllUndoActions(forPane: activePaneIndex)
+            updateActiveNoteFilePresenter()
         }
     }
 
-    /// Makes `index` the editable pane. Flushes the current note, saves the active pane's note
-    /// back into its slot, then loads the target pane's note into the editor.
-    ///
-    /// - Note: Switching active pane clears the undo history for the previous note. Acceptable for now.
+    /// Makes `index` the pane that receives toolbar/search/primary undo registration. Each tile keeps its own navigation state.
     func activatePane(index: Int) {
         guard index != activePaneIndex, index < currentLayout.paneCount else { return }
-        Task { @MainActor in
-            await flushCurrentNoteToDiskIfDirty()
-
-            // Persist what was in the active pane back into viewPaneStates before switching.
-            if activePaneIndex > 0 {
-                let slot = activePaneIndex - 1
-                if slot < viewPaneStates.count {
-                    viewPaneStates[slot].noteBaseName = selectedBaseName
-                    viewPaneStates[slot].document = activeDocument
-                }
-            }
-
-            activePaneIndex = index
-
-            let targetBaseName: String?
-            if index == 0 {
-                // Pane 0 is always the original active slot; restore from its own tracking is handled
-                // by the fact that pane 0 doesn't have a viewPaneState slot — its note is selectedBaseName.
-                // When the user previously had pane 0 active, selectedBaseName is already correct.
-                // When switching back to pane 0 from a higher index, we need its saved note.
-                targetBaseName = selectedBaseName
-            } else {
-                let slot = index - 1
-                targetBaseName = slot < viewPaneStates.count ? viewPaneStates[slot].noteBaseName : nil
-            }
-
-            // Undo history is intentionally cleared when switching active pane; acceptable limitation.
-            changeSelection(baseName: targetBaseName)
-        }
+        Task { await activatePaneAwaitable(index: index) }
     }
 
-    /// Loads a note for a read-only view pane asynchronously. Does not affect the active editor.
-    func loadViewPane(index: Int, baseName: String) {
-        guard index > 0, index < currentLayout.paneCount else { return }
-        let slot = index - 1
-        guard slot < viewPaneStates.count else { return }
-        viewPaneStates[slot].noteBaseName = baseName
-        viewPaneStates[slot].document = nil
-        Task { @MainActor in
-            do {
-                let result = try await repository.loadNote(baseName: baseName)
-                guard slot < viewPaneStates.count, viewPaneStates[slot].noteBaseName == baseName else { return }
-                viewPaneStates[slot].document = result.document
-            } catch {
-                userAlert = .recoverable(
-                    message: "Could not load view pane note: \(error.localizedDescription)",
-                    kind: .retryLoadViewPane(index: index, baseName: baseName)
-                )
-            }
-        }
+    /// Switches the key pane immediately so a synchronous ``apply`` runs against the correct buffer; previous pane flush runs in the background.
+    func activatePaneForEditingSync(_ index: Int) {
+        guard index != activePaneIndex, index < currentLayout.paneCount else { return }
+        let previous = activePaneIndex
+        Task { await flushPaneIfDirty(previous) }
+        undoManager?.removeAllActions(withTarget: self)
+        activePaneIndex = index
+        reregisterAllUndoActions(forPane: index)
+        updateActiveNoteFilePresenter()
     }
 
-    /// Keeps the active pane's slot in sync whenever `selectedBaseName` changes.
-    private func syncActivePaneBaseName() {
-        if activePaneIndex > 0 {
-            let slot = activePaneIndex - 1
-            if slot < viewPaneStates.count {
-                viewPaneStates[slot].noteBaseName = selectedBaseName
-            }
-        }
+    /// Awaitable activation (e.g. before applying edits so ``apply`` targets the key pane).
+    func activatePaneAwaitable(index: Int) async {
+        guard index != activePaneIndex, index < currentLayout.paneCount else { return }
+        let previous = activePaneIndex
+        await flushPaneIfDirty(previous)
+        undoManager?.removeAllActions(withTarget: self)
+        activePaneIndex = index
+        reregisterAllUndoActions(forPane: index)
+        updateActiveNoteFilePresenter()
     }
 }

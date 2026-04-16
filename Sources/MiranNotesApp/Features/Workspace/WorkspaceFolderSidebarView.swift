@@ -3,6 +3,8 @@ import SwiftUI
 
 struct WorkspaceFolderSidebarView: View {
     @Bindable var model: AppModel
+    /// Index of the workspace tile this sidebar belongs to.
+    var paneIndex: Int = 0
     var onClearToolbarSearchFocus: () -> Void = {}
     @State private var renamingFolder: FolderEntry?
     @State private var renameFieldText = ""
@@ -79,8 +81,11 @@ struct WorkspaceFolderSidebarView: View {
 
     private var folderSelection: Binding<UUID?> {
         Binding(
-            get: { model.selectedFolderID },
-            set: { model.selectFolderForPage($0) }
+            get: { model.workspacePanes[paneIndex].selectedFolderID },
+            set: { newID in
+                model.activatePane(index: paneIndex)
+                model.selectFolderForPage(newID, pane: paneIndex)
+            }
         )
     }
 
@@ -114,7 +119,8 @@ struct WorkspaceFolderSidebarView: View {
 
             Button {
                 onClearToolbarSearchFocus()
-                model.createFolder()
+                model.activatePane(index: paneIndex)
+                model.createFolder(pane: paneIndex)
             } label: {
                 Image(systemName: "folder.badge.plus")
             }
@@ -123,14 +129,15 @@ struct WorkspaceFolderSidebarView: View {
 
             Button {
                 onClearToolbarSearchFocus()
-                model.createNote()
+                model.activatePane(index: paneIndex)
+                model.createNote(pane: paneIndex)
             } label: {
                 Image(systemName: "plus")
             }
             .buttonStyle(.plain)
-            .disabled(!model.allowsToolbarNewNote)
+            .disabled(!model.allowsToolbarNewNote(forPane: paneIndex))
             .help(
-                model.allowsToolbarNewNote
+                model.allowsToolbarNewNote(forPane: paneIndex)
                     ? "New Note"
                     : "Select a folder (not Vault) to create a note"
             )

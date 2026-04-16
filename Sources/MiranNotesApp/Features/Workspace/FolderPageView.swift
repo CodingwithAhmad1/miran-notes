@@ -2,19 +2,20 @@ import SwiftUI
 
 struct FolderPageView: View {
     @Bindable var model: AppModel
+    var paneIndex: Int = 0
     @State private var folderTitleDraft = ""
     @State private var isCommittingFolderRename = false
     @FocusState private var isFolderTitleFocused: Bool
 
     private var vaultSearchActive: Bool {
-        !model.vaultSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        !model.workspacePanes[paneIndex].vaultSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     var body: some View {
         Group {
             if vaultSearchActive {
                 vaultSearchResultsPane
-            } else if model.selectedFolderID == nil {
+            } else if model.workspacePanes[paneIndex].selectedFolderID == nil {
                 if !model.hasDismissedVaultWelcome {
                     VaultOpenedWelcomeView(vaultPath: model.repository.vaultURL.path)
                 } else {
@@ -30,18 +31,21 @@ struct FolderPageView: View {
                         folderPageHeader
                             .padding(.bottom, 4)
 
-                        ForEach(model.folderPageNoteSummaries) { summary in
+                        ForEach(model.folderPageNoteSummaries(forPane: paneIndex)) { summary in
                             NoteLinkRow(
                                 title: summary.title,
                                 pathTooltip: summary.relativePath,
-                                onTap: { model.openNote(noteID: summary.noteID) },
+                                onTap: {
+                                    model.activatePane(index: paneIndex)
+                                    model.openNote(noteID: summary.noteID, pane: paneIndex)
+                                },
                                 onDelete: {
                                     model.deleteNoteFromFolder(noteID: summary.noteID)
                                 }
                             )
                         }
 
-                        if model.folderPageNoteSummaries.isEmpty {
+                        if model.folderPageNoteSummaries(forPane: paneIndex).isEmpty {
                             Text("No notes in this folder yet.")
                                 .foregroundStyle(.secondary)
                         }
@@ -50,18 +54,18 @@ struct FolderPageView: View {
                     .padding(20)
                 }
                 .onAppear {
-                    folderTitleDraft = model.selectedFolderDisplayTitle
+                    folderTitleDraft = model.selectedFolderDisplayTitle(forPane: paneIndex)
                 }
-                .onChange(of: model.selectedFolderID) { _, _ in
-                    folderTitleDraft = model.selectedFolderDisplayTitle
-                }
-                .onChange(of: model.selectedFolderDisplayTitle) { _, _ in
-                    if !isFolderTitleFocused {
-                        folderTitleDraft = model.selectedFolderDisplayTitle
-                    }
+                .onChange(of: model.workspacePanes[paneIndex].selectedFolderID) { _, _ in
+                    folderTitleDraft = model.selectedFolderDisplayTitle(forPane: paneIndex)
                 }
             }
         }
+        .simultaneousGesture(
+            TapGesture().onEnded { _ in
+                model.activatePane(index: paneIndex)
+            }
+        )
     }
 
     private var vaultSearchResultsPane: some View {
@@ -72,12 +76,15 @@ struct FolderPageView: View {
                     .fontWeight(.bold)
                     .padding(.bottom, 4)
 
-                let matches = model.vaultSearchMatchingNoteSummaries
+                let matches = model.vaultSearchMatchingNoteSummaries(forPane: paneIndex)
                 ForEach(matches) { summary in
                     NoteLinkRow(
                         title: summary.title,
                         pathTooltip: summary.relativePath,
-                        onTap: { model.openNote(noteID: summary.noteID) },
+                        onTap: {
+                            model.activatePane(index: paneIndex)
+                            model.openNote(noteID: summary.noteID, pane: paneIndex)
+                        },
                         onDelete: {
                             model.deleteNoteFromFolder(noteID: summary.noteID)
                         }
@@ -112,25 +119,25 @@ struct FolderPageView: View {
                     }
                 }
         } else {
-            Text(model.selectedFolderDisplayTitle)
+            Text(model.selectedFolderDisplayTitle(forPane: paneIndex))
                 .font(.largeTitle)
                 .fontWeight(.bold)
         }
     }
 
     private var selectedFolderIsRenamable: Bool {
-        guard let id = model.selectedFolderID else { return false }
+        guard let id = model.workspacePanes[paneIndex].selectedFolderID else { return false }
         return id != FolderCatalog.rootFolderID
     }
 
     private func commitFolderTitleRename() {
-        guard let id = model.selectedFolderID, id != FolderCatalog.rootFolderID else { return }
+        guard let id = model.workspacePanes[paneIndex].selectedFolderID, id != FolderCatalog.rootFolderID else { return }
         let trimmed = folderTitleDraft.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty {
-            folderTitleDraft = model.selectedFolderDisplayTitle
+            folderTitleDraft = model.selectedFolderDisplayTitle(forPane: paneIndex)
             return
         }
-        let current = model.selectedFolderDisplayTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        let current = model.selectedFolderDisplayTitle(forPane: paneIndex).trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed == current { return }
 
         guard !isCommittingFolderRename else { return }
@@ -139,8 +146,8 @@ struct FolderPageView: View {
         Task { @MainActor in
             defer { isCommittingFolderRename = false }
             _ = await model.renameFolderAndWait(id: capturedID, newName: trimmed)
-            guard model.selectedFolderID == capturedID else { return }
-            folderTitleDraft = model.selectedFolderDisplayTitle
+            guard model.workspacePanes[paneIndex].selectedFolderID == capturedID else { return }
+            folderTitleDraft = model.selectedFolderDisplayTitle(forPane: paneIndex)
         }
     }
 

@@ -1,5 +1,3 @@
-import MiranNotesCore
-
 /// The arrangement of note panes in the editor area.
 enum PaneLayout: Int, CaseIterable, Equatable {
     case single
@@ -25,12 +23,4 @@ enum PaneLayout: Int, CaseIterable, Equatable {
         case .fourPane: return "Four-Note Split"
         }
     }
-}
-
-/// State for one non-active (read-only) view pane.
-struct ViewPaneState: Equatable {
-    /// Manifest relative path of the note displayed in this pane (nil = empty placeholder).
-    var noteBaseName: String?
-    /// Loaded document for read-only display. Nil when no note is selected or load is pending.
-    var document: NoteDocument?
 }

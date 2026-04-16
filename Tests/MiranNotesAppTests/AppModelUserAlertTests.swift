@@ -41,7 +41,7 @@ final class AppModelUserAlertTests: XCTestCase {
             .retryVaultWatcher,
             .retryProcessExternalDiskActivity,
             .retryOpenExternalEditCompare,
-            .retryLoadViewPane(index: 1, baseName: "test-note"),
+            .retryLoadNoteInPane(pane: 1, baseName: "test-note"),
         ]
 
         for kind in kinds {
