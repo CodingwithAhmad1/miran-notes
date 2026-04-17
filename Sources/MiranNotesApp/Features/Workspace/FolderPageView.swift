@@ -26,7 +26,7 @@ struct FolderPageView: View {
                     )
                 }
             } else if model.showsTodaysTasksVaultRootPage(forPane: paneIndex) {
-                TodaysTasksVaultPageView()
+                TodaysTasksVaultPageView(model: model)
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 24) {

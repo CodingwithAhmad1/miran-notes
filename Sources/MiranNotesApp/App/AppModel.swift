@@ -147,6 +147,15 @@ final class AppModel {
     /// When creating the first note in an empty topic folder, the user picks `.txt` vs `.md`; persisted under `.miran/`.
     private(set) var folderNoteBodyConventions: [UUID: String] = [:]
 
+    /// Checklist rows for the vault-root “Today’s Tasks” page for ``todaysTasksSelectedDay``.
+    var todaysTasksItems: [VaultTodaysTaskRow] = []
+
+    /// Days that have on-disk task pages (sorted ascending).
+    var todaysTasksKnownDays: [VaultTasksCalendarDay] = []
+
+    /// Which calendar day’s tasks are shown and edited.
+    var todaysTasksSelectedDay: VaultTasksCalendarDay
+
     /// Sheet context: first note in a folder with no on-disk notes and no stored body convention yet.
     var pendingFolderFirstNoteBodyPicker: FolderFirstNoteBodyPickerContext?
 
@@ -280,6 +289,78 @@ final class AppModel {
         return true
     }
 
+    func addTodaysTaskRow() -> UUID {
+        let id = UUID()
+        todaysTasksItems.append(VaultTodaysTaskRow(id: id, title: "", isDone: false))
+        scheduleTodaysTasksPersist()
+        return id
+    }
+
+    func setTodaysTaskTitle(id: UUID, title: String) {
+        guard let i = todaysTasksItems.firstIndex(where: { $0.id == id }) else { return }
+        todaysTasksItems[i].title = title
+        scheduleTodaysTasksPersist()
+    }
+
+    func toggleTodaysTaskDone(id: UUID) {
+        guard let i = todaysTasksItems.firstIndex(where: { $0.id == id }) else { return }
+        todaysTasksItems[i].isDone.toggle()
+        scheduleTodaysTasksPersist()
+    }
+
+    func bindingForTodaysTaskTitle(id: UUID) -> Binding<String> {
+        Binding(
+            get: { self.todaysTasksItems.first { $0.id == id }?.title ?? "" },
+            set: { self.setTodaysTaskTitle(id: id, title: $0) }
+        )
+    }
+
+    var todaysTasksSelectedDayDisplayShort: String {
+        todaysTasksSelectedDay.displayShortYYMMDD(calendar: Self.vaultTasksCalendar())
+    }
+
+    var canGoToPreviousTodaysTasksDay: Bool {
+        VaultTasksDayNavigation.previous(before: todaysTasksSelectedDay, knownSorted: todaysTasksKnownDays) != nil
+    }
+
+    var canGoToNextTodaysTasksDay: Bool {
+        VaultTasksDayNavigation.next(after: todaysTasksSelectedDay, knownSorted: todaysTasksKnownDays) != nil
+    }
+
+    func goToPreviousTodaysTasksDay() {
+        guard let prev = VaultTasksDayNavigation.previous(before: todaysTasksSelectedDay, knownSorted: todaysTasksKnownDays) else { return }
+        persistTodaysTasksImmediatelyForSelectedDay()
+        todaysTasksSelectedDay = prev
+        todaysTasksItems = VaultTodaysTasksDayStore.load(day: prev, vaultURL: repository.vaultURL)
+    }
+
+    func goToNextTodaysTasksDay() {
+        guard let next = VaultTasksDayNavigation.next(after: todaysTasksSelectedDay, knownSorted: todaysTasksKnownDays) else { return }
+        persistTodaysTasksImmediatelyForSelectedDay()
+        todaysTasksSelectedDay = next
+        todaysTasksItems = VaultTodaysTasksDayStore.load(day: next, vaultURL: repository.vaultURL)
+    }
+
+    /// Call when the app may have crossed midnight (e.g. scene became active). Snaps selection to wall-clock today and ensures that page exists.
+    func refreshTodaysTasksIfCalendarDayChanged() {
+        let cal = Self.vaultTasksCalendar()
+        let today = VaultTasksCalendarDay.today(calendar: cal)
+        guard today != todaysTasksSelectedDay else { return }
+        persistTodaysTasksImmediatelyForSelectedDay()
+        do {
+            var known = try VaultTodaysTasksIndexStore.loadOrBootstrap(vaultURL: repository.vaultURL, calendar: cal)
+            if !known.contains(today) {
+                try VaultTodaysTasksDayStore.save(day: today, items: [], vaultURL: repository.vaultURL)
+                known = try VaultTodaysTasksIndexStore.insertDayIfMissing(today, vaultURL: repository.vaultURL, existing: known)
+            }
+            todaysTasksKnownDays = known
+            todaysTasksSelectedDay = today
+            todaysTasksItems = VaultTodaysTasksDayStore.load(day: today, vaultURL: repository.vaultURL)
+        } catch {
+            userAlert = .message("Could not update Today’s Tasks for the new day: \(error.localizedDescription)")
+        }
+    }
+
     /// True when the vault has no notes and no folder to show yet (same condition as ``pickDefaultFolderID()`` returning `nil`).
     var isEmptyVaultOnboardingState: Bool {
         noteSummaries.isEmpty && topLevelFolderEntries.isEmpty && !hasRootLevelNotes
@@ -301,6 +382,7 @@ final class AppModel {
     private let backlinkRefreshScheduler = DebouncedAsyncWorkScheduler()
     /// In-flight debounced autosave tasks keyed by pane index.
     private var saveTasks: [Int: Task<Void, Never>] = [:]
+    private var todaysTasksPersistTask: Task<Void, Never>?
     private var vaultWatcherSubscription: VaultWatcherSubscription?
     /// Set when the vault watcher fires; processed after autosave finishes so events are not dropped.
     private var pendingExternalDiskCheck = false
@@ -425,7 +507,14 @@ final class AppModel {
         self.startupLinkGraphSyncBudgetMs = startupLinkGraphSyncBudgetMs
         self.startupLinkGraphSyncHistoryWeight = startupLinkGraphSyncHistoryWeight
         self.commandPipelineContract = commandPipelineContract
+        self.todaysTasksSelectedDay = VaultTasksCalendarDay.today(calendar: Self.vaultTasksCalendar())
         VaultSecurityScopeCoordinator.shared.retain(repository.vaultURL)
+    }
+
+    private static func vaultTasksCalendar() -> Calendar {
+        var c = Calendar.autoupdatingCurrent
+        c.timeZone = TimeZone.current
+        return c
     }
 
     deinit {
@@ -474,6 +563,10 @@ final class AppModel {
 
     func loadVault() {
         Task { @MainActor in
+            todaysTasksPersistTask?.cancel()
+            todaysTasksPersistTask = nil
+            todaysTasksItems = []
+            todaysTasksKnownDays = []
             workspaceGateState = .checking
             let outcome = WorkspaceCompatibilityScanner.scan(vaultRoot: repository.vaultURL)
             if case .incompatible(let report) = outcome {
@@ -484,6 +577,11 @@ final class AppModel {
             hasDismissedVaultWelcome = VaultWelcomeDismissalStore.isDismissed(vaultURL: repository.vaultURL)
             hiddenTopLevelFolderIDs = VaultHiddenFoldersStore.load(vaultURL: repository.vaultURL)
             folderNoteBodyConventions = FolderNoteBodyConventionStore.load(vaultURL: repository.vaultURL)
+            do {
+                try loadVaultTodaysTasksStateAfterPreferences()
+            } catch {
+                userAlert = .message("Could not load Today’s Tasks: \(error.localizedDescription)")
+            }
             pendingFolderFirstNoteBodyPicker = nil
 
             await runStartupRecoveryIfPossible()
@@ -1681,6 +1779,49 @@ final class AppModel {
             }
         }
         saveTasks[pane] = task
+    }
+
+    private func scheduleTodaysTasksPersist() {
+        todaysTasksPersistTask?.cancel()
+        todaysTasksPersistTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(autosaveDebounceMilliseconds))
+            guard !Task.isCancelled else { return }
+            let day = self.todaysTasksSelectedDay
+            let items = self.todaysTasksItems
+            do {
+                try VaultTodaysTasksDayStore.save(day: day, items: items, vaultURL: self.repository.vaultURL)
+            } catch {
+                userAlert = .message("Could not save Today’s Tasks: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    private func loadVaultTodaysTasksStateAfterPreferences() throws {
+        let cal = Self.vaultTasksCalendar()
+        let vaultURL = repository.vaultURL
+        var known = try VaultTodaysTasksIndexStore.loadOrBootstrap(vaultURL: vaultURL, calendar: cal)
+        let today = VaultTasksCalendarDay.today(calendar: cal)
+        if !known.contains(today) {
+            try VaultTodaysTasksDayStore.save(day: today, items: [], vaultURL: vaultURL)
+            known = try VaultTodaysTasksIndexStore.insertDayIfMissing(today, vaultURL: vaultURL, existing: known)
+        }
+        todaysTasksKnownDays = known
+        todaysTasksSelectedDay = today
+        todaysTasksItems = VaultTodaysTasksDayStore.load(day: today, vaultURL: vaultURL)
+    }
+
+    private func persistTodaysTasksImmediatelyForSelectedDay() {
+        todaysTasksPersistTask?.cancel()
+        todaysTasksPersistTask = nil
+        do {
+            try VaultTodaysTasksDayStore.save(
+                day: todaysTasksSelectedDay,
+                items: todaysTasksItems,
+                vaultURL: repository.vaultURL
+            )
+        } catch {
+            userAlert = .message("Could not save Today’s Tasks: \(error.localizedDescription)")
+        }
     }
 
     func reloadFromDisk() {
