@@ -24,8 +24,20 @@ struct WorkspaceFolderSidebarView: View {
                 // a relayout. Pinning `masksToBounds` on the enclosing scroll view keeps the table from
                 // overlapping the footer below this list.
                 List(selection: folderSelection) {
-                    Label(model.sidebarNotesTrayTitle, systemImage: "tray.full")
+                    if model.showsVaultTrayAsButton {
+                        Button {
+                            onClearToolbarSearchFocus()
+                            model.activatePane(index: paneIndex)
+                            model.selectFolderForPage(model.sidebarNotesTrayFolderID, pane: paneIndex)
+                        } label: {
+                            Label(model.sidebarNotesTrayTitle, systemImage: "tray.full")
+                        }
+                        .buttonStyle(.plain)
                         .tag(Optional(model.sidebarNotesTrayFolderID))
+                    } else {
+                        Label(model.sidebarNotesTrayTitle, systemImage: "tray.full")
+                            .tag(Optional(model.sidebarNotesTrayFolderID))
+                    }
                     ForEach(model.visibleTopLevelFolderEntries, id: \.id) { folder in
                         Text(folder.name)
                             .tag(Optional(folder.id))

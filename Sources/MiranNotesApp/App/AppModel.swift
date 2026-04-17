@@ -262,6 +262,24 @@ final class AppModel {
         }
     }
 
+    private var isEligibleForTodaysTasksVaultExperience: Bool {
+        workspaceScope == .fullVault && !visibleTopLevelFolderEntries.isEmpty
+    }
+
+    /// Full vault with visible top-level folders: the vault tray row is shown as a button.
+    var showsVaultTrayAsButton: Bool {
+        isEligibleForTodaysTasksVaultExperience
+    }
+
+    /// Detail column shows the Today’s Tasks page instead of vault-root notes.
+    func showsTodaysTasksVaultRootPage(forPane pane: Int) -> Bool {
+        guard isEligibleForTodaysTasksVaultExperience,
+            workspacePanes.indices.contains(pane),
+            workspacePanes[pane].selectedFolderID == FolderCatalog.rootFolderID
+        else { return false }
+        return true
+    }
+
     /// True when the vault has no notes and no folder to show yet (same condition as ``pickDefaultFolderID()`` returning `nil`).
     var isEmptyVaultOnboardingState: Bool {
         noteSummaries.isEmpty && topLevelFolderEntries.isEmpty && !hasRootLevelNotes

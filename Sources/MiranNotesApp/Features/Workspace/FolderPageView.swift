@@ -25,6 +25,8 @@ struct FolderPageView: View {
                         description: Text("Add a folder from the sidebar, or choose notes in the vault root.")
                     )
                 }
+            } else if model.showsTodaysTasksVaultRootPage(forPane: paneIndex) {
+                TodaysTasksVaultPageView()
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 24) {
