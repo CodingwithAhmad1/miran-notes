@@ -65,6 +65,8 @@ enum IssueCode: String, Sendable, Codable {
     case disallowedItemInNoteFolder
     case symlinkNotAllowed
     case unreadableDirectory
+    /// Both `.txt` and `.md` note bodies appear in the same folder.
+    case mixedNoteBodyExtensionsInFolder
 }
 
 // MARK: - Metadata (optional; computed when loading note bodies)
@@ -170,7 +172,7 @@ enum WorkspaceCompatibilityScanner {
                     continue
                 }
                 let ext = url.pathExtension.lowercased()
-                if ext == WorkspaceCompatibilityPolicy.noteFileExtension {
+                if WorkspaceCompatibilityPolicy.noteBodyExtensions.contains(ext) {
                     let stem = (name as NSString).deletingPathExtension
                     rootNoteEntries.append(
                         WorkspaceNoteScanEntry(
@@ -187,7 +189,7 @@ enum WorkspaceCompatibilityScanner {
                 issues.append(
                     CompatibilityIssue(
                         code: .disallowedRootFile,
-                        message: "Only .txt notes (and .meta.json sidecars) are allowed at the workspace root.",
+                        message: "Only .txt or .md notes (and .meta.json sidecars) are allowed at the workspace root.",
                         path: WorkspaceRelativePath(name)
                     )
                 )
@@ -209,6 +211,23 @@ enum WorkspaceCompatibilityScanner {
 
         var folderEntries: [WorkspaceFolderScanEntry] = []
         var noteEntries: [WorkspaceNoteScanEntry] = rootNoteEntries
+
+        var rootNoteBodyExtensions = Set<String>()
+        for rn in rootNoteEntries {
+            let ext = (rn.fileName as NSString).pathExtension.lowercased()
+            if WorkspaceCompatibilityPolicy.noteBodyExtensions.contains(ext) {
+                rootNoteBodyExtensions.insert(ext)
+            }
+        }
+        if rootNoteBodyExtensions.count > 1 {
+            issues.append(
+                CompatibilityIssue(
+                    code: .mixedNoteBodyExtensionsInFolder,
+                    message: "The vault root cannot mix .txt and .md notes in the same folder; use one body format only.",
+                    path: WorkspaceRelativePath(".")
+                )
+            )
+        }
 
         for folderURL in topicFolders.sorted(by: { $0.lastPathComponent.localizedCaseInsensitiveCompare($1.lastPathComponent) == .orderedAscending }) {
             let folderName = folderURL.lastPathComponent
@@ -233,6 +252,8 @@ enum WorkspaceCompatibilityScanner {
             }
 
             folderEntries.append(WorkspaceFolderScanEntry(name: folderName, relativePath: folderRel))
+
+            var bodyExtensionsSeenInFolder = Set<String>()
 
             for item in inner {
                 let values = try? item.resourceValues(forKeys: resourceKeys)
@@ -269,7 +290,8 @@ enum WorkspaceCompatibilityScanner {
                         continue
                     }
                     let ext = item.pathExtension.lowercased()
-                    if ext == WorkspaceCompatibilityPolicy.noteFileExtension {
+                    if WorkspaceCompatibilityPolicy.noteBodyExtensions.contains(ext) {
+                        bodyExtensionsSeenInFolder.insert(ext)
                         let stem = (itemName as NSString).deletingPathExtension
                         let relNoExt = "\(folderName)/\(stem)"
                         noteEntries.append(
@@ -287,7 +309,7 @@ enum WorkspaceCompatibilityScanner {
                     issues.append(
                         CompatibilityIssue(
                             code: .disallowedItemInNoteFolder,
-                            message: "Only .txt notes (and .meta.json sidecars) are allowed inside topic folders.",
+                            message: "Only .txt or .md notes (and .meta.json sidecars) are allowed inside topic folders.",
                             path: itemRel
                         )
                     )
@@ -299,6 +321,16 @@ enum WorkspaceCompatibilityScanner {
                         code: .disallowedItemInNoteFolder,
                         message: "Unexpected item inside topic folder.",
                         path: itemRel
+                    )
+                )
+            }
+
+            if bodyExtensionsSeenInFolder.count > 1 {
+                issues.append(
+                    CompatibilityIssue(
+                        code: .mixedNoteBodyExtensionsInFolder,
+                        message: "Folder “\(folderName)” mixes .txt and .md notes. Use one body format per folder.",
+                        path: folderRel
                     )
                 )
             }

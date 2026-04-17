@@ -17,17 +17,20 @@ enum VaultIntegrityChecker {
         manifest: VaultManifest,
         linkGraph: LinkGraph,
         relationshipIndex: RelationshipIndex,
+        pathIndex: PathIndex,
         savedNoteRelativePath: String?,
         decoder: JSONDecoder
     ) -> VaultIntegrityResult {
         var issues: [String] = []
         let fm = FileManager.default
         let noteIDs = Set(manifest.entries.map(\.noteID))
+        let extByNote = Dictionary(uniqueKeysWithValues: pathIndex.entries.map { ($0.noteID, $0.bodyFileExtension) })
 
         for entry in manifest.entries {
-            let txt = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: entry.relativePath, extension: "txt")
-            if !fm.fileExists(atPath: txt.path) {
-                issues.append("Manifest lists a note with no text file at \(entry.relativePath).")
+            let ext = extByNote[entry.noteID] ?? "txt"
+            let bodyURL = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: entry.relativePath, extension: ext)
+            if !fm.fileExists(atPath: bodyURL.path) {
+                issues.append("Manifest lists a note with no body file at \(entry.relativePath).")
             }
         }
 
@@ -78,7 +81,13 @@ enum VaultIntegrityChecker {
         }
 
         if let relPath = savedNoteRelativePath {
-            let textURL = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: relPath, extension: "txt")
+            let savedExt =
+                pathIndex.entries.first(where: { $0.relativePath == relPath })?.bodyFileExtension ?? "txt"
+            let textURL = VaultPath.fileURL(
+                vaultRoot: vaultURL,
+                relativePathWithoutExtension: relPath,
+                extension: savedExt
+            )
             let metaURL = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: relPath, extension: "meta.json")
             guard fm.fileExists(atPath: textURL.path), fm.fileExists(atPath: metaURL.path) else {
                 issues.append("Saved note files are missing on disk after commit.")

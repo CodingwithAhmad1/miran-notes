@@ -114,6 +114,37 @@ final class NoteRepositoryTests: XCTestCase {
         XCTAssertTrue(NoteIntegrity.check(document: result.document).isValid)
     }
 
+    func testMdNoteCreateSaveLoadRoundTripInFolder() async throws {
+        let vault = try tempVaultURL()
+        let repo = NoteRepository(vaultURL: vault)
+        try await repo.ensureVault()
+        let folderID = try await repo.createFolder(parentID: FolderCatalog.rootFolderID, name: "MdFolder")
+        let (created, base) = try await repo.createNote(named: "md-round", folderID: folderID, bodyFileExtension: "md")
+        XCTAssertEqual(created.metadata.blocks.first?.type, .paragraph)
+
+        let mdURL = VaultPath.fileURL(vaultRoot: vault, relativePathWithoutExtension: base, extension: "md")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: mdURL.path))
+
+        let loaded = try await repo.loadNote(baseName: base)
+        XCTAssertEqual(loaded.document.text, "")
+        XCTAssertTrue(NoteIntegrity.check(document: loaded.document).isValid)
+
+        let text = "updated"
+        let paragraphLen = text.utf16.count
+        let meta = NoteMetadata(
+            schemaVersion: NoteMetadata.currentSchemaVersion,
+            noteID: loaded.document.metadata.noteID,
+            blocks: [
+                Block(id: "b1", type: .paragraph, range: TextRange(start: 0, length: paragraphLen), level: nil, icon: nil)
+            ],
+            spans: []
+        )
+        try await repo.save(NoteDocument(text: text, metadata: meta), asBaseName: base)
+        let again = try await repo.loadNote(baseName: base)
+        XCTAssertEqual(again.document.text, text)
+        XCTAssertTrue(NoteIntegrity.check(document: again.document).isValid)
+    }
+
     func testRevisionTokenChangesAfterMetadataMutation() async throws {
         let vault = try tempVaultURL()
         let repo = NoteRepository(vaultURL: vault)

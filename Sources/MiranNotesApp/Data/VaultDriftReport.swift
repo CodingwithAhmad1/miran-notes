@@ -66,9 +66,10 @@ enum VaultDriftValidator {
             for case let item as URL in enumerator {
                 let name = item.lastPathComponent.lowercased()
                 guard name.hasSuffix(".meta.json") else { continue }
-                guard let rel = relativePathForMetaSidecar(vaultURL: vaultURL, metaFileURL: item) else { continue }
+                               guard let rel = relativePathForMetaSidecar(vaultURL: vaultURL, metaFileURL: item) else { continue }
                 let txtURL = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: rel, extension: "txt")
-                if !fm.fileExists(atPath: txtURL.path) {
+                let mdURL = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: rel, extension: "md")
+                if !fm.fileExists(atPath: txtURL.path), !fm.fileExists(atPath: mdURL.path) {
                     orphanMeta.append(rel)
                 }
                 if let data = try? Data(contentsOf: item),

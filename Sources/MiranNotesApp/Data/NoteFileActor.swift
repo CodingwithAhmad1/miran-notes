@@ -3,7 +3,7 @@ import Foundation
 import MiranNotesCore
 import os.log
 
-/// Per-note file I/O: `.txt` / `.meta.json` reads, hashes, and vault enumeration helpers. Used by ``NoteRepository``.
+/// Per-note file I/O: `.txt` or `.md` bodies + `.meta.json` reads, hashes, and vault enumeration helpers. Used by ``NoteRepository``.
 actor NoteFileActor {
     nonisolated let vaultURL: URL
     private let decoder: JSONDecoder
@@ -27,9 +27,15 @@ actor NoteFileActor {
 
     /// Loads note text + metadata. When `.meta.json` is missing or invalid, uses `fallbackNoteID` (from manifest / registration).
     /// When the sidecar decodes successfully, `fallbackNoteID` is ignored.
-    func loadNote(relativePath: String, fallbackNoteID: UUID?) throws -> NoteLoadResult {
+    /// - Parameter bodyFileExtension: Preferred body extension from path index (`txt` or `md`); when the file is missing, disk is probed.
+    func loadNote(relativePath: String, fallbackNoteID: UUID?, bodyFileExtension: String? = nil) throws -> NoteLoadResult {
         try VaultPath.validateRelativePath(relativePath)
-        let textURL = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: relativePath, extension: "txt")
+        let ext = try Self.resolveBodyExtension(
+            vaultRoot: vaultURL,
+            relativePath: relativePath,
+            preferred: bodyFileExtension
+        )
+        let textURL = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: relativePath, extension: ext)
         let metaURL = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: relativePath, extension: "meta.json")
 
         guard FileManager.default.fileExists(atPath: textURL.path) else {
@@ -71,9 +77,10 @@ actor NoteFileActor {
         return NoteLoadResult(document: withId, repairWarnings: repairWarnings)
     }
 
-    func noteTextFileSHA256(relativePath: String) throws -> String {
+    func noteTextFileSHA256(relativePath: String, bodyFileExtension: String? = nil) throws -> String {
         try VaultPath.validateRelativePath(relativePath)
-        let textURL = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: relativePath, extension: "txt")
+        let ext = try Self.resolveBodyExtension(vaultRoot: vaultURL, relativePath: relativePath, preferred: bodyFileExtension)
+        let textURL = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: relativePath, extension: ext)
         guard FileManager.default.fileExists(atPath: textURL.path) else {
             throw NoteRepositoryError.noteNotFound(relativePath)
         }
@@ -81,18 +88,20 @@ actor NoteFileActor {
         return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 
-    func readRawNoteText(relativePath: String) throws -> String {
+    func readRawNoteText(relativePath: String, bodyFileExtension: String? = nil) throws -> String {
         try VaultPath.validateRelativePath(relativePath)
-        let textURL = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: relativePath, extension: "txt")
+        let ext = try Self.resolveBodyExtension(vaultRoot: vaultURL, relativePath: relativePath, preferred: bodyFileExtension)
+        let textURL = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: relativePath, extension: ext)
         guard FileManager.default.fileExists(atPath: textURL.path) else {
             throw NoteRepositoryError.noteNotFound(relativePath)
         }
         return (try? String(contentsOf: textURL, encoding: .utf8)) ?? ""
     }
 
-    func noteModifiedDate(relativePath: String) throws -> Date? {
+    func noteModifiedDate(relativePath: String, bodyFileExtension: String? = nil) throws -> Date? {
         try VaultPath.validateRelativePath(relativePath)
-        let textURL = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: relativePath, extension: "txt")
+        let ext = try Self.resolveBodyExtension(vaultRoot: vaultURL, relativePath: relativePath, preferred: bodyFileExtension)
+        let textURL = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: relativePath, extension: ext)
         let metaURL = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: relativePath, extension: "meta.json")
         let fm = FileManager.default
 
@@ -111,9 +120,11 @@ actor NoteFileActor {
         }
     }
 
-    func noteRevisionToken(relativePath: String) throws -> DocumentRevisionToken? {
+    func noteRevisionToken(relativePath: String, bodyFileExtension: String? = nil) throws -> DocumentRevisionToken? {
         try VaultPath.validateRelativePath(relativePath)
-        let textURL = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: relativePath, extension: "txt")
+        let ext = try? Self.resolveBodyExtension(vaultRoot: vaultURL, relativePath: relativePath, preferred: bodyFileExtension)
+        guard let ext else { return nil }
+        let textURL = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: relativePath, extension: ext)
         let metaURL = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: relativePath, extension: "meta.json")
         guard FileManager.default.fileExists(atPath: textURL.path) else {
             return nil
@@ -143,26 +154,38 @@ actor NoteFileActor {
         for case let item as URL in enumerator {
             var isDir: ObjCBool = false
             guard fm.fileExists(atPath: item.path, isDirectory: &isDir), !isDir.boolValue else { continue }
-            guard item.pathExtension.lowercased() == "txt" else { continue }
-            guard let rel = relativePathFromVaultNoteTextURL(item) else { continue }
+            let ext = item.pathExtension.lowercased()
+            guard ext == "txt" || ext == "md" else { continue }
+            guard let rel = relativePathFromVaultNoteBodyURL(item) else { continue }
             results.append(rel)
         }
-        return results.sorted { $0.lowercased() < $1.lowercased() }
+        return Array(Set(results)).sorted { $0.lowercased() < $1.lowercased() }
     }
 
-    /// Returns `relativePath` without extension for a `.txt` file under the vault.
-    func relativePathFromVaultNoteTextURL(_ file: URL) -> String? {
+    /// Returns `relativePath` without extension for a `.txt` / `.md` file under the vault.
+    func relativePathFromVaultNoteBodyURL(_ file: URL) -> String? {
         let vaultPath = vaultURL.standardizedFileURL.path
         let filePath = file.standardizedFileURL.path
         guard filePath.hasPrefix(vaultPath) else { return nil }
         var sub = String(filePath.dropFirst(vaultPath.count))
         if sub.hasPrefix("/") { sub.removeFirst() }
-        guard sub.lowercased().hasSuffix(".txt") else { return nil }
-        sub = String(sub.dropLast(4))
+        let lower = sub.lowercased()
+        if lower.hasSuffix(".txt") {
+            sub = String(sub.dropLast(4))
+        } else if lower.hasSuffix(".md") {
+            sub = String(sub.dropLast(3))
+        } else {
+            return nil
+        }
         let parts = sub.split(separator: "/").map(String.init)
         if parts.contains(".miran") || parts.contains("_aux") { return nil }
         if let first = parts.first, VaultPath.reservedTopLevel.contains(first) { return nil }
         return sub
+    }
+
+    /// Legacy alias for tests / older call sites.
+    func relativePathFromVaultNoteTextURL(_ file: URL) -> String? {
+        relativePathFromVaultNoteBodyURL(file)
     }
 
     func uniqueAvailableRelativePath(inDirectoryPrefix dirPrefix: String?, slugStem: String) throws -> String {
@@ -176,8 +199,9 @@ actor NoteFileActor {
                 rel = stem
             }
             try VaultPath.validateRelativePath(rel)
-            let path = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: rel, extension: "txt")
-            if !FileManager.default.fileExists(atPath: path.path) {
+            let txtPath = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: rel, extension: "txt")
+            let mdPath = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: rel, extension: "md")
+            if !FileManager.default.fileExists(atPath: txtPath.path), !FileManager.default.fileExists(atPath: mdPath.path) {
                 return rel
             }
             collision += 1
@@ -186,6 +210,26 @@ actor NoteFileActor {
             }
             stem = collision == 1 ? "\(slugStem)-2" : "\(slugStem)-\(collision + 1)"
         }
+    }
+
+    nonisolated static func resolveBodyExtension(vaultRoot: URL, relativePath: String, preferred: String?) throws -> String {
+        let mdURL = VaultPath.fileURL(vaultRoot: vaultRoot, relativePathWithoutExtension: relativePath, extension: "md")
+        let txtURL = VaultPath.fileURL(vaultRoot: vaultRoot, relativePathWithoutExtension: relativePath, extension: "txt")
+        let mdExists = FileManager.default.fileExists(atPath: mdURL.path)
+        let txtExists = FileManager.default.fileExists(atPath: txtURL.path)
+
+        if let preferred {
+            let norm = PathIndexEntry.normalizeBodyFileExtension(preferred)
+            if norm == "md", mdExists { return "md" }
+            if norm == "txt", txtExists { return "txt" }
+        }
+
+        if mdExists, txtExists {
+            throw NoteRepositoryError.ambiguousNoteBody(relativePath)
+        }
+        if mdExists { return "md" }
+        if txtExists { return "txt" }
+        throw NoteRepositoryError.noteNotFound(relativePath)
     }
 
     func slugify(_ value: String) -> String {

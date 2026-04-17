@@ -2,7 +2,7 @@ import AppKit
 import KeyboardShortcuts
 import SwiftUI
 
-/// Stable identifiers for workspace actions that may be rebound in Settings.
+/// Stable identifiers for workspace actions that may be rebound in Folder Management (toolbar gear).
 enum WorkspaceShortcutCommand: String, CaseIterable, Sendable {
     case newFolder
     case newNote
@@ -14,7 +14,7 @@ enum WorkspaceShortcutCommand: String, CaseIterable, Sendable {
         }
     }
 
-    /// Label beside the shortcut recorder in Settings.
+    /// Label beside the shortcut recorder in Folder Management.
     var settingsRecorderLabel: String {
         switch self {
         case .newFolder:

@@ -2,38 +2,19 @@ import AppKit
 import MiranNotesCore
 import SwiftUI
 
-private final class BlockTypeMenuRep: NSObject {
-    let blockID: String
-    let type: BlockType
-    let headingLevel: Int?
-
-    init(blockID: String, type: BlockType, headingLevel: Int?) {
-        self.blockID = blockID
-        self.type = type
-        self.headingLevel = headingLevel
-    }
-}
-
-struct SingleSurfaceNoteEditor: NSViewRepresentable {
+/// Plain note body as markdown source: minimal structure UI; relies on ``EditCommand/replaceText`` and save-time normalization.
+struct PlainMarkdownNoteEditor: NSViewRepresentable {
     @Binding var document: NoteDocument
-    /// Updated on every selection change so the model knows the caret position for cursor-aware edits.
     @Binding var cursorOffset: Int
-    /// Full UTF-16 selection (caret when `length == 0`) for `CommandContext` and extensions.
     @Binding var editorTextSelection: MiranNotesCore.TextRange
-    /// Bound to the detail column search field in editor mode; selects the first match from the caret (wrapping).
     @Binding var editorFindQuery: String
-    /// When set for the current document’s `noteID`, the coordinator scrolls to `range` once then calls `onPendingEditorScrollConsumed`.
+    var modules: EditorModuleFlags
     var pendingEditorScroll: PendingEditorScroll?
     var onPendingEditorScrollConsumed: (() -> Void)?
-    /// Returns the resulting NoteDocument synchronously so the coordinator can apply styling immediately,
-    /// eliminating the brief lag between command dispatch and the next SwiftUI render cycle.
     var onCommands: ([EditCommand]) -> NoteDocument
     var onWikiLinkClick: ((UUID) -> Void)?
-    /// Called when the incremental diff fails and a full-buffer replace fallback fires (block structure may be partially lost).
     var onFullReplaceWarning: (() -> Void)?
-    /// Called when a typed insertion would push the note past the 1 MB UTF-16 size limit.
     var onSizeLimitExceeded: (() -> Void)?
-    /// Increment (e.g. after the title field submits) to move keyboard focus into the note body.
     var focusBodyNonce: Int = 0
 
     func makeCoordinator() -> Coordinator {
@@ -48,7 +29,6 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
         textView.usesAdaptiveColorMappingForDarkAppearance = true
         textView.usesFontPanel = false
         textView.textContainerInset = NSSize(width: 48, height: 24)
-        // Document-level undo is handled by the window `UndoManager` in `AppModel`; disable `NSTextView`'s separate stack.
         textView.allowsUndo = false
         textView.delegate = context.coordinator
         textView.textStorage?.delegate = context.coordinator.textStorageDelegateBridge
@@ -62,43 +42,19 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
 
         let coordinator = context.coordinator
         coordinator.textView = textView
-        textView.linkHitHandler = { [weak coordinator] id in
-            coordinator?.parent.onWikiLinkClick?(id)
-        }
-        textView.formattingCommandHandler = { [weak coordinator] style in
-            coordinator?.toggleSpanStyle(style)
-        }
-        textView.slashMenuCommandHandler = { [weak coordinator] command in
-            coordinator?.handleSlashMenuCommand(command) ?? false
-        }
-        textView.blockContextMenuHandler = { [weak coordinator] event in
-            coordinator?.handleBlockContextMenu(event) ?? false
-        }
-        coordinator.setupChrome(scrollView: scrollView, textView: textView)
+        coordinator.bindWikiAndFormattingHandlers(textView: textView)
         coordinator.applyDocumentText()
         return scrollView
     }
 
     static func dismantleNSView(_ nsView: NSScrollView, coordinator: Coordinator) {
-        coordinator.teardownChrome()
+        coordinator.teardown()
     }
 
     func updateNSView(_ nsView: NSScrollView, context: Context) {
         context.coordinator.parent = self
         if let tv = nsView.documentView as? NoteEditorWikiLinkTextView {
-            let coordinator = context.coordinator
-            tv.linkHitHandler = { [weak coordinator] id in
-                coordinator?.parent.onWikiLinkClick?(id)
-            }
-            tv.formattingCommandHandler = { [weak coordinator] style in
-                coordinator?.toggleSpanStyle(style)
-            }
-            tv.slashMenuCommandHandler = { [weak coordinator] command in
-                coordinator?.handleSlashMenuCommand(command) ?? false
-            }
-            tv.blockContextMenuHandler = { [weak coordinator] event in
-                coordinator?.handleBlockContextMenu(event) ?? false
-            }
+            context.coordinator.bindWikiAndFormattingHandlers(textView: tv)
         }
         context.coordinator.applyDocumentText()
         let nonce = focusBodyNonce
@@ -112,7 +68,7 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
 
     @MainActor
     final class Coordinator: NSObject, NSTextViewDelegate {
-        var parent: SingleSurfaceNoteEditor
+        var parent: PlainMarkdownNoteEditor
         weak var textView: NSTextView?
         fileprivate var lastAppliedBodyFocusNonce: Int = 0
         fileprivate let textStorageDelegateBridge = TextStorageDelegateBridge()
@@ -123,22 +79,35 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
         private var highlightedSlashIndex = 0
         private var slashMenuPopover: NSPopover?
         private var slashMenuHost: NSHostingController<EditorSlashCommandMenuView>?
-        /// Last document snapshot for which `EditorVisualStyle.apply` ran (full equality skips redraw when text and metadata match).
         private var lastStyledDocument: NoteDocument?
 
-        private weak var chromeOverlay: BlockChromeOverlayView?
-        private var hoveredBlockID: String?
-        private var mouseMonitor: Any?
-        private var textViewFrameObserver: NSObjectProtocol?
-        private var clipBoundsObserver: NSObjectProtocol?
-
-        init(_ parent: SingleSurfaceNoteEditor) {
+        init(_ parent: PlainMarkdownNoteEditor) {
             self.parent = parent
             super.init()
             textStorageDelegateBridge.owner = self
         }
 
-        /// Forwards TextKit storage callbacks on the main thread; `Coordinator` cannot adopt `NSTextStorageDelegate` directly under Swift 6 isolation rules.
+        func bindWikiAndFormattingHandlers(textView: NoteEditorWikiLinkTextView) {
+            let wikiClick =
+                WikiLinkPresentationPolicy.isFrontendEnabled && parent.modules.wikiLinkClickThrough
+            textView.linkHitHandler = wikiClick
+                ? { [weak self] id in
+                    self?.parent.onWikiLinkClick?(id)
+                }
+                : nil
+            textView.wikiLinks =
+                (WikiLinkPresentationPolicy.isFrontendEnabled && wikiClick)
+                ? parent.document.metadata.links
+                : []
+            textView.formattingCommandHandler = { [weak self] style in
+                self?.toggleSpanStyle(style)
+            }
+            textView.slashMenuCommandHandler = { [weak self] command in
+                self?.handleSlashMenuCommand(command) ?? false
+            }
+            textView.blockContextMenuHandler = nil
+        }
+
         fileprivate final class TextStorageDelegateBridge: NSObject, NSTextStorageDelegate {
             nonisolated(unsafe) weak var owner: Coordinator?
 
@@ -153,7 +122,7 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
                 nonisolated(unsafe) let storage = textStorage
                 MainActor.assumeIsolated {
                     let coordinator = Unmanaged<Coordinator>.fromOpaque(ownerPtr).takeUnretainedValue()
-                    coordinator.textStorageDidProcessEditing(
+                    coordinator.consumeTextStorageEdit(
                         storage,
                         editedMask: editedMask,
                         editedRange: editedRange,
@@ -163,197 +132,15 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
             }
         }
 
-        func setupChrome(scrollView: NSScrollView, textView: NSTextView) {
-            guard let clipView = scrollView.contentView as? NSClipView else { return }
-            clipView.postsBoundsChangedNotifications = true
-
-            let chrome = BlockChromeOverlayView()
-            chrome.textView = textView
-            chrome.autoresizingMask = [.width, .height]
-            clipView.addSubview(chrome, positioned: .above, relativeTo: textView)
-            chrome.frame = textView.frame
-            chromeOverlay = chrome
-
-            textViewFrameObserver = NotificationCenter.default.addObserver(
-                forName: NSView.frameDidChangeNotification,
-                object: textView,
-                queue: .main
-            ) { [weak self] _ in
-                self?.syncChromeFrame()
-                self?.refreshBlockChrome()
-            }
-
-            clipBoundsObserver = NotificationCenter.default.addObserver(
-                forName: NSView.boundsDidChangeNotification,
-                object: clipView,
-                queue: .main
-            ) { [weak self] _ in
-                self?.syncChromeFrame()
-                self?.refreshBlockChrome()
-            }
-
-            mouseMonitor = NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved, .scrollWheel]) { [weak self] event in
-                self?.handleMouseMovedForChrome(event)
-                return event
-            }
-        }
-
-        func teardownChrome() {
+        func teardown() {
             textView?.textStorage?.delegate = nil
             textStorageDelegateBridge.owner = nil
-            if let monitor = mouseMonitor {
-                NSEvent.removeMonitor(monitor)
-                mouseMonitor = nil
-            }
-            if let o = textViewFrameObserver {
-                NotificationCenter.default.removeObserver(o)
-                textViewFrameObserver = nil
-            }
-            if let o = clipBoundsObserver {
-                NotificationCenter.default.removeObserver(o)
-                clipBoundsObserver = nil
-            }
-            hoveredBlockID = nil
-            chromeOverlay?.removeFromSuperview()
-            chromeOverlay = nil
+            slashMenuPopover?.performClose(nil)
+            slashMenuPopover = nil
+            slashMenuHost = nil
         }
 
-        private func syncChromeFrame() {
-            guard let textView, let chrome = chromeOverlay else { return }
-            chrome.frame = textView.frame
-        }
-
-        private func handleMouseMovedForChrome(_ event: NSEvent) {
-            guard let textView, let window = textView.window, window == event.window else { return }
-            let local = textView.convert(event.locationInWindow, from: nil)
-            guard textView.bounds.contains(local) else {
-                if hoveredBlockID != nil {
-                    hoveredBlockID = nil
-                    refreshBlockChrome()
-                }
-                return
-            }
-            let idx = textView.characterIndex(for: local)
-            guard idx != NSNotFound else { return }
-            let blocks = parent.document.metadata.blocks
-            let newHover = DocumentLayoutController.blockIndex(at: idx, blocks: blocks).map { blocks[$0].id }
-            if newHover != hoveredBlockID {
-                hoveredBlockID = newHover
-                refreshBlockChrome()
-            }
-        }
-
-        private func refreshBlockChrome() {
-            guard let textView, let overlay = chromeOverlay else { return }
-            let blocks = parent.document.metadata.blocks
-            let loc = textView.selectedRange().location
-            let focused = DocumentLayoutController.blockIndex(at: loc, blocks: blocks).map { blocks[$0].id }
-            overlay.blocks = blocks
-            overlay.focusedBlockID = focused
-            overlay.hoveredBlockID = hoveredBlockID
-            overlay.invalidateGeometry()
-        }
-
-        @objc private func blockTypeMenuClicked(_ sender: NSMenuItem) {
-            guard let rep = sender.representedObject as? BlockTypeMenuRep, let textView else { return }
-            _ = runCommandSession(
-                textView: textView,
-                commands: [.changeBlockType(blockID: rep.blockID, type: rep.type, headingLevel: rep.headingLevel)]
-            )
-        }
-
-        @objc private func blockMenuDuplicate(_ sender: NSMenuItem) {
-            guard let id = sender.representedObject as? String, let textView else { return }
-            _ = runCommandSession(textView: textView, commands: [.duplicateBlock(blockID: id)])
-        }
-
-        @objc private func blockMenuDelete(_ sender: NSMenuItem) {
-            guard let id = sender.representedObject as? String, let textView else { return }
-            _ = runCommandSession(textView: textView, commands: [.deleteBlock(blockID: id)])
-        }
-
-        fileprivate func handleBlockContextMenu(_ event: NSEvent) -> Bool {
-            guard let textView else { return false }
-            let local = textView.convert(event.locationInWindow, from: nil)
-            let idx = textView.characterIndex(for: local)
-            guard idx != NSNotFound else { return false }
-            let blocks = parent.document.metadata.blocks
-            guard let bIndex = DocumentLayoutController.blockIndex(at: idx, blocks: blocks) else { return false }
-            let block = blocks[bIndex]
-
-            let menu = NSMenu(title: "Block")
-            let typeMenu = NSMenu(title: "Change Block Type")
-            func addTypeItem(_ title: String, type: BlockType, headingLevel: Int?) {
-                let item = NSMenuItem(title: title, action: #selector(blockTypeMenuClicked(_:)), keyEquivalent: "")
-                item.target = self
-                item.representedObject = BlockTypeMenuRep(blockID: block.id, type: type, headingLevel: headingLevel)
-                typeMenu.addItem(item)
-            }
-            addTypeItem("Paragraph", type: .paragraph, headingLevel: nil)
-            addTypeItem("Heading 1", type: .heading, headingLevel: 1)
-            addTypeItem("Heading 2", type: .heading, headingLevel: 2)
-            addTypeItem("Heading 3", type: .heading, headingLevel: 3)
-            addTypeItem("List Item", type: .listItem, headingLevel: nil)
-            addTypeItem("Callout", type: .callout, headingLevel: nil)
-            addTypeItem("Code", type: .code, headingLevel: nil)
-            addTypeItem("Divider", type: .divider, headingLevel: nil)
-
-            let typeItem = NSMenuItem(title: "Change Block Type", action: nil, keyEquivalent: "")
-            typeItem.submenu = typeMenu
-
-            let dup = NSMenuItem(title: "Duplicate Block", action: #selector(blockMenuDuplicate(_:)), keyEquivalent: "")
-            dup.target = self
-            dup.representedObject = block.id
-
-            let del = NSMenuItem(title: "Delete Block", action: #selector(blockMenuDelete(_:)), keyEquivalent: "")
-            del.target = self
-            del.representedObject = block.id
-
-            menu.addItem(typeItem)
-            menu.addItem(.separator())
-            menu.addItem(dup)
-            menu.addItem(del)
-
-            NSMenu.popUpContextMenu(menu, with: event, for: textView)
-            return true
-        }
-
-        func toggleSpanStyle(_ style: SpanStyle) {
-            guard let textView else { return }
-            guard !textView.hasMarkedText() else { return }
-            let r = textView.selectedRange()
-            guard r.length > 0 else { return }
-            _ = runCommandSession(
-                textView: textView,
-                commands: [
-                .toggleSpanStyle(range: TextRange(start: r.location, length: r.length), style: style)
-                ]
-            )
-        }
-
-        fileprivate func handleSlashMenuCommand(_ command: NoteEditorSlashMenuCommand) -> Bool {
-            guard currentSlashQuery != nil else { return false }
-            switch command {
-            case .moveUp:
-                guard !slashMatches.isEmpty else { return true }
-                highlightedSlashIndex = max(0, highlightedSlashIndex - 1)
-                refreshSlashMenuUI()
-                return true
-            case .moveDown:
-                guard !slashMatches.isEmpty else { return true }
-                highlightedSlashIndex = min(slashMatches.count - 1, highlightedSlashIndex + 1)
-                refreshSlashMenuUI()
-                return true
-            case .close:
-                closeSlashMenu()
-                return true
-            case .commitSelection:
-                guard !slashMatches.isEmpty else { return false }
-                return commitHighlightedSlashCommand()
-            }
-        }
-
-        fileprivate func textStorageDidProcessEditing(
+        fileprivate func consumeTextStorageEdit(
             _ textStorage: NSTextStorage,
             editedMask: NSTextStorageEditActions,
             editedRange: NSRange,
@@ -381,15 +168,13 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
                 _ = runCommandSession(
                     textView: textView,
                     commands: [
-                    .replaceText(
-                        range: TextRange(start: diff.range.location, length: diff.range.length),
-                        replacement: diff.replacement
-                    )
+                        .replaceText(
+                            range: TextRange(start: diff.range.location, length: diff.range.length),
+                            replacement: diff.replacement
+                        )
                     ]
                 )
             } else {
-                // Full-buffer fallback: diff could not be reduced to a single region.
-                // Block structure may be partially collapsed; reconcile heading types, then apply via the command pipeline.
                 let previous = parent.document.text
                 let oldBlocks = parent.document.metadata.blocks
                 let replaceCmd = EditCommand.replaceText(
@@ -397,7 +182,11 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
                     replacement: storageString
                 )
                 let afterReplace = EditCommandEngine.apply(replaceCmd, to: parent.document)
-                let reconciled = EditCommandEngine.reconcileBlocksFromText(document: afterReplace, oldText: previous, oldBlocks: oldBlocks)
+                let reconciled = EditCommandEngine.reconcileBlocksFromText(
+                    document: afterReplace,
+                    oldText: previous,
+                    oldBlocks: oldBlocks
+                )
                 var commands: [EditCommand] = [replaceCmd]
                 if reconciled.metadata.blocks != afterReplace.metadata.blocks {
                     commands.append(.replaceMetadataBlocks(blocks: reconciled.metadata.blocks))
@@ -411,6 +200,7 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
             storageText: String,
             insertion: (range: NSRange, replacement: String)
         ) -> [EditCommand]? {
+            guard parent.modules.markdownShortcutDetector else { return nil }
             guard
                 let blockIndex = DocumentLayoutController.blockIndexMatchingTextEngineInsertion(
                     at: insertion.range.location,
@@ -434,6 +224,7 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
                 ]
             }
 
+            guard parent.modules.slashMenu else { return nil }
             if let slashMatch = SlashCommandDetector.match(
                 modelText: parent.document.text,
                 storageText: storageText,
@@ -448,6 +239,10 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
         }
 
         private func refreshSlashMenuState(for textView: NSTextView) {
+            guard parent.modules.slashMenu else {
+                closeSlashMenu()
+                return
+            }
             let selectedRange = textView.selectedRange()
             guard let query = SlashQueryDetector.match(text: textView.string, selectedRange: selectedRange) else {
                 closeSlashMenu()
@@ -569,11 +364,9 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
 
         func applyDocumentText() {
             defer {
-                refreshBlockChrome()
                 applyEditorFindFromQuery()
             }
             guard let textView else { return }
-            // Avoid clobbering an in-flight IME composition when the model updates (e.g. external reload).
             if textView.hasMarkedText() { return }
 
             if textView.string == parent.document.text {
@@ -611,11 +404,9 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
             )
         }
 
-        /// Selects the first case-insensitive match of the bound find query at or after the caret, wrapping to the document start.
         private func applyEditorFindFromQuery() {
             guard let textView else { return }
             guard !textView.hasMarkedText() else { return }
-            // Selecting in the note steals first responder from the toolbar search field; only apply when the body is active.
             guard textView.window?.firstResponder === textView else { return }
             let trimmed = parent.editorFindQuery.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { return }
@@ -640,14 +431,17 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
         }
 
         private func refreshVisualChrome(textView: NSTextView, document: NoteDocument) {
-            let linkOverlay = WikiLinkPresentationPolicy.isFrontendEnabled ? document.metadata.links : []
+            let wikiClick =
+                WikiLinkPresentationPolicy.isFrontendEnabled && parent.modules.wikiLinkClickThrough
+            let linkOverlay =
+                (WikiLinkPresentationPolicy.isFrontendEnabled && wikiClick) ? document.metadata.links : []
             if lastStyledDocument == document {
                 if let w = textView as? NoteEditorWikiLinkTextView {
                     w.wikiLinks = linkOverlay
                 }
                 return
             }
-            EditorVisualStyle.apply(to: textView, document: document)
+            EditorVisualStyle.applyPlainMarkdownSource(to: textView, document: document)
             lastStyledDocument = document
             if let w = textView as? NoteEditorWikiLinkTextView {
                 w.wikiLinks = linkOverlay
@@ -682,12 +476,13 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
 
             let replacement = replacementString ?? ""
 
-            // 1 MB UTF-16 unit guard — reject insertions that would overflow.
             let newLength = (textView.string.utf16.count - affectedCharRange.length) + replacement.utf16.count
             if newLength > 1_048_576 {
                 parent.onSizeLimitExceeded?()
                 return false
             }
+
+            guard parent.modules.layoutControllerNewlineRules else { return true }
 
             let selectedLocation = textView.selectedRange().location
 
@@ -697,17 +492,12 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
                 replacement: replacement,
                 selectedLocation: selectedLocation
             ) {
-                // After splitting, if the split-target block ended up as a heading (either because it
-                // was already a heading or because a slash command in the same batch promoted it),
-                // demote the newly created successor block to paragraph.
                 let didSplit = structural.contains { if case .splitBlock = $0 { return true }; return false }
-                // Capture the ID of the block that will be split (regardless of its current type).
-                // We check its type *after* the commands run so that slash-command promotions are included.
                 let splitTargetBlockID: String? = didSplit
                     ? DocumentLayoutController.blockIndexMatchingTextEngineInsertion(
                         at: selectedLocation,
                         blocks: parent.document.metadata.blocks
-                      ).map { parent.document.metadata.blocks[$0].id }
+                    ).map { parent.document.metadata.blocks[$0].id }
                     : nil
 
                 let targetSelection = NSRange(location: affectedCharRange.location + replacement.utf16.count, length: 0)
@@ -747,23 +537,41 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
                 parent.editorTextSelection = tr
             }
             refreshSlashMenuState(for: tv)
-            refreshBlockChrome()
-            syncTypingFont(textView: tv)
         }
 
-        /// Keeps `typingAttributes` font in sync with the block at the cursor so characters
-        /// typed into an empty or newly-created block appear at the correct size immediately.
-        private func syncTypingFont(textView: NSTextView) {
-            let docLength = (parent.document.text as NSString).length
-            let rawLoc = textView.selectedRange().location
-            let loc = min(rawLoc, docLength)
-            let blocks = parent.document.metadata.blocks
-            guard let idx = DocumentLayoutController.blockIndex(at: loc, blocks: blocks) else { return }
-            let desired = EditorVisualStyle.fontForBlock(blocks[idx])
-            var attrs = textView.typingAttributes
-            if (attrs[.font] as? NSFont) != desired {
-                attrs[.font] = desired
-                textView.typingAttributes = attrs
+        func toggleSpanStyle(_ style: SpanStyle) {
+            guard let textView else { return }
+            guard !textView.hasMarkedText() else { return }
+            let r = textView.selectedRange()
+            guard r.length > 0 else { return }
+            _ = runCommandSession(
+                textView: textView,
+                commands: [
+                    .toggleSpanStyle(range: TextRange(start: r.location, length: r.length), style: style)
+                ]
+            )
+        }
+
+        fileprivate func handleSlashMenuCommand(_ command: NoteEditorSlashMenuCommand) -> Bool {
+            guard parent.modules.slashMenu else { return false }
+            guard currentSlashQuery != nil else { return false }
+            switch command {
+            case .moveUp:
+                guard !slashMatches.isEmpty else { return true }
+                highlightedSlashIndex = max(0, highlightedSlashIndex - 1)
+                refreshSlashMenuUI()
+                return true
+            case .moveDown:
+                guard !slashMatches.isEmpty else { return true }
+                highlightedSlashIndex = min(slashMatches.count - 1, highlightedSlashIndex + 1)
+                refreshSlashMenuUI()
+                return true
+            case .close:
+                closeSlashMenu()
+                return true
+            case .commitSelection:
+                guard !slashMatches.isEmpty else { return false }
+                return commitHighlightedSlashCommand()
             }
         }
 
@@ -773,14 +581,11 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
             commands: [EditCommand],
             pendingSelection: NSRange? = nil
         ) -> NoteDocument {
-            defer { refreshBlockChrome() }
             if let pendingSelection {
                 self.pendingSelection = pendingSelection
             }
             let newDoc = parent.onCommands(commands)
 
-            // Apply the canonical model text immediately so both mutation paths stay ordered.
-            // **EditorSyncController** is the only supported path for this sync (see EditorSyncController.swift).
             var applying = isApplyingModelUpdate
             EditorSyncController.applyCanonicalDocument(
                 to: textView,

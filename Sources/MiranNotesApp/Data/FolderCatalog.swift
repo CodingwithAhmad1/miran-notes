@@ -70,7 +70,8 @@ struct FolderEntry: Codable, Equatable, Hashable, Sendable {
 }
 
 struct PathIndex: Codable, Equatable, Sendable {
-    static let currentSchemaVersion = 1
+    /// Bumped when ``PathIndexEntry/bodyFileExtension`` was added (v1 entries default to `txt` on decode).
+    static let currentSchemaVersion = 2
 
     var schemaVersion: Int
     var entries: [PathIndexEntry]
@@ -85,13 +86,30 @@ struct PathIndex: Codable, Equatable, Sendable {
         self.entries = entries
     }
 
-    mutating func upsert(noteID: UUID, folderID: UUID, relativePath: String, aliases: [String] = []) {
+    mutating func upsert(
+        noteID: UUID,
+        folderID: UUID,
+        relativePath: String,
+        aliases: [String] = [],
+        bodyFileExtension: String? = nil
+    ) {
         if let index = entries.firstIndex(where: { $0.noteID == noteID }) {
             entries[index].folderID = folderID
             entries[index].relativePath = relativePath
             entries[index].aliases = aliases
+            if let bodyFileExtension {
+                entries[index].bodyFileExtension = PathIndexEntry.normalizeBodyFileExtension(bodyFileExtension)
+            }
         } else {
-            entries.append(PathIndexEntry(noteID: noteID, folderID: folderID, relativePath: relativePath, aliases: aliases))
+            entries.append(
+                PathIndexEntry(
+                    noteID: noteID,
+                    folderID: folderID,
+                    relativePath: relativePath,
+                    aliases: aliases,
+                    bodyFileExtension: PathIndexEntry.normalizeBodyFileExtension(bodyFileExtension ?? "txt")
+                )
+            )
         }
         isDirty = true
     }
@@ -118,4 +136,46 @@ struct PathIndexEntry: Codable, Equatable, Hashable, Sendable {
     var folderID: UUID
     var relativePath: String
     var aliases: [String]
+    /// On-disk body: `txt` or `md`.
+    var bodyFileExtension: String
+
+    init(
+        noteID: UUID,
+        folderID: UUID,
+        relativePath: String,
+        aliases: [String],
+        bodyFileExtension: String = "txt"
+    ) {
+        self.noteID = noteID
+        self.folderID = folderID
+        self.relativePath = relativePath
+        self.aliases = aliases
+        self.bodyFileExtension = Self.normalizeBodyFileExtension(bodyFileExtension)
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case noteID, folderID, relativePath, aliases, bodyFileExtension
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        noteID = try c.decode(UUID.self, forKey: .noteID)
+        folderID = try c.decode(UUID.self, forKey: .folderID)
+        relativePath = try c.decode(String.self, forKey: .relativePath)
+        aliases = try c.decodeIfPresent([String].self, forKey: .aliases) ?? []
+        bodyFileExtension = Self.normalizeBodyFileExtension(try c.decodeIfPresent(String.self, forKey: .bodyFileExtension) ?? "txt")
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(noteID, forKey: .noteID)
+        try c.encode(folderID, forKey: .folderID)
+        try c.encode(relativePath, forKey: .relativePath)
+        try c.encode(aliases, forKey: .aliases)
+        try c.encode(bodyFileExtension, forKey: .bodyFileExtension)
+    }
+
+    static func normalizeBodyFileExtension(_ raw: String) -> String {
+        NoteBodyFileExtension.normalize(raw).fileExtension
+    }
 }

@@ -89,6 +89,49 @@ enum EditorVisualStyle {
         }
     }
 
+    /// Uniform monospaced source styling for plain-markdown editing; still applies span fonts and wiki link coloring when enabled.
+    static func applyPlainMarkdownSource(to textView: NSTextView, document: NoteDocument) {
+        guard let storage = textView.textStorage else { return }
+        let len = storage.length
+        let bodyColor = NSColor.textColor
+        let linkColor = NSColor.linkColor
+        let mono = NSFont.monospacedSystemFont(ofSize: 14, weight: .regular)
+
+        textView.font = mono
+        var typing = textView.typingAttributes
+        typing[.foregroundColor] = bodyColor
+        typing[.font] = mono
+        textView.typingAttributes = typing
+
+        storage.beginEditing()
+        defer { storage.endEditing() }
+
+        if len == 0 { return }
+
+        let fullRange = NSRange(location: 0, length: len)
+        storage.removeAttribute(.foregroundColor, range: fullRange)
+        storage.removeAttribute(.font, range: fullRange)
+        storage.addAttribute(.foregroundColor, value: bodyColor, range: fullRange)
+        storage.addAttribute(.font, value: mono, range: fullRange)
+
+        let sortedSpans = document.metadata.spans.sorted { $0.range.start < $1.range.start }
+        for span in sortedSpans {
+            let r = clampedNSRange(span.range, maxUTF16: len)
+            guard r.length > 0 else { continue }
+            let base = (storage.attribute(.font, at: r.location, effectiveRange: nil) as? NSFont) ?? mono
+            let font = fontByApplyingSpan(base: base, style: span.style)
+            storage.addAttribute(.font, value: font, range: r)
+        }
+
+        if WikiLinkPresentationPolicy.isFrontendEnabled {
+            for link in document.metadata.links {
+                let r = clampedNSRange(link.range, maxUTF16: len)
+                guard r.length > 0 else { continue }
+                storage.addAttribute(.foregroundColor, value: linkColor, range: r)
+            }
+        }
+    }
+
     private static func clampedNSRange(_ range: MiranNotesCore.TextRange, maxUTF16: Int) -> NSRange {
         let start = min(max(0, range.start), maxUTF16)
         let end = min(max(start, range.end), maxUTF16)

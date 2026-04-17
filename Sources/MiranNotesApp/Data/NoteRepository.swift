@@ -21,6 +21,8 @@ enum NoteRepositoryError: LocalizedError, Equatable {
     case invalidFolderMove
     case folderNotEmpty(UUID)
     case unresolvedNoteIdentity(String)
+    /// Both `.txt` and `.md` bodies exist for the same note stem (invalid vault state).
+    case ambiguousNoteBody(String)
     /// The vault root path is missing or is not a directory (the app does not create the vault folder itself).
     case vaultRootNotDirectory(path: String)
 
@@ -46,6 +48,8 @@ enum NoteRepositoryError: LocalizedError, Equatable {
             return "Folder is not empty (contains notes or folders): \(id.uuidString)"
         case let .unresolvedNoteIdentity(path):
             return "Could not resolve note identity for path: \(path)"
+        case let .ambiguousNoteBody(path):
+            return "Note has both .txt and .md files: \(path)"
         case let .vaultRootNotDirectory(path):
             return "Vault folder does not exist or is not a directory: \(path)"
         }
@@ -60,6 +64,16 @@ struct NoteSummary: Identifiable, Hashable, Sendable {
     var relativePath: String
     /// Folder that owns this note in `FolderCatalog` (vault root uses `FolderCatalog.rootFolderID`).
     var folderID: UUID
+    /// On-disk body: `txt` or `md`.
+    var bodyFileExtension: String
+
+    init(noteID: UUID, title: String, relativePath: String, folderID: UUID, bodyFileExtension: String = "txt") {
+        self.noteID = noteID
+        self.title = title
+        self.relativePath = relativePath
+        self.folderID = folderID
+        self.bodyFileExtension = PathIndexEntry.normalizeBodyFileExtension(bodyFileExtension)
+    }
 }
 
 /// One incoming link from a source note (backlink row in the UI).
@@ -95,6 +109,13 @@ actor NoteRepository {
             )
         }
         relationshipIndex.replaceLinks(from: noteID, with: linkRels + artifactRels)
+    }
+
+    private func bodyExtensionForPath(relativePath: String, noteID: UUID?, pathIndex: PathIndex) -> String? {
+        if let noteID, let row = pathIndex.entries.first(where: { $0.noteID == noteID }) {
+            return row.bodyFileExtension
+        }
+        return pathIndex.entries.first(where: { $0.relativePath == relativePath })?.bodyFileExtension
     }
 
     /// Rewrites a relative path when a folder prefix changes; returns `nil` if the path is outside `oldPrefix`.
@@ -220,6 +241,7 @@ actor NoteRepository {
 
         let pathIndex = try await index.loadPathIndex()
         let folderByNote = Dictionary(uniqueKeysWithValues: pathIndex.entries.map { ($0.noteID, $0.folderID) })
+        let extByNote = Dictionary(uniqueKeysWithValues: pathIndex.entries.map { ($0.noteID, $0.bodyFileExtension) })
 
         return manifest.entries
             .sorted { $0.relativePath.lowercased() < $1.relativePath.lowercased() }
@@ -229,7 +251,8 @@ actor NoteRepository {
                     noteID: entry.noteID,
                     title: displayTitle,
                     relativePath: entry.relativePath,
-                    folderID: folderByNote[entry.noteID] ?? FolderCatalog.rootFolderID
+                    folderID: folderByNote[entry.noteID] ?? FolderCatalog.rootFolderID,
+                    bodyFileExtension: extByNote[entry.noteID] ?? "txt"
                 )
             }
     }
@@ -273,13 +296,18 @@ actor NoteRepository {
     func rebuildLinkGraphFull() async throws -> VaultIntegrityResult {
         let manifest = try await loadOrRebuildManifest()
         var graph = LinkGraph()
+        let pathIndex = try await index.loadPathIndex()
         for entry in manifest.entries {
-            let doc = try await files.loadNote(relativePath: entry.relativePath, fallbackNoteID: entry.noteID).document
+            let hint = bodyExtensionForPath(relativePath: entry.relativePath, noteID: entry.noteID, pathIndex: pathIndex)
+            let doc = try await files.loadNote(
+                relativePath: entry.relativePath,
+                fallbackNoteID: entry.noteID,
+                bodyFileExtension: hint
+            ).document
             graph.setOutgoing(from: entry.noteID, to: doc.metadata.links.map(\.targetNoteID))
         }
         let rel = try await index.loadRelationshipIndex()
         let folderCatalog = try await index.loadFolderCatalog()
-        let pathIndex = try await index.loadPathIndex()
         let integrity = try await index.commitIndexOnly(
             manifest: manifest,
             linkGraph: graph,
@@ -350,6 +378,9 @@ actor NoteRepository {
     func loadNote(relativePath: String) async throws -> NoteLoadResult {
         try await files.ensureVault()
         let manifest = try await loadOrRebuildManifest()
+        let pathIndex = try await index.loadPathIndex()
+        let manifestNoteID = manifest.entry(relativePath: relativePath)?.noteID
+        let bodyHint = bodyExtensionForPath(relativePath: relativePath, noteID: manifestNoteID, pathIndex: pathIndex)
         let decoder = JSONDecoder()
         if let meta = try NoteIdentityResolution.decodeSidecarMetadata(
             vaultRoot: vaultURL,
@@ -374,12 +405,24 @@ actor NoteRepository {
                     )
                 )
             }
-            return try await files.loadNote(relativePath: relativePath, fallbackNoteID: nil)
+            return try await files.loadNote(
+                relativePath: relativePath,
+                fallbackNoteID: nil,
+                bodyFileExtension: bodyHint ?? bodyExtensionForPath(
+                    relativePath: relativePath,
+                    noteID: meta.noteID,
+                    pathIndex: pathIndex
+                )
+            )
         }
         guard let entry = manifest.entry(relativePath: relativePath) else {
             throw NoteRepositoryError.noteNotFound(relativePath)
         }
-        return try await files.loadNote(relativePath: relativePath, fallbackNoteID: entry.noteID)
+        return try await files.loadNote(
+            relativePath: relativePath,
+            fallbackNoteID: entry.noteID,
+            bodyFileExtension: bodyHint
+        )
     }
 
     /// Legacy API for tests and callers still using a single path segment.
@@ -388,21 +431,31 @@ actor NoteRepository {
     }
 
     func noteTextFileSHA256(relativePath: String) async throws -> String {
-        try await files.noteTextFileSHA256(relativePath: relativePath)
+        let pathIndex = try await index.loadPathIndex()
+        let manifest = try await loadOrRebuildManifest()
+        let nid = manifest.entry(relativePath: relativePath)?.noteID
+        let hint = bodyExtensionForPath(relativePath: relativePath, noteID: nid, pathIndex: pathIndex)
+        return try await files.noteTextFileSHA256(relativePath: relativePath, bodyFileExtension: hint)
     }
 
     func readRawNoteText(relativePath: String) async throws -> String {
-        try await files.readRawNoteText(relativePath: relativePath)
+        let pathIndex = try await index.loadPathIndex()
+        let manifest = try await loadOrRebuildManifest()
+        let nid = manifest.entry(relativePath: relativePath)?.noteID
+        let hint = bodyExtensionForPath(relativePath: relativePath, noteID: nid, pathIndex: pathIndex)
+        return try await files.readRawNoteText(relativePath: relativePath, bodyFileExtension: hint)
     }
 
     func buildBodySearchIndex() async throws -> [UUID: String] {
         let manifest = try await loadOrRebuildManifest()
         var result: [UUID: String] = [:]
         result.reserveCapacity(manifest.entries.count)
+        let pathIndex = try await index.loadPathIndex()
         for entry in manifest.entries {
             let raw: String
             do {
-                raw = try await files.readRawNoteText(relativePath: entry.relativePath)
+                let hint = bodyExtensionForPath(relativePath: entry.relativePath, noteID: entry.noteID, pathIndex: pathIndex)
+                raw = try await files.readRawNoteText(relativePath: entry.relativePath, bodyFileExtension: hint)
             } catch {
                 Logger.vault.debug(
                     "buildBodySearchIndex skip path=\(entry.relativePath, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
@@ -415,15 +468,28 @@ actor NoteRepository {
     }
 
     func noteModifiedDate(relativePath: String) async throws -> Date? {
-        try await files.noteModifiedDate(relativePath: relativePath)
+        let pathIndex = try await index.loadPathIndex()
+        let manifest = try await loadOrRebuildManifest()
+        let nid = manifest.entry(relativePath: relativePath)?.noteID
+        let hint = bodyExtensionForPath(relativePath: relativePath, noteID: nid, pathIndex: pathIndex)
+        return try await files.noteModifiedDate(relativePath: relativePath, bodyFileExtension: hint)
     }
 
     func noteRevisionToken(relativePath: String) async throws -> DocumentRevisionToken? {
-        try await files.noteRevisionToken(relativePath: relativePath)
+        let pathIndex = try await index.loadPathIndex()
+        let manifest = try await loadOrRebuildManifest()
+        let nid = manifest.entry(relativePath: relativePath)?.noteID
+        let hint = bodyExtensionForPath(relativePath: relativePath, noteID: nid, pathIndex: pathIndex)
+        return try await files.noteRevisionToken(relativePath: relativePath, bodyFileExtension: hint)
     }
 
     @discardableResult
-    func save(_ note: NoteDocument, asRelativePath relativePath: String, folderID: UUID = FolderCatalog.rootFolderID) async throws -> VaultIntegrityResult {
+    func save(
+        _ note: NoteDocument,
+        asRelativePath relativePath: String,
+        folderID: UUID = FolderCatalog.rootFolderID,
+        bodyFileExtension: String? = nil
+    ) async throws -> VaultIntegrityResult {
         try VaultPath.validateRelativePath(relativePath)
         try VaultPath.ensureParentDirectories(vaultRoot: vaultURL, relativePathWithoutExtension: relativePath)
         try await files.ensureVault()
@@ -435,7 +501,18 @@ actor NoteRepository {
         )
         NoteIntegrity.logIfInvalid(document: documentToPersist)
 
-        let textURL = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: relativePath, extension: "txt")
+        var pathIndex = try await index.loadPathIndex()
+        let resolvedBody =
+            bodyFileExtension.map { PathIndexEntry.normalizeBodyFileExtension($0) }
+            ?? pathIndex.entries.first { $0.noteID == documentToPersist.metadata.noteID }?.bodyFileExtension
+            ?? pathIndex.entries.first { $0.relativePath == relativePath }?.bodyFileExtension
+            ?? "txt"
+
+        let textURL = VaultPath.fileURL(
+            vaultRoot: vaultURL,
+            relativePathWithoutExtension: relativePath,
+            extension: resolvedBody
+        )
         let metaURL = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: relativePath, extension: "meta.json")
 
         var manifest = await index.loadManifestFromDiskOnly() ?? VaultManifest()
@@ -452,11 +529,11 @@ actor NoteRepository {
 
         var folderCatalog = try await index.loadFolderCatalog()
         folderCatalog.ensureRoot()
-        var pathIndex = try await index.loadPathIndex()
         pathIndex.upsert(
             noteID: documentToPersist.metadata.noteID,
             folderID: folderID,
-            relativePath: relativePath
+            relativePath: relativePath,
+            bodyFileExtension: resolvedBody
         )
 
         return try await index.executeNoteCommit(
@@ -491,13 +568,24 @@ actor NoteRepository {
     func renameNote(from oldRelativePath: String, to newTitle: String) async throws -> String {
         try VaultPath.validateRelativePath(oldRelativePath)
         try await files.ensureVault()
-        let oldTxt = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: oldRelativePath, extension: "txt")
-        guard FileManager.default.fileExists(atPath: oldTxt.path) else {
+        let pathIndexProbe = try await index.loadPathIndex()
+        let manifestProbe = try await loadOrRebuildManifest()
+        let probeID = manifestProbe.entry(relativePath: oldRelativePath)?.noteID
+        let bodyExt = bodyExtensionForPath(relativePath: oldRelativePath, noteID: probeID, pathIndex: pathIndexProbe)
+            ?? PathIndexEntry.normalizeBodyFileExtension(
+                (try? NoteFileActor.resolveBodyExtension(vaultRoot: vaultURL, relativePath: oldRelativePath, preferred: nil)) ?? "txt"
+            )
+        let oldBodyURL = VaultPath.fileURL(
+            vaultRoot: vaultURL,
+            relativePathWithoutExtension: oldRelativePath,
+            extension: bodyExt
+        )
+        guard FileManager.default.fileExists(atPath: oldBodyURL.path) else {
             throw NoteRepositoryError.noteNotFound(oldRelativePath)
         }
 
         let doc = try await loadNote(relativePath: oldRelativePath).document
-        let folderID = (try await index.loadPathIndex()).entries.first { $0.noteID == doc.metadata.noteID }?.folderID ?? FolderCatalog.rootFolderID
+        let folderID = pathIndexProbe.entries.first { $0.noteID == doc.metadata.noteID }?.folderID ?? FolderCatalog.rootFolderID
 
         let parentDir = (oldRelativePath as NSString).deletingLastPathComponent
         let stemSlug: String
@@ -534,7 +622,11 @@ actor NoteRepository {
         let uniqueNew = try await files.uniqueAvailableRelativePath(inDirectoryPrefix: parentDir.isEmpty ? nil : parentDir, slugStem: stemSlug)
 
         let oldMeta = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: oldRelativePath, extension: "meta.json")
-        let newTxt = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: uniqueNew, extension: "txt")
+        let newBody = VaultPath.fileURL(
+            vaultRoot: vaultURL,
+            relativePathWithoutExtension: uniqueNew,
+            extension: bodyExt
+        )
         let newMeta = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: uniqueNew, extension: "meta.json")
 
         try VaultPath.ensureParentDirectories(vaultRoot: vaultURL, relativePathWithoutExtension: uniqueNew)
@@ -551,7 +643,12 @@ actor NoteRepository {
         var folderCatalog = try await index.loadFolderCatalog()
         folderCatalog.ensureRoot()
         var pathIndex = try await index.loadPathIndex()
-        pathIndex.upsert(noteID: doc.metadata.noteID, folderID: folderID, relativePath: uniqueNew)
+        pathIndex.upsert(
+            noteID: doc.metadata.noteID,
+            folderID: folderID,
+            relativePath: uniqueNew,
+            bodyFileExtension: bodyExt
+        )
 
         let normalized = RangeNormalizer.normalize(metadata: doc.metadata, for: doc.text)
         let documentToPersist = NoteDocument(text: doc.text, metadata: normalized.normalizedMetadata)
@@ -560,14 +657,14 @@ actor NoteRepository {
             label: "rename:\(oldRelativePath)->\(uniqueNew)",
             relativePath: uniqueNew,
             document: documentToPersist,
-            textURL: newTxt,
+            textURL: newBody,
             metaURL: newMeta,
             manifest: manifest,
             linkGraph: graph,
             relationshipIndex: relationshipIndex,
             folderCatalog: folderCatalog,
             pathIndex: pathIndex,
-            deletePathsAfterCommit: [oldTxt, oldMeta].filter { FileManager.default.fileExists(atPath: $0.path) }
+            deletePathsAfterCommit: [oldBodyURL, oldMeta].filter { FileManager.default.fileExists(atPath: $0.path) }
         )
         await index.logIfIntegrityIssues(renameIntegrity)
 
@@ -606,13 +703,15 @@ actor NoteRepository {
         )
     }
 
-    func createNote(named name: String, folderID: UUID) async throws -> (NoteDocument, String) {
+    func createNote(named name: String, folderID: UUID, bodyFileExtension: String = "txt") async throws -> (NoteDocument, String) {
         try await files.ensureVault()
         var folderCatalog = try await index.loadFolderCatalog()
         folderCatalog.ensureRoot()
         guard folderID == FolderCatalog.rootFolderID || folderCatalog.folder(id: folderID) != nil else {
             throw NoteRepositoryError.folderNotFound(folderID)
         }
+
+        let resolvedExt = PathIndexEntry.normalizeBodyFileExtension(bodyFileExtension)
 
         let dirPrefix = folderCatalog.relativeDirectoryPath(for: folderID)
         var stem = await files.slugify(name.isEmpty ? "untitled-note" : name)
@@ -621,18 +720,27 @@ actor NoteRepository {
 
         let text = ""
         let noteID = UUID()
+        let initialBlock: Block =
+            resolvedExt == "md"
+            ? Block(
+                id: UUID().uuidString,
+                type: .paragraph,
+                range: TextRange(start: 0, length: 0),
+                level: nil,
+                icon: nil
+            )
+            : Block(
+                id: UUID().uuidString,
+                type: .heading,
+                range: TextRange(start: 0, length: 0),
+                level: 1,
+                icon: nil
+            )
+
         let metadata = NoteMetadata(
             schemaVersion: NoteMetadata.currentSchemaVersion,
             noteID: noteID,
-            blocks: [
-                Block(
-                    id: UUID().uuidString,
-                    type: .heading,
-                    range: TextRange(start: 0, length: 0),
-                    level: 1,
-                    icon: nil
-                )
-            ],
+            blocks: [initialBlock],
             spans: []
         )
 
@@ -645,7 +753,11 @@ actor NoteRepository {
         let documentToPersist = NoteDocument(text: document.text, metadata: normalized.normalizedMetadata)
         NoteIntegrity.logIfInvalid(document: documentToPersist)
 
-        let textURL = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: relativePath, extension: "txt")
+        let textURL = VaultPath.fileURL(
+            vaultRoot: vaultURL,
+            relativePathWithoutExtension: relativePath,
+            extension: resolvedExt
+        )
         let metaURL = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: relativePath, extension: "meta.json")
 
         var manifest = await index.loadManifestFromDiskOnly() ?? VaultManifest()
@@ -663,7 +775,8 @@ actor NoteRepository {
         pathIndex.upsert(
             noteID: documentToPersist.metadata.noteID,
             folderID: folderID,
-            relativePath: relativePath
+            relativePath: relativePath,
+            bodyFileExtension: resolvedExt
         )
 
         _ = try await index.executeNoteCommit(
@@ -703,8 +816,9 @@ actor NoteRepository {
 
         for entry in manifest.entries {
             let txtURL = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: entry.relativePath, extension: "txt")
+            let mdURL = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: entry.relativePath, extension: "md")
             let metaURL = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: entry.relativePath, extension: "meta.json")
-            guard FileManager.default.fileExists(atPath: txtURL.path) else { continue }
+            guard FileManager.default.fileExists(atPath: txtURL.path) || FileManager.default.fileExists(atPath: mdURL.path) else { continue }
             var needsWrite = !FileManager.default.fileExists(atPath: metaURL.path)
             if !needsWrite, let data = try? Data(contentsOf: metaURL) {
                 needsWrite = (try? decoder.decode(NoteMetadata.self, from: data)) == nil
@@ -712,7 +826,12 @@ actor NoteRepository {
             guard needsWrite else { continue }
             let folderID = folderByNote[entry.noteID] ?? Self.inferFolderID(forNotePath: entry.relativePath, folderCatalog: folderCatalog)
             do {
-                let doc = try await files.loadNote(relativePath: entry.relativePath, fallbackNoteID: entry.noteID).document
+                let hint = bodyExtensionForPath(relativePath: entry.relativePath, noteID: entry.noteID, pathIndex: pathIndex)
+                let doc = try await files.loadNote(
+                    relativePath: entry.relativePath,
+                    fallbackNoteID: entry.noteID,
+                    bodyFileExtension: hint
+                ).document
                 _ = try await save(doc, asRelativePath: entry.relativePath, folderID: folderID)
             } catch {
                 Logger.vault.error("materializeMissingSidecars failed path=\(entry.relativePath, privacy: .public) error=\(String(describing: error), privacy: .public)")
@@ -726,7 +845,8 @@ actor NoteRepository {
         let originalCount = next.entries.count
         next.entries.removeAll { entry in
             let txt = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: entry.relativePath, extension: "txt")
-            return !FileManager.default.fileExists(atPath: txt.path)
+            let md = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: entry.relativePath, extension: "md")
+            return !FileManager.default.fileExists(atPath: txt.path) && !FileManager.default.fileExists(atPath: md.path)
         }
         if next.entries.count != originalCount {
             next.isDirty = true
@@ -755,10 +875,11 @@ actor NoteRepository {
             next.upsert(noteID: allocatedID, relativePath: rel, title: title)
             added += 1
             let folderID = Self.inferFolderID(forNotePath: rel, folderCatalog: folderCatalog)
-            let doc = try await files.loadNote(relativePath: rel, fallbackNoteID: allocatedID).document
+            let probed = try NoteFileActor.resolveBodyExtension(vaultRoot: vaultURL, relativePath: rel, preferred: nil)
+            let doc = try await files.loadNote(relativePath: rel, fallbackNoteID: allocatedID, bodyFileExtension: probed).document
             let metaURL = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: rel, extension: "meta.json")
             if !FileManager.default.fileExists(atPath: metaURL.path) {
-                try await save(doc, asRelativePath: rel, folderID: folderID)
+                try await save(doc, asRelativePath: rel, folderID: folderID, bodyFileExtension: probed)
             }
         }
         VaultTelemetry.logManifestReconcile(removed: removed, added: added)
@@ -790,10 +911,11 @@ actor NoteRepository {
             let title = VaultPath.displayTitle(forRelativePath: rel)
             manifest.upsert(noteID: allocatedID, relativePath: rel, title: title)
             let folderID = Self.inferFolderID(forNotePath: rel, folderCatalog: folderCatalog)
-            let doc = try await files.loadNote(relativePath: rel, fallbackNoteID: allocatedID).document
+            let probed = try NoteFileActor.resolveBodyExtension(vaultRoot: vaultURL, relativePath: rel, preferred: nil)
+            let doc = try await files.loadNote(relativePath: rel, fallbackNoteID: allocatedID, bodyFileExtension: probed).document
             let metaURL = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: rel, extension: "meta.json")
             if !FileManager.default.fileExists(atPath: metaURL.path) {
-                try await save(doc, asRelativePath: rel, folderID: folderID)
+                try await save(doc, asRelativePath: rel, folderID: folderID, bodyFileExtension: probed)
             }
         }
         let graph = try await index.loadLinkGraph()
@@ -916,10 +1038,11 @@ actor NoteRepository {
         var toDelete: [URL] = []
         for noteID in noteIDsToDelete {
             if let relPath = noteRelativePathsByID[noteID] {
+                let ext = entriesToDelete.first { $0.noteID == noteID }?.bodyFileExtension ?? "txt"
                 let txt = VaultPath.fileURL(
                     vaultRoot: vaultURL,
                     relativePathWithoutExtension: relPath,
-                    extension: "txt"
+                    extension: ext
                 )
                 let meta = VaultPath.fileURL(
                     vaultRoot: vaultURL,
@@ -1053,7 +1176,9 @@ actor NoteRepository {
         }
         let oldPath = manifestEntry.relativePath
 
-        let folderID = (try await index.loadPathIndex()).entries.first { $0.noteID == noteID }?.folderID ?? FolderCatalog.rootFolderID
+        let pathIndexForMove = try await index.loadPathIndex()
+        let bodyExt = pathIndexForMove.entries.first { $0.noteID == noteID }?.bodyFileExtension ?? "txt"
+        let folderID = pathIndexForMove.entries.first { $0.noteID == noteID }?.folderID ?? FolderCatalog.rootFolderID
         guard folderID != toFolderID else { return }
 
         let dirPrefix = folderCatalog.relativeDirectoryPath(for: toFolderID)
@@ -1062,7 +1187,7 @@ actor NoteRepository {
 
         if uniqueNew == oldPath {
             var pathIndex = try await index.loadPathIndex()
-            pathIndex.upsert(noteID: noteID, folderID: toFolderID, relativePath: oldPath)
+            pathIndex.upsert(noteID: noteID, folderID: toFolderID, relativePath: oldPath, bodyFileExtension: bodyExt)
             let manifest = try await loadOrRebuildManifest()
             let graph = try await index.loadLinkGraph()
             let rel = try await index.loadRelationshipIndex()
@@ -1076,9 +1201,9 @@ actor NoteRepository {
             return
         }
 
-        let oldTxt = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: oldPath, extension: "txt")
+        let oldTxt = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: oldPath, extension: bodyExt)
         let oldMeta = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: oldPath, extension: "meta.json")
-        let newTxt = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: uniqueNew, extension: "txt")
+        let newTxt = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: uniqueNew, extension: bodyExt)
         let newMeta = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: uniqueNew, extension: "meta.json")
         try VaultPath.ensureParentDirectories(vaultRoot: vaultURL, relativePathWithoutExtension: uniqueNew)
 
@@ -1093,7 +1218,7 @@ actor NoteRepository {
         updateRelationshipIndex(&relationshipIndex, for: doc)
 
         var pathIndex = try await index.loadPathIndex()
-        pathIndex.upsert(noteID: noteID, folderID: toFolderID, relativePath: uniqueNew)
+        pathIndex.upsert(noteID: noteID, folderID: toFolderID, relativePath: uniqueNew, bodyFileExtension: bodyExt)
 
         let normalized = RangeNormalizer.normalize(metadata: doc.metadata, for: doc.text)
         let documentToPersist = NoteDocument(text: doc.text, metadata: normalized.normalizedMetadata)
@@ -1124,6 +1249,7 @@ actor NoteRepository {
         manifest.remove(noteID: noteID)
 
         var pathIndex = try await index.loadPathIndex()
+        let bodyExt = pathIndex.entries.first { $0.noteID == noteID }?.bodyFileExtension ?? "txt"
         pathIndex.remove(noteID: noteID)
 
         var graph = try await index.loadLinkGraph()
@@ -1135,7 +1261,7 @@ actor NoteRepository {
         var folderCatalog = try await index.loadFolderCatalog()
         folderCatalog.ensureRoot()
 
-        let txt = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: relPath, extension: "txt")
+        let txt = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: relPath, extension: bodyExt)
         let meta = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: relPath, extension: "meta.json")
         let aux = VaultPaths.auxDirectory(vaultURL: vaultURL, noteID: noteID)
         var toDelete: [URL] = [txt, meta].filter { FileManager.default.fileExists(atPath: $0.path) }

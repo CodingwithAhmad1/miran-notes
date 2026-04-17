@@ -73,7 +73,11 @@ struct MiranNotesApp: App {
                         presentOpenWorkspacePanel: presentOpenWorkspacePanel,
                         conflictDetailsPresented: $conflictDetailsPresented,
                         conflictDetailsDiskDate: $conflictDetailsDiskDate,
-                        editingHelpPresented: $editingHelpPresented
+                        editingHelpPresented: $editingHelpPresented,
+                        onWorkspaceShortcutsChanged: {
+                            menuShortcutEpoch &+= 1
+                            WorkspaceShortcutCarbonPolicy.suppressGlobalHotkeysForMenuShortcuts()
+                        }
                     )
                 } else {
                     VaultWelcomeView(onOpenVault: presentOpenWorkspacePanel)
@@ -98,10 +102,7 @@ struct MiranNotesApp: App {
         .commands { appCommands }
 
         Settings {
-            MiranNotesSettingsView {
-                menuShortcutEpoch &+= 1
-                WorkspaceShortcutCarbonPolicy.suppressGlobalHotkeysForMenuShortcuts()
-            }
+            MiranNotesSettingsView()
         }
     }
 
@@ -197,6 +198,7 @@ private struct MiranNotesMainWindowContent: View {
     @Binding var conflictDetailsPresented: Bool
     @Binding var conflictDetailsDiskDate: Date?
     @Binding var editingHelpPresented: Bool
+    var onWorkspaceShortcutsChanged: () -> Void
     @State private var isToolbarSearchFocused = false
     /// Per-tile search field focus in multi-pane layouts (principal search lives in each tile’s `NavigationStack`).
     @State private var multipaneSearchFocused: [Bool] = []
@@ -256,6 +258,13 @@ private struct MiranNotesMainWindowContent: View {
                 ExternalEditCompareSheet(payload: payload) {
                     model.externalTextCompare = nil
                 }
+            }
+            .sheet(item: $model.pendingFolderFirstNoteBodyPicker) { _ in
+                FolderFirstNoteBodyFormatSheet(
+                    onChooseBlocks: { model.confirmPendingFirstNoteBodyFormat(bodyFileExtension: "txt") },
+                    onChooseMarkdown: { model.confirmPendingFirstNoteBodyFormat(bodyFileExtension: "md") },
+                    onCancel: { model.cancelPendingFirstNoteBodyPicker() }
+                )
             }
             .sheet(isPresented: $editingHelpPresented) {
                 EditingHelpSheet {
@@ -390,7 +399,8 @@ private struct MiranNotesMainWindowContent: View {
                         WorkspaceDetailColumnView(
                             model: model,
                             paneIndex: 0,
-                            onClearToolbarSearchFocus: clearToolbarSearchFocus
+                            onClearToolbarSearchFocus: clearToolbarSearchFocus,
+                            onWorkspaceShortcutsChanged: onWorkspaceShortcutsChanged
                         )
                     }
                 } else {
@@ -512,7 +522,8 @@ private struct MiranNotesMainWindowContent: View {
                     model: model,
                     paneIndex: paneIndex,
                     onClearToolbarSearchFocus: clearToolbarSearchFocus,
-                    multipaneSearchFocused: multipaneSearchFieldBinding(paneIndex: paneIndex)
+                    multipaneSearchFocused: multipaneSearchFieldBinding(paneIndex: paneIndex),
+                    onWorkspaceShortcutsChanged: onWorkspaceShortcutsChanged
                 )
             }
         }
@@ -643,6 +654,7 @@ private struct WorkspaceDetailColumnView: View {
     var onClearToolbarSearchFocus: () -> Void
     /// When non-`nil`, this column shows a per-tile search field in its local toolbar (multi-pane layouts).
     var multipaneSearchFocused: Binding<Bool>? = nil
+    var onWorkspaceShortcutsChanged: () -> Void = {}
     @Environment(\.controlActiveState) private var controlActiveState
 
     private func showsLoadedEditor(forPane pane: Int) -> Bool {
@@ -732,7 +744,10 @@ private struct WorkspaceDetailColumnView: View {
                 Group {
                     if model.isFolderManagementPresented {
                         if paneIndex == model.activePaneIndex {
-                            FolderManagementDashboardView(model: model)
+                            FolderManagementDashboardView(
+                                model: model,
+                                onWorkspaceShortcutsChanged: onWorkspaceShortcutsChanged
+                            )
                         } else {
                             ContentUnavailableView(
                                 "Folder management",
@@ -784,6 +799,43 @@ private struct WorkspaceDetailColumnView: View {
     }
 }
 
+private struct FolderFirstNoteBodyFormatSheet: View {
+    var onChooseBlocks: () -> Void
+    var onChooseMarkdown: () -> Void
+    var onCancel: () -> Void
+
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("This folder does not have any notes yet. Choose how new notes should be stored on disk.")
+                    .font(.body)
+                    .fixedSize(horizontal: false, vertical: true)
+                VStack(alignment: .leading, spacing: 10) {
+                    Button(action: onChooseBlocks) {
+                        Label("Miran blocks (.txt)", systemImage: "square.grid.2x2")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.accentColor)
+                    Button(action: onChooseMarkdown) {
+                        Label("Markdown source (.md)", systemImage: "doc.richtext")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .buttonStyle(.bordered)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(20)
+            .frame(minWidth: 380, minHeight: 220)
+            .navigationTitle("Note format")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel", action: onCancel)
+                }
+            }
+        }
+    }
+}
 
 struct EditorRootView: View {
     @Bindable var model: AppModel
@@ -841,6 +893,9 @@ struct EditorRootView: View {
                 editorBodyFocusNonce += 1
             }
             noteEditorSurface(fallbackDocument: current)
+                .id(
+                    "\(model.effectiveEditorActivationProfile(forPane: paneIndex).editorKind.rawValue)-\(model.workspacePanes[paneIndex].selectedNoteID?.uuidString ?? "none")"
+                )
         }
         .navigationTitle("")
         .simultaneousGesture(
@@ -852,8 +907,10 @@ struct EditorRootView: View {
         )
     }
 
-    private func noteEditorSurface(fallbackDocument: NoteDocument) -> SingleSurfaceNoteEditor {
+    @ViewBuilder
+    private func noteEditorSurface(fallbackDocument: NoteDocument) -> some View {
         let p = paneIndex
+        let profile = model.effectiveEditorActivationProfile(forPane: p)
         let wiki: ((UUID) -> Void)? =
             WikiLinkPresentationPolicy.isFrontendEnabled
             ? { targetID in
@@ -861,36 +918,72 @@ struct EditorRootView: View {
                 model.openNote(noteID: targetID, pane: p)
             }
             : nil
-        return SingleSurfaceNoteEditor(
-            document: Binding(
-                get: { model.workspacePanes[p].activeDocument ?? fallbackDocument },
-                set: { model.workspacePanes[p].activeDocument = $0 }
-            ),
-            cursorOffset: Binding(
-                get: { model.workspacePanes[p].editorCursorOffset },
-                set: { model.workspacePanes[p].editorCursorOffset = $0 }
-            ),
-            editorTextSelection: Binding(
-                get: { model.workspacePanes[p].editorTextSelection },
-                set: { model.workspacePanes[p].editorTextSelection = $0 }
-            ),
-            editorFindQuery: Binding(
-                get: { model.workspacePanes[p].editorFindQuery },
-                set: { model.workspacePanes[p].editorFindQuery = $0 }
-            ),
-            pendingEditorScroll: model.pendingEditorScroll,
-            onPendingEditorScrollConsumed: { model.clearPendingEditorScroll() },
-            onCommands: { commands in
-                if model.activePaneIndex != p {
-                    model.activatePaneForEditingSync(p)
-                }
-                return model.apply(commands)
-            },
-            onWikiLinkClick: wiki,
-            onFullReplaceWarning: { model.presentFullBufferAdvisory(pane: p) },
-            onSizeLimitExceeded: { model.presentSizeLimitAdvisory(pane: p) },
-            focusBodyNonce: editorBodyFocusNonce
-        )
+        let modules = profile.effectiveModules
+        switch profile.editorKind {
+        case .blockNative:
+            SingleSurfaceNoteEditor(
+                document: Binding(
+                    get: { model.workspacePanes[p].activeDocument ?? fallbackDocument },
+                    set: { model.workspacePanes[p].activeDocument = $0 }
+                ),
+                cursorOffset: Binding(
+                    get: { model.workspacePanes[p].editorCursorOffset },
+                    set: { model.workspacePanes[p].editorCursorOffset = $0 }
+                ),
+                editorTextSelection: Binding(
+                    get: { model.workspacePanes[p].editorTextSelection },
+                    set: { model.workspacePanes[p].editorTextSelection = $0 }
+                ),
+                editorFindQuery: Binding(
+                    get: { model.workspacePanes[p].editorFindQuery },
+                    set: { model.workspacePanes[p].editorFindQuery = $0 }
+                ),
+                pendingEditorScroll: model.pendingEditorScroll,
+                onPendingEditorScrollConsumed: { model.clearPendingEditorScroll() },
+                onCommands: { commands in
+                    if model.activePaneIndex != p {
+                        model.activatePaneForEditingSync(p)
+                    }
+                    return model.apply(commands)
+                },
+                onWikiLinkClick: wiki,
+                onFullReplaceWarning: { model.presentFullBufferAdvisory(pane: p) },
+                onSizeLimitExceeded: { model.presentSizeLimitAdvisory(pane: p) },
+                focusBodyNonce: editorBodyFocusNonce
+            )
+        case .plainMarkdownSource:
+            PlainMarkdownNoteEditor(
+                document: Binding(
+                    get: { model.workspacePanes[p].activeDocument ?? fallbackDocument },
+                    set: { model.workspacePanes[p].activeDocument = $0 }
+                ),
+                cursorOffset: Binding(
+                    get: { model.workspacePanes[p].editorCursorOffset },
+                    set: { model.workspacePanes[p].editorCursorOffset = $0 }
+                ),
+                editorTextSelection: Binding(
+                    get: { model.workspacePanes[p].editorTextSelection },
+                    set: { model.workspacePanes[p].editorTextSelection = $0 }
+                ),
+                editorFindQuery: Binding(
+                    get: { model.workspacePanes[p].editorFindQuery },
+                    set: { model.workspacePanes[p].editorFindQuery = $0 }
+                ),
+                modules: modules,
+                pendingEditorScroll: model.pendingEditorScroll,
+                onPendingEditorScrollConsumed: { model.clearPendingEditorScroll() },
+                onCommands: { commands in
+                    if model.activePaneIndex != p {
+                        model.activatePaneForEditingSync(p)
+                    }
+                    return model.apply(commands)
+                },
+                onWikiLinkClick: wiki,
+                onFullReplaceWarning: { model.presentFullBufferAdvisory(pane: p) },
+                onSizeLimitExceeded: { model.presentSizeLimitAdvisory(pane: p) },
+                focusBodyNonce: editorBodyFocusNonce
+            )
+        }
     }
 }
 

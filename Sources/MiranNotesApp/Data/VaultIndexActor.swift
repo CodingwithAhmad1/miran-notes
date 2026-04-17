@@ -146,13 +146,15 @@ actor VaultIndexActor {
         includeNoteFiles: Bool,
         manifest: VaultManifest,
         linkGraph: LinkGraph,
-        relationshipIndex: RelationshipIndex
+        relationshipIndex: RelationshipIndex,
+        pathIndex: PathIndex
     ) -> VaultIntegrityResult {
         VaultIntegrityChecker.check(
             vaultURL: vaultURL,
             manifest: manifest,
             linkGraph: linkGraph,
             relationshipIndex: relationshipIndex,
+            pathIndex: pathIndex,
             savedNoteRelativePath: includeNoteFiles ? relativePath : nil,
             decoder: decoder
         )
@@ -223,7 +225,8 @@ actor VaultIndexActor {
             includeNoteFiles: true,
             manifest: m,
             linkGraph: linkGraph,
-            relationshipIndex: relationshipIndex
+            relationshipIndex: relationshipIndex,
+            pathIndex: pathIndex
         )
     }
 
@@ -282,7 +285,8 @@ actor VaultIndexActor {
             includeNoteFiles: false,
             manifest: m,
             linkGraph: linkGraph,
-            relationshipIndex: relationshipIndex
+            relationshipIndex: relationshipIndex,
+            pathIndex: pathIndex
         )
     }
 }

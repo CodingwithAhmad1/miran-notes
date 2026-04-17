@@ -24,6 +24,8 @@ struct FolderManagementToolbarButton: View {
 
 struct FolderManagementDashboardView: View {
     @Bindable var model: AppModel
+    /// Bump menu shortcut epoch when shortcuts change (same as Settings).
+    var onWorkspaceShortcutsChanged: () -> Void = {}
 
     @State private var selection: Set<UUID> = []
     @State private var confirmHide = false
@@ -72,6 +74,14 @@ struct FolderManagementDashboardView: View {
                         }
                     }
                 }
+
+                WorkspaceKeyboardShortcutsSettingsSections(
+                    sectionHeader: Text(
+                        "Keyboard shortcuts",
+                        comment: "Folder management: section below folders for New Folder / New Note shortcuts"
+                    ),
+                    onWorkspaceShortcutsChanged: onWorkspaceShortcutsChanged
+                )
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .safeAreaInset(edge: .bottom, spacing: 0) {

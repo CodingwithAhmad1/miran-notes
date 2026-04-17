@@ -8,6 +8,8 @@ enum VaultPaths {
     static let relationshipIndexFileName = "relationship-index.json"
     static let folderCatalogFileName = "folder-catalog.json"
     static let pathIndexFileName = "path-index.json"
+    /// Maps folder IDs to preferred note body extension before the first note exists in that folder.
+    static let folderNoteBodyConventionFileName = "folder-note-body-convention.json"
     static let externalBookmarksFileName = "external-bookmarks.json"
     /// Marker file: user completed the one-time vault welcome (detail pane); stored under `.miran/`.
     static let vaultWelcomeDismissedFileName = "vault-welcome-dismissed"
@@ -40,6 +42,10 @@ enum VaultPaths {
 
     static func pathIndexURL(vaultURL: URL) -> URL {
         miranDirectory(vaultURL: vaultURL).appendingPathComponent(pathIndexFileName, isDirectory: false)
+    }
+
+    static func folderNoteBodyConventionURL(vaultURL: URL) -> URL {
+        miranDirectory(vaultURL: vaultURL).appendingPathComponent(folderNoteBodyConventionFileName, isDirectory: false)
     }
 
     static func externalBookmarksURL(vaultURL: URL) -> URL {

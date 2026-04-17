@@ -56,6 +56,13 @@ struct PendingEditorScroll: Equatable, Sendable {
     var range: MiranNotesCore.TextRange
 }
 
+/// Identifies a folder (and pane) waiting for the first-note body format choice.
+struct FolderFirstNoteBodyPickerContext: Identifiable, Equatable, Sendable {
+    var id: UUID { folderID }
+    var folderID: UUID
+    var pane: Int
+}
+
 /// One row in the sidebar outline (folder tree + notes).
 enum SidebarOutlineEntry: Identifiable {
     case folder(FolderEntry, [SidebarOutlineEntry])
@@ -74,6 +81,9 @@ enum SidebarOutlineEntry: Identifiable {
 @MainActor
 @Observable
 final class AppModel {
+    /// Which editor surface and modules are active (environment / future Settings).
+    var editorActivationProfile: EditorActivationProfile
+
     var noteSummaries: [NoteSummary] = []
     /// One session per layout tile (size == ``currentLayout/paneCount``).
     var workspacePanes: [WorkspacePaneSession] = [WorkspacePaneSession()]
@@ -133,6 +143,12 @@ final class AppModel {
 
     /// Client preference: hidden top-level folder IDs (per vault; see ``VaultHiddenFoldersStore``).
     private(set) var hiddenTopLevelFolderIDs: Set<UUID> = []
+
+    /// When creating the first note in an empty topic folder, the user picks `.txt` vs `.md`; persisted under `.miran/`.
+    private(set) var folderNoteBodyConventions: [UUID: String] = [:]
+
+    /// Sheet context: first note in a folder with no on-disk notes and no stored body convention yet.
+    var pendingFolderFirstNoteBodyPicker: FolderFirstNoteBodyPickerContext?
 
     /// Present the Folder Management sheet (window-local toolbar).
     var isFolderManagementPresented = false
@@ -379,8 +395,10 @@ final class AppModel {
         largeVaultLinkGraphSyncThreshold: Int = 2_000,
         startupLinkGraphSyncBudgetMs: Double = 120,
         startupLinkGraphSyncHistoryWeight: Double = 0.3,
-        commandPipelineContract: CommandPipelineContract = CommandPipelineContract()
+        commandPipelineContract: CommandPipelineContract = CommandPipelineContract(),
+        editorActivationProfile: EditorActivationProfile = .resolvedFromEnvironment()
     ) {
+        self.editorActivationProfile = editorActivationProfile
         self.repository = repository
         self.workspaceScope = workspaceScope
         self.autosaveDebounceMilliseconds = autosaveDebounceMilliseconds
@@ -447,6 +465,8 @@ final class AppModel {
             workspaceGateState = .ready
             hasDismissedVaultWelcome = VaultWelcomeDismissalStore.isDismissed(vaultURL: repository.vaultURL)
             hiddenTopLevelFolderIDs = VaultHiddenFoldersStore.load(vaultURL: repository.vaultURL)
+            folderNoteBodyConventions = FolderNoteBodyConventionStore.load(vaultURL: repository.vaultURL)
+            pendingFolderFirstNoteBodyPicker = nil
 
             await runStartupRecoveryIfPossible()
             await reconcileVaultState(invalidateCaches: false)
@@ -1058,25 +1078,100 @@ final class AppModel {
                 )
                 return
             }
-            await flushPaneIfDirty(pane)
-            self.workspacePanes[pane].navigationGeneration += 1
-            do {
-                _ = try await repository.createNote(named: "untitled-note", folderID: targetFolder)
-                markVaultWelcomeDismissedIfNeeded()
-                await refreshNotes()
-                self.workspacePanes[pane].selectedFolderID = targetFolder
-                self.workspacePanes[pane].selectedBaseName = nil
-                self.workspacePanes[pane].selectedNoteID = nil
-                self.workspacePanes[pane].activeDocument = nil
-                self.workspacePanes[pane].lastPersistedDocument = nil
-                clearUndoStack(forPane: pane)
-            } catch {
-                userAlert = .recoverable(
-                    message: "Failed to create note: \(error.localizedDescription)",
-                    kind: .retryRefreshNotesAndFolderUI
-                )
+            guard let bodyExt = resolvedBodyExtensionForNewNote(in: targetFolder) else {
+                pendingFolderFirstNoteBodyPicker = FolderFirstNoteBodyPickerContext(folderID: targetFolder, pane: pane)
+                return
             }
+            await finishCreateNote(pane: pane, folderID: targetFolder, bodyFileExtension: bodyExt)
         }
+    }
+
+    /// Completes a new note after the first-note body-format sheet returns.
+    func confirmPendingFirstNoteBodyFormat(bodyFileExtension: String) {
+        guard let ctx = pendingFolderFirstNoteBodyPicker else { return }
+        pendingFolderFirstNoteBodyPicker = nil
+        let norm = PathIndexEntry.normalizeBodyFileExtension(bodyFileExtension)
+        Task { @MainActor in
+            do {
+                try persistFolderNoteBodyConvention(folderID: ctx.folderID, bodyFileExtension: norm)
+            } catch {
+                userAlert = .message("Could not save note format preference: \(error.localizedDescription)")
+                return
+            }
+            await finishCreateNote(pane: ctx.pane, folderID: ctx.folderID, bodyFileExtension: norm)
+        }
+    }
+
+    func cancelPendingFirstNoteBodyPicker() {
+        pendingFolderFirstNoteBodyPicker = nil
+    }
+
+    /// Per-pane editor profile from the open note’s on-disk body, with `MIRAN_EDITOR_KIND` as a global override.
+    func effectiveEditorActivationProfile(forPane pane: Int) -> EditorActivationProfile {
+        if let raw = ProcessInfo.processInfo.environment["MIRAN_EDITOR_KIND"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !raw.isEmpty {
+            return EditorActivationProfile.resolve(kindRaw: raw)
+        }
+        guard workspacePanes.indices.contains(pane),
+              let noteID = workspacePanes[pane].selectedNoteID,
+              let summary = noteSummaries.first(where: { $0.noteID == noteID })
+        else {
+            return editorActivationProfile
+        }
+        let kind: EditorKind = summary.bodyFileExtension == "md" ? .plainMarkdownSource : .blockNative
+        return EditorActivationProfile(editorKind: kind, modules: editorActivationProfile.modules)
+    }
+
+    private func resolvedBodyExtensionForNewNote(in folderID: UUID) -> String? {
+        let inFolder = noteSummaries.filter { $0.folderID == folderID }
+        if let first = inFolder.first {
+            return first.bodyFileExtension
+        }
+        if let stored = folderNoteBodyConventions[folderID] {
+            return PathIndexEntry.normalizeBodyFileExtension(stored)
+        }
+        return nil
+    }
+
+    private func persistFolderNoteBodyConvention(folderID: UUID, bodyFileExtension: String) throws {
+        let norm = PathIndexEntry.normalizeBodyFileExtension(bodyFileExtension)
+        folderNoteBodyConventions[folderID] = norm
+        try FolderNoteBodyConventionStore.save(folderNoteBodyConventions, vaultURL: repository.vaultURL)
+    }
+
+    private func finishCreateNote(pane: Int, folderID: UUID, bodyFileExtension: String) async {
+        await flushPaneIfDirty(pane)
+        workspacePanes[pane].navigationGeneration += 1
+        do {
+            _ = try await repository.createNote(
+                named: "untitled-note",
+                folderID: folderID,
+                bodyFileExtension: bodyFileExtension
+            )
+            markVaultWelcomeDismissedIfNeeded()
+            await refreshNotes()
+            workspacePanes[pane].selectedFolderID = folderID
+            workspacePanes[pane].selectedBaseName = nil
+            workspacePanes[pane].selectedNoteID = nil
+            workspacePanes[pane].activeDocument = nil
+            workspacePanes[pane].lastPersistedDocument = nil
+            clearUndoStack(forPane: pane)
+        } catch {
+            userAlert = .recoverable(
+                message: "Failed to create note: \(error.localizedDescription)",
+                kind: .retryRefreshNotesAndFolderUI
+            )
+        }
+    }
+
+    private func resolvedBodyFileExtensionForSelectedNote(pane: Int) -> String {
+        guard workspacePanes.indices.contains(pane),
+              let noteID = workspacePanes[pane].selectedNoteID,
+              let summary = noteSummaries.first(where: { $0.noteID == noteID })
+        else {
+            return "txt"
+        }
+        return summary.bodyFileExtension
     }
 
     func renameFolder(id: UUID, newName: String) {
@@ -1203,7 +1298,8 @@ final class AppModel {
     func revealSelectedNoteFileInFinder(pane: Int? = nil) {
         let p = pane ?? activePaneIndex
         guard let path = workspacePanes[p].selectedBaseName else { return }
-        let url = VaultPath.fileURL(vaultRoot: repository.vaultURL, relativePathWithoutExtension: path, extension: "txt")
+        let ext = resolvedBodyFileExtensionForSelectedNote(pane: p)
+        let url = VaultPath.fileURL(vaultRoot: repository.vaultURL, relativePathWithoutExtension: path, extension: ext)
         NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 
@@ -1758,7 +1854,8 @@ final class AppModel {
         let pane = activePaneIndex
         guard workspacePanes.indices.contains(pane),
             let path = workspacePanes[pane].selectedBaseName else { return }
-        let url = VaultPath.fileURL(vaultRoot: repository.vaultURL, relativePathWithoutExtension: path, extension: "txt")
+        let ext = resolvedBodyFileExtensionForSelectedNote(pane: pane)
+        let url = VaultPath.fileURL(vaultRoot: repository.vaultURL, relativePathWithoutExtension: path, extension: ext)
         let presenter = ActiveNoteFilePresenter(fileURL: url) { [weak self] in
             guard let self else { return }
             Task { @MainActor in
@@ -1769,7 +1866,7 @@ final class AppModel {
         activeNoteFilePresenter = presenter
     }
 
-    /// `NSFilePresenter` only observes the active note `.txt`. If its body bytes still match the pane's last known hash, skip queuing a full reconciliation.
+    /// `NSFilePresenter` only observes the active note body file (`.txt` or `.md`). If its body bytes still match the pane's last known hash, skip queuing a full reconciliation.
     private func handleActiveNotePresenterDidChange(noteRelativePath path: String, pane: Int) async {
         guard workspacePanes.indices.contains(pane) else { return }
         do {
