@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct FolderManagementToolbarButton: View {
@@ -27,19 +28,32 @@ struct FolderManagementDashboardView: View {
     /// Bump menu shortcut epoch when shortcuts change (same as Settings).
     var onWorkspaceShortcutsChanged: () -> Void = {}
 
-    @State private var selection: Set<UUID> = []
-    @State private var confirmHide = false
-    @State private var confirmDelete = false
-    @State private var confirmUnhide = false
+    @State private var activeActionsFolderID: UUID?
+    @State private var folderPendingHide: UUID?
+    @State private var folderPendingUnhide: UUID?
+    @State private var folderPendingDelete: UUID?
     @State private var inlineNotice: String?
     @State private var noticeDismissTask: Task<Void, Never>?
 
-    private var selectedVisibleIDs: Set<UUID> {
-        selection.intersection(Set(model.visibleTopLevelFolderEntries.map(\.id)))
+    private var confirmHideBinding: Binding<Bool> {
+        Binding(
+            get: { folderPendingHide != nil },
+            set: { if !$0 { folderPendingHide = nil } }
+        )
     }
 
-    private var selectedHiddenIDs: Set<UUID> {
-        selection.intersection(Set(model.hiddenTopLevelFolderEntries.map(\.id)))
+    private var confirmUnhideBinding: Binding<Bool> {
+        Binding(
+            get: { folderPendingUnhide != nil },
+            set: { if !$0 { folderPendingUnhide = nil } }
+        )
+    }
+
+    private var confirmDeleteBinding: Binding<Bool> {
+        Binding(
+            get: { folderPendingDelete != nil },
+            set: { if !$0 { folderPendingDelete = nil } }
+        )
     }
 
     var body: some View {
@@ -61,7 +75,7 @@ struct FolderManagementDashboardView: View {
                             .foregroundStyle(.secondary)
                     }
                     ForEach(model.visibleTopLevelFolderEntries, id: \.id) { folder in
-                        folderRow(folder)
+                        folderRow(folder, isHiddenRow: false)
                     }
                 }
 
@@ -69,7 +83,7 @@ struct FolderManagementDashboardView: View {
                     Section {
                         DisclosureGroup("Hidden") {
                             ForEach(model.hiddenTopLevelFolderEntries, id: \.id) { folder in
-                                folderRow(folder)
+                                folderRow(folder, isHiddenRow: true)
                             }
                         }
                     }
@@ -84,40 +98,18 @@ struct FolderManagementDashboardView: View {
                 )
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .safeAreaInset(edge: .bottom, spacing: 0) {
-                if !selection.isEmpty {
-                    HStack(spacing: 16) {
-                        if !selectedHiddenIDs.isEmpty {
-                            Button("Unhide") {
-                                confirmUnhide = true
-                            }
-                        }
-                        if !selectedVisibleIDs.isEmpty {
-                            Button("Hide") {
-                                confirmHide = true
-                            }
-                        }
-                        Spacer(minLength: 0)
-                        Button("Delete", role: .destructive) {
-                            confirmDelete = true
-                        }
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 10)
-                    .background(.bar)
-                }
-            }
             .confirmationDialog(
                 "Hide folders from sidebar?",
-                isPresented: $confirmHide,
+                isPresented: confirmHideBinding,
                 titleVisibility: .visible
             ) {
                 Button("Hide") {
-                    let ids = selectedVisibleIDs
-                    let n = ids.count
-                    model.hideTopLevelFolders(ids: ids)
-                    selection.subtract(ids)
-                    scheduleNotice(n == 1 ? "Hid 1 folder." : "Hid \(n) folders.")
+                    if let id = folderPendingHide {
+                        model.hideTopLevelFolders(ids: [id])
+                        if activeActionsFolderID == id { activeActionsFolderID = nil }
+                        scheduleNotice("Hid 1 folder.")
+                    }
+                    folderPendingHide = nil
                 }
                 Button("Cancel", role: .cancel) {}
             } message: {
@@ -125,15 +117,16 @@ struct FolderManagementDashboardView: View {
             }
             .confirmationDialog(
                 "Unhide folders?",
-                isPresented: $confirmUnhide,
+                isPresented: confirmUnhideBinding,
                 titleVisibility: .visible
             ) {
                 Button("Unhide") {
-                    let ids = selectedHiddenIDs
-                    let n = ids.count
-                    model.unhideTopLevelFolders(ids: ids)
-                    selection.subtract(ids)
-                    scheduleNotice(n == 1 ? "Restored 1 folder to the sidebar." : "Restored \(n) folders to the sidebar.")
+                    if let id = folderPendingUnhide {
+                        model.unhideTopLevelFolders(ids: [id])
+                        if activeActionsFolderID == id { activeActionsFolderID = nil }
+                        scheduleNotice("Restored 1 folder to the sidebar.")
+                    }
+                    folderPendingUnhide = nil
                 }
                 Button("Cancel", role: .cancel) {}
             } message: {
@@ -141,17 +134,19 @@ struct FolderManagementDashboardView: View {
             }
             .confirmationDialog(
                 "Delete selected folders?",
-                isPresented: $confirmDelete,
+                isPresented: confirmDeleteBinding,
                 titleVisibility: .visible
             ) {
                 Button("Delete", role: .destructive) {
-                    let ids = selection
-                    model.deleteTopLevelFolders(ids: ids) { count in
-                        selection.removeAll()
-                        scheduleNotice(
-                            count == 1 ? "Deleted 1 folder." : "Deleted \(count) folders."
-                        )
+                    if let id = folderPendingDelete {
+                        model.deleteTopLevelFolders(ids: [id]) { count in
+                            if activeActionsFolderID == id { activeActionsFolderID = nil }
+                            scheduleNotice(
+                                count == 1 ? "Deleted 1 folder." : "Deleted \(count) folders."
+                            )
+                        }
                     }
+                    folderPendingDelete = nil
                 }
                 Button("Cancel", role: .cancel) {}
             } message: {
@@ -168,30 +163,64 @@ struct FolderManagementDashboardView: View {
     }
 
     @ViewBuilder
-    private func folderRow(_ folder: FolderEntry) -> some View {
+    private func folderRow(_ folder: FolderEntry, isHiddenRow: Bool) -> some View {
         HStack(spacing: 12) {
             Image(systemName: "folder.fill")
                 .foregroundStyle(.secondary)
                 .imageScale(.medium)
+                .frame(width: Self.folderGlyphColumnWidth, alignment: .center)
             Text(folder.name)
                 .lineLimit(1)
                 .truncationMode(.tail)
-            Spacer(minLength: 8)
-            Button {
-                if selection.contains(folder.id) {
-                    selection.remove(folder.id)
-                } else {
-                    selection.insert(folder.id)
-                }
-            } label: {
-                Image(systemName: selection.contains(folder.id) ? "checkmark.square.fill" : "square")
-                    .imageScale(.medium)
-                    .foregroundStyle(selection.contains(folder.id) ? .primary : .secondary)
-            }
-            .buttonStyle(.borderless)
-            .accessibilityLabel(selection.contains(folder.id) ? "Deselect folder" : "Select folder")
+                .padding(.trailing, Self.fiveAverageBodyCharacterWidthTightening)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            folderRowTrailingActions(folder: folder, isHiddenRow: isHiddenRow)
+                .frame(width: Self.trailingActionsSlotWidth, alignment: .trailing)
         }
         .padding(.vertical, 2)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            activeActionsFolderID = activeActionsFolderID == folder.id ? nil : folder.id
+        }
+    }
+
+    @ViewBuilder
+    private func folderRowTrailingActions(folder: FolderEntry, isHiddenRow: Bool) -> some View {
+        let expanded = activeActionsFolderID == folder.id
+        HStack(spacing: 8) {
+            if expanded {
+                Button {
+                    folderPendingHide = nil
+                    folderPendingUnhide = nil
+                    folderPendingDelete = nil
+                    if isHiddenRow {
+                        folderPendingUnhide = folder.id
+                    } else {
+                        folderPendingHide = folder.id
+                    }
+                } label: {
+                    Image(systemName: isHiddenRow ? "eye.slash" : "eye")
+                        .imageScale(.medium)
+                }
+                .buttonStyle(.borderless)
+                .help(isHiddenRow ? "Unhide folder in sidebar" : "Hide folder from sidebar")
+                .accessibilityLabel(isHiddenRow ? "Unhide folder" : "Hide folder from sidebar")
+
+                Button {
+                    folderPendingHide = nil
+                    folderPendingUnhide = nil
+                    folderPendingDelete = nil
+                    folderPendingDelete = folder.id
+                } label: {
+                    Image(systemName: "xmark")
+                        .imageScale(.medium)
+                }
+                .buttonStyle(.borderless)
+                .help("Delete folder")
+                .accessibilityLabel("Delete folder")
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .trailing)
     }
 
     private func scheduleNotice(_ text: String) {
@@ -204,4 +233,17 @@ struct FolderManagementDashboardView: View {
             noticeDismissTask = nil
         }
     }
+
+    /// Reserves space for two borderless icon buttons plus spacing so the row does not jump when actions appear.
+    private static let trailingActionsSlotWidth: CGFloat = 64
+
+    private static let folderGlyphColumnWidth: CGFloat = 22
+
+    /// Five times the average advance width of system body digits — tightens the label so names truncate slightly earlier than the icon column alone would imply.
+    private static let fiveAverageBodyCharacterWidthTightening: CGFloat = {
+        let font = NSFont.systemFont(ofSize: NSFont.systemFontSize)
+        let probe = "0123456789" as NSString
+        let perChar = probe.size(withAttributes: [.font: font]).width / 10
+        return perChar * 5
+    }()
 }

@@ -291,14 +291,43 @@ final class AppModel {
 
     func addTodaysTaskRow() -> UUID {
         let id = UUID()
-        todaysTasksItems.append(VaultTodaysTaskRow(id: id, title: "", isDone: false))
+        todaysTasksItems.append(VaultTodaysTaskRow(id: id, lines: [""], isDone: false))
         scheduleTodaysTasksPersist()
         return id
     }
 
-    func setTodaysTaskTitle(id: UUID, title: String) {
-        guard let i = todaysTasksItems.firstIndex(where: { $0.id == id }) else { return }
-        todaysTasksItems[i].title = title
+    func setTodaysTaskLine(taskID: UUID, lineIndex: Int, text: String) {
+        guard let i = todaysTasksItems.firstIndex(where: { $0.id == taskID }) else { return }
+        guard todaysTasksItems[i].lines.indices.contains(lineIndex) else { return }
+        todaysTasksItems[i].lines[lineIndex] = text
+        scheduleTodaysTasksPersist()
+    }
+
+    /// Inserts an empty line after `afterIndex`. Returns the index of the new line.
+    func insertTodaysTaskLineAfter(taskID: UUID, afterIndex: Int) -> Int {
+        guard let i = todaysTasksItems.firstIndex(where: { $0.id == taskID }) else { return afterIndex + 1 }
+        var row = todaysTasksItems[i]
+        let insertAt = min(max(afterIndex + 1, 0), row.lines.count)
+        row.lines.insert("", at: insertAt)
+        row.lineIDs.insert(UUID(), at: insertAt)
+        todaysTasksItems[i] = row
+        scheduleTodaysTasksPersist()
+        return insertAt
+    }
+
+    /// Removes a detail line (`lineIndex` > 0). Keeps at least one line per task.
+    func removeTodaysTaskLine(taskID: UUID, lineIndex: Int) {
+        guard lineIndex > 0 else { return }
+        guard let i = todaysTasksItems.firstIndex(where: { $0.id == taskID }) else { return }
+        var row = todaysTasksItems[i]
+        guard row.lines.indices.contains(lineIndex) else { return }
+        row.lines.remove(at: lineIndex)
+        row.lineIDs.remove(at: lineIndex)
+        if row.lines.isEmpty {
+            row.lines = [""]
+            row.lineIDs = [UUID()]
+        }
+        todaysTasksItems[i] = row
         scheduleTodaysTasksPersist()
     }
 
@@ -308,10 +337,15 @@ final class AppModel {
         scheduleTodaysTasksPersist()
     }
 
-    func bindingForTodaysTaskTitle(id: UUID) -> Binding<String> {
+    func bindingForTodaysTaskLine(taskID: UUID, lineIndex: Int) -> Binding<String> {
         Binding(
-            get: { self.todaysTasksItems.first { $0.id == id }?.title ?? "" },
-            set: { self.setTodaysTaskTitle(id: id, title: $0) }
+            get: {
+                guard let row = self.todaysTasksItems.first(where: { $0.id == taskID }),
+                    row.lines.indices.contains(lineIndex)
+                else { return "" }
+                return row.lines[lineIndex]
+            },
+            set: { self.setTodaysTaskLine(taskID: taskID, lineIndex: lineIndex, text: $0) }
         )
     }
 

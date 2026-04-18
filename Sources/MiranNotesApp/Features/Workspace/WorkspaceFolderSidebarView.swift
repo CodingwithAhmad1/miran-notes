@@ -5,6 +5,7 @@ struct WorkspaceFolderSidebarView: View {
     @Bindable var model: AppModel
     /// Index of the workspace tile this sidebar belongs to.
     var paneIndex: Int = 0
+    var sidebarColumnVisibility: Binding<NavigationSplitViewVisibility>
     var onClearToolbarSearchFocus: () -> Void = {}
     @State private var renamingFolder: FolderEntry?
     @State private var renameFieldText = ""
@@ -74,6 +75,27 @@ struct WorkspaceFolderSidebarView: View {
             }
         )
         .navigationTitle("Vault")
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    onClearToolbarSearchFocus()
+                    sidebarColumnVisibility.wrappedValue = .detailOnly
+                } label: {
+                    Image(systemName: "sidebar.left")
+                        .font(.system(size: 13, weight: .semibold))
+                        .frame(width: 30, height: 30)
+                        .background(
+                            Circle().fill(Color(nsColor: .quaternarySystemFill))
+                        )
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .frame(width: 34, height: 34)
+                .contentShape(Rectangle())
+                .help("Hide sidebar")
+                .accessibilityLabel("Hide sidebar")
+            }
+        }
         .alert("Rename Folder", isPresented: renameBinding, presenting: renamingFolder) { folder in
             TextField("Name", text: $renameFieldText)
             Button("Cancel", role: .cancel) {

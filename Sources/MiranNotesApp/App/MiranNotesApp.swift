@@ -189,6 +189,33 @@ private struct DetailColumnWidthPreferenceKey: PreferenceKey {
     }
 }
 
+private enum WorkspaceSidebarColumnVisibilityStore {
+    static func userDefaultsKey(paneIndex: Int) -> String {
+        "workspace.sidebarCollapsedPane\(paneIndex)"
+    }
+}
+
+private struct WorkspaceSidebarExpandToolbarButton: View {
+    var action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "sidebar.right")
+                .font(.system(size: 13, weight: .semibold))
+                .frame(width: 30, height: 30)
+                .background(
+                    Circle().fill(Color(nsColor: .quaternarySystemFill))
+                )
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .frame(width: 34, height: 34)
+        .contentShape(Rectangle())
+        .help("Show sidebar")
+        .accessibilityLabel("Show sidebar")
+    }
+}
+
 private struct MiranNotesMainWindowContent: View {
     @Bindable var model: AppModel
     @Environment(VaultSessionRegistry.self) private var vaultSessionRegistry
@@ -205,6 +232,10 @@ private struct MiranNotesMainWindowContent: View {
     /// Width of the split view’s detail column (where the unified toolbar lays out). Drives compact search sizing
     /// so AppKit never inserts the toolbar overflow chevron.
     @State private var measuredDetailColumnWidth: CGFloat = 0
+    @AppStorage(WorkspaceSidebarColumnVisibilityStore.userDefaultsKey(paneIndex: 0)) private var sidebarCollapsedPane0 = false
+    @AppStorage(WorkspaceSidebarColumnVisibilityStore.userDefaultsKey(paneIndex: 1)) private var sidebarCollapsedPane1 = false
+    @AppStorage(WorkspaceSidebarColumnVisibilityStore.userDefaultsKey(paneIndex: 2)) private var sidebarCollapsedPane2 = false
+    @AppStorage(WorkspaceSidebarColumnVisibilityStore.userDefaultsKey(paneIndex: 3)) private var sidebarCollapsedPane3 = false
 
     private func clearToolbarSearchFocus() {
         isToolbarSearchFocused = false
@@ -227,6 +258,40 @@ private struct MiranNotesMainWindowContent: View {
                 multipaneSearchFocused[paneIndex] = newValue
             }
         )
+    }
+
+    private func isSidebarCollapsed(paneIndex: Int) -> Bool {
+        switch paneIndex {
+        case 0: return sidebarCollapsedPane0
+        case 1: return sidebarCollapsedPane1
+        case 2: return sidebarCollapsedPane2
+        case 3: return sidebarCollapsedPane3
+        default: return false
+        }
+    }
+
+    private func setSidebarCollapsed(_ collapsed: Bool, paneIndex: Int) {
+        switch paneIndex {
+        case 0: sidebarCollapsedPane0 = collapsed
+        case 1: sidebarCollapsedPane1 = collapsed
+        case 2: sidebarCollapsedPane2 = collapsed
+        case 3: sidebarCollapsedPane3 = collapsed
+        default: break
+        }
+    }
+
+    private func sidebarColumnVisibilityBinding(paneIndex: Int) -> Binding<NavigationSplitViewVisibility> {
+        Binding(
+            get: { isSidebarCollapsed(paneIndex: paneIndex) ? .detailOnly : .all },
+            set: { setSidebarCollapsed($0 == .detailOnly, paneIndex: paneIndex) }
+        )
+    }
+
+    private func sidebarExpandToolbarButton(visibility: Binding<NavigationSplitViewVisibility>) -> some View {
+        WorkspaceSidebarExpandToolbarButton {
+            clearToolbarSearchFocus()
+            visibility.wrappedValue = .all
+        }
     }
 
     var body: some View {
@@ -387,10 +452,11 @@ private struct MiranNotesMainWindowContent: View {
         NavigationStack {
             Group {
                 if model.currentLayout == .single {
-                    NavigationSplitView {
+                    NavigationSplitView(columnVisibility: sidebarColumnVisibilityBinding(paneIndex: 0)) {
                         WorkspaceFolderSidebarView(
                             model: model,
                             paneIndex: 0,
+                            sidebarColumnVisibility: sidebarColumnVisibilityBinding(paneIndex: 0),
                             onClearToolbarSearchFocus: clearToolbarSearchFocus
                         )
                         .navigationSplitViewColumnWidth(min: 180, ideal: 240, max: 420)
@@ -399,6 +465,7 @@ private struct MiranNotesMainWindowContent: View {
                         WorkspaceDetailColumnView(
                             model: model,
                             paneIndex: 0,
+                            sidebarColumnVisibility: sidebarColumnVisibilityBinding(paneIndex: 0),
                             onClearToolbarSearchFocus: clearToolbarSearchFocus,
                             onWorkspaceShortcutsChanged: onWorkspaceShortcutsChanged
                         )
@@ -410,6 +477,11 @@ private struct MiranNotesMainWindowContent: View {
             .toolbar {
                 ToolbarItem(placement: .navigation) {
                     HStack(spacing: 8) {
+                        if model.currentLayout == .single, isSidebarCollapsed(paneIndex: 0) {
+                            sidebarExpandToolbarButton(
+                                visibility: sidebarColumnVisibilityBinding(paneIndex: 0)
+                            )
+                        }
                         if model.isFolderManagementPresented {
                             Button {
                                 isToolbarSearchFocused = false
@@ -508,10 +580,11 @@ private struct MiranNotesMainWindowContent: View {
     }
 
     private func workspaceTile(paneIndex: Int) -> some View {
-        NavigationSplitView {
+        NavigationSplitView(columnVisibility: sidebarColumnVisibilityBinding(paneIndex: paneIndex)) {
             WorkspaceFolderSidebarView(
                 model: model,
                 paneIndex: paneIndex,
+                sidebarColumnVisibility: sidebarColumnVisibilityBinding(paneIndex: paneIndex),
                 onClearToolbarSearchFocus: clearToolbarSearchFocus
             )
             .navigationSplitViewColumnWidth(min: 180, ideal: 240, max: 420)
@@ -521,6 +594,7 @@ private struct MiranNotesMainWindowContent: View {
                 WorkspaceDetailColumnView(
                     model: model,
                     paneIndex: paneIndex,
+                    sidebarColumnVisibility: sidebarColumnVisibilityBinding(paneIndex: paneIndex),
                     onClearToolbarSearchFocus: clearToolbarSearchFocus,
                     multipaneSearchFocused: multipaneSearchFieldBinding(paneIndex: paneIndex),
                     onWorkspaceShortcutsChanged: onWorkspaceShortcutsChanged
@@ -592,7 +666,7 @@ private struct MiranNotesMainWindowContent: View {
         )
         .padding(.horizontal, 8)
         .padding(.vertical, 3)
-        .background(Capsule().fill(Color(nsColor: .quaternarySystemFill)))
+        .background(Capsule().fill(Color(nsColor: .tertiarySystemFill)))
         .overlay {
             if showsSearchRing {
                 Capsule().strokeBorder(Color.accentColor.opacity(0.55), lineWidth: 1.5)
@@ -651,6 +725,7 @@ private struct MiranNotesMainWindowContent: View {
 private struct WorkspaceDetailColumnView: View {
     @Bindable var model: AppModel
     var paneIndex: Int
+    var sidebarColumnVisibility: Binding<NavigationSplitViewVisibility>
     var onClearToolbarSearchFocus: () -> Void
     /// When non-`nil`, this column shows a per-tile search field in its local toolbar (multi-pane layouts).
     var multipaneSearchFocused: Binding<Bool>? = nil
@@ -714,7 +789,7 @@ private struct WorkspaceDetailColumnView: View {
         )
         .padding(.horizontal, 8)
         .padding(.vertical, 3)
-        .background(Capsule().fill(Color(nsColor: .quaternarySystemFill)))
+        .background(Capsule().fill(Color(nsColor: .tertiarySystemFill)))
         .overlay {
             if showsSearchRing {
                 Capsule().strokeBorder(Color.accentColor.opacity(0.55), lineWidth: 1.5)
@@ -736,6 +811,12 @@ private struct WorkspaceDetailColumnView: View {
             return paneIndex == model.activePaneIndex
         }
         return true
+    }
+
+    private var showsMultipaneSidebarExpandControl: Bool {
+        multipaneSearchFocused != nil
+            && model.currentLayout != .single
+            && sidebarColumnVisibility.wrappedValue == .detailOnly
     }
 
     var body: some View {
@@ -783,6 +864,14 @@ private struct WorkspaceDetailColumnView: View {
                     }
                 }
                 .toolbar {
+                    if showsMultipaneSidebarExpandControl {
+                        ToolbarItem(placement: .navigation) {
+                            WorkspaceSidebarExpandToolbarButton {
+                                onClearToolbarSearchFocus()
+                                sidebarColumnVisibility.wrappedValue = .all
+                            }
+                        }
+                    }
                     if showsMultipaneToolbarSearch, let multipaneSearchFocused {
                         ToolbarItem(placement: .principal) {
                             paneToolbarSearchField(focusBinding: multipaneSearchFocused)
