@@ -682,7 +682,8 @@ final class AppModel {
     }
 
     /// Canonical vault-refresh sequence for disk-driven changes: optional cache invalidation + manifest reconciliation.
-    private func reconcileVaultState(invalidateCaches: Bool) async {
+    /// - Parameter refreshNotesOnSuccess: When true (e.g. vault watcher), refreshes sidebar/search summaries after a successful reconcile so externally added `.md` / `.txt` files appear without a manual reload.
+    private func reconcileVaultState(invalidateCaches: Bool, refreshNotesOnSuccess: Bool = false) async {
         if let err = await manifestRefreshFacade.reconcileAfterDiskChange(
             repository: repository,
             invalidateCaches: invalidateCaches
@@ -691,6 +692,10 @@ final class AppModel {
                 message: err,
                 kind: .retryManifestReconcileAfterDiskChange(invalidateCaches: invalidateCaches)
             )
+            return
+        }
+        if refreshNotesOnSuccess {
+            await refreshNotes()
         }
     }
 
@@ -706,6 +711,11 @@ final class AppModel {
         if workspacePanes.indices.contains(kp) {
             workspacePanes[kp].repairAdvisory = RepairAdvisory.vaultIntegrityNotice(result)
         }
+    }
+
+    func toggleMarkdownPreview(pane: Int) {
+        guard workspacePanes.indices.contains(pane) else { return }
+        workspacePanes[pane].showMarkdownPreview.toggle()
     }
 
     func refreshNotes() async {
@@ -867,7 +877,7 @@ final class AppModel {
         case .retryStartupLinkGraphSync:
             Task { await self.runStartupLinkGraphSync() }
         case .retryManifestReconcileAfterDiskChange(let invalidateCaches):
-            Task { await self.reconcileVaultState(invalidateCaches: invalidateCaches) }
+            Task { await self.reconcileVaultState(invalidateCaches: invalidateCaches, refreshNotesOnSuccess: true) }
         case .retryRefreshNotesAndFolderUI:
             Task { await self.refreshNotes() }
         case .retryRefreshBacklinks:
@@ -1863,7 +1873,7 @@ final class AppModel {
             applyIncompatibleWorkspaceReport(report)
             return
         }
-        await reconcileVaultState(invalidateCaches: true)
+        await reconcileVaultState(invalidateCaches: true, refreshNotesOnSuccess: true)
         pendingExternalDiskCheck = true
         await runPendingExternalDiskReconciliationIfNeeded()
     }

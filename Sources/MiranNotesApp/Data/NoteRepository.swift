@@ -405,7 +405,7 @@ actor NoteRepository {
                     )
                 )
             }
-            return try await files.loadNote(
+            let loaded = try await files.loadNote(
                 relativePath: relativePath,
                 fallbackNoteID: nil,
                 bodyFileExtension: bodyHint ?? bodyExtensionForPath(
@@ -414,15 +414,45 @@ actor NoteRepository {
                     pathIndex: pathIndex
                 )
             )
+            return try await applyWikiLinkMetadataRepairIfNeeded(loaded, relativePath: relativePath, pathIndex: pathIndex)
         }
         guard let entry = manifest.entry(relativePath: relativePath) else {
             throw NoteRepositoryError.noteNotFound(relativePath)
         }
-        return try await files.loadNote(
+        let loaded = try await files.loadNote(
             relativePath: relativePath,
             fallbackNoteID: entry.noteID,
             bodyFileExtension: bodyHint
         )
+        return try await applyWikiLinkMetadataRepairIfNeeded(loaded, relativePath: relativePath, pathIndex: pathIndex)
+    }
+
+    /// When the sidecar has no `links` but the body contains `[[…]]` tokens, resolve targets from the manifest, persist, and return the updated document.
+    private func applyWikiLinkMetadataRepairIfNeeded(
+        _ result: NoteLoadResult,
+        relativePath: String,
+        pathIndex: PathIndex
+    ) async throws -> NoteLoadResult {
+        let manifest = try await loadManifest()
+        let bodyHint = bodyExtensionForPath(
+            relativePath: relativePath,
+            noteID: result.document.metadata.noteID,
+            pathIndex: pathIndex
+        )
+        let ext = PathIndexEntry.normalizeBodyFileExtension(bodyHint ?? "txt")
+        guard ext == "md" || ext == "txt" else { return result }
+        guard let reconciled = WikiLinkSyntaxReconciler.reconciledDocument(
+            document: result.document,
+            manifest: manifest
+        ) else {
+            return result
+        }
+
+        let folderID = pathIndex.entries.first { $0.relativePath == relativePath }?.folderID ?? FolderCatalog.rootFolderID
+        _ = try await save(reconciled, asRelativePath: relativePath, folderID: folderID, bodyFileExtension: ext)
+        var warnings = result.repairWarnings
+        warnings.append("Linked [[…]] wiki-style tokens from the note body to targets in this vault.")
+        return NoteLoadResult(document: reconciled, repairWarnings: warnings)
     }
 
     /// Legacy API for tests and callers still using a single path segment.

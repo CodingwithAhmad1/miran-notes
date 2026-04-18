@@ -898,12 +898,72 @@ struct EditorRootView: View {
                 )
         }
         .navigationTitle("")
+        .toolbar {
+            if model.effectiveEditorActivationProfile(forPane: paneIndex).editorKind == .plainMarkdownSource {
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        model.toggleMarkdownPreview(pane: paneIndex)
+                    } label: {
+                        Label(
+                            "Markdown preview",
+                            systemImage: model.workspacePanes[paneIndex].showMarkdownPreview ? "eye.fill" : "eye"
+                        )
+                    }
+                    .help(
+                        model.workspacePanes[paneIndex].showMarkdownPreview
+                            ? "Hide rendered preview"
+                            : "Show rendered preview beside source"
+                    )
+                }
+            }
+        }
         .simultaneousGesture(
             TapGesture().onEnded { _ in
                 if model.activePaneIndex != paneIndex {
                     model.activatePane(index: paneIndex)
                 }
             }
+        )
+    }
+
+    @ViewBuilder
+    private func plainMarkdownEditorSurface(
+        pane p: Int,
+        fallbackDocument: NoteDocument,
+        modules: EditorModuleFlags,
+        wiki: ((UUID) -> Void)?,
+        focusBodyFocusNonce: Int
+    ) -> some View {
+        PlainMarkdownNoteEditor(
+            document: Binding(
+                get: { model.workspacePanes[p].activeDocument ?? fallbackDocument },
+                set: { model.workspacePanes[p].activeDocument = $0 }
+            ),
+            cursorOffset: Binding(
+                get: { model.workspacePanes[p].editorCursorOffset },
+                set: { model.workspacePanes[p].editorCursorOffset = $0 }
+            ),
+            editorTextSelection: Binding(
+                get: { model.workspacePanes[p].editorTextSelection },
+                set: { model.workspacePanes[p].editorTextSelection = $0 }
+            ),
+            editorFindQuery: Binding(
+                get: { model.workspacePanes[p].editorFindQuery },
+                set: { model.workspacePanes[p].editorFindQuery = $0 }
+            ),
+            modules: modules,
+            pendingEditorScroll: model.pendingEditorScroll,
+            onPendingEditorScrollConsumed: { model.clearPendingEditorScroll() },
+            onCommands: { commands in
+                if model.activePaneIndex != p {
+                    model.activatePaneForEditingSync(p)
+                }
+                return model.apply(commands)
+            },
+            onWikiLinkClick: wiki,
+            onFullReplaceWarning: { model.presentFullBufferAdvisory(pane: p) },
+            onSizeLimitExceeded: { model.presentSizeLimitAdvisory(pane: p) },
+            focusBodyNonce: focusBodyFocusNonce
         )
     }
 
@@ -952,37 +1012,28 @@ struct EditorRootView: View {
                 focusBodyNonce: editorBodyFocusNonce
             )
         case .plainMarkdownSource:
-            PlainMarkdownNoteEditor(
-                document: Binding(
-                    get: { model.workspacePanes[p].activeDocument ?? fallbackDocument },
-                    set: { model.workspacePanes[p].activeDocument = $0 }
-                ),
-                cursorOffset: Binding(
-                    get: { model.workspacePanes[p].editorCursorOffset },
-                    set: { model.workspacePanes[p].editorCursorOffset = $0 }
-                ),
-                editorTextSelection: Binding(
-                    get: { model.workspacePanes[p].editorTextSelection },
-                    set: { model.workspacePanes[p].editorTextSelection = $0 }
-                ),
-                editorFindQuery: Binding(
-                    get: { model.workspacePanes[p].editorFindQuery },
-                    set: { model.workspacePanes[p].editorFindQuery = $0 }
-                ),
-                modules: modules,
-                pendingEditorScroll: model.pendingEditorScroll,
-                onPendingEditorScrollConsumed: { model.clearPendingEditorScroll() },
-                onCommands: { commands in
-                    if model.activePaneIndex != p {
-                        model.activatePaneForEditingSync(p)
-                    }
-                    return model.apply(commands)
-                },
-                onWikiLinkClick: wiki,
-                onFullReplaceWarning: { model.presentFullBufferAdvisory(pane: p) },
-                onSizeLimitExceeded: { model.presentSizeLimitAdvisory(pane: p) },
-                focusBodyNonce: editorBodyFocusNonce
-            )
+            if model.workspacePanes[p].showMarkdownPreview {
+                HSplitView {
+                    plainMarkdownEditorSurface(
+                        pane: p,
+                        fallbackDocument: fallbackDocument,
+                        modules: modules,
+                        wiki: wiki,
+                        focusBodyFocusNonce: editorBodyFocusNonce
+                    )
+                    .frame(minWidth: 240)
+                    MarkdownRenderedPreview(source: model.workspacePanes[p].activeDocument?.text ?? "")
+                        .frame(minWidth: 220, idealWidth: 320)
+                }
+            } else {
+                plainMarkdownEditorSurface(
+                    pane: p,
+                    fallbackDocument: fallbackDocument,
+                    modules: modules,
+                    wiki: wiki,
+                    focusBodyFocusNonce: editorBodyFocusNonce
+                )
+            }
         }
     }
 }

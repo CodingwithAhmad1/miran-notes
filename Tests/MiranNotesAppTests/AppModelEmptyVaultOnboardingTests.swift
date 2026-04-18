@@ -78,6 +78,7 @@ final class AppModelEmptyVaultOnboardingTests: XCTestCase {
         model.createFolder()
 
         try await waitUntil { !model.isEmptyVaultOnboardingState }
+        try await waitUntil { model.selectedFolderID != nil }
 
         XCTAssertNotNil(model.selectedFolderID)
         XCTAssertTrue(VaultWelcomeDismissalStore.isDismissed(vaultURL: vault))

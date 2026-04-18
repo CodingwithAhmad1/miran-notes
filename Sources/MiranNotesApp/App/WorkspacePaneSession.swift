@@ -27,4 +27,6 @@ struct WorkspacePaneSession {
 
     var backlinks: [BacklinkItem] = []
     var repairAdvisory: RepairAdvisory?
+    /// When true, markdown notes show a read-only rendered preview beside the source editor.
+    var showMarkdownPreview: Bool = false
 }
