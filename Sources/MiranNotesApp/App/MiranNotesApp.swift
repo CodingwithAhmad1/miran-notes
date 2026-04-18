@@ -664,16 +664,15 @@ private struct MiranNotesMainWindowContent: View {
             isFocused: $isToolbarSearchFocused,
             placeholder: workspaceSearchPlaceholderText
         )
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 8)
         .padding(.vertical, 3)
-        .background(Capsule().fill(Color(nsColor: .tertiarySystemFill)))
+        .frame(minWidth: frames.min, idealWidth: frames.ideal, maxWidth: frames.max, minHeight: 28)
         .overlay {
             if showsSearchRing {
                 Capsule().strokeBorder(Color.accentColor.opacity(0.55), lineWidth: 1.5)
             }
         }
-        .frame(minWidth: frames.min, idealWidth: frames.ideal, maxWidth: frames.max)
-        .frame(minHeight: 28)
         .accessibilityLabel(workspaceSearchAccessibilityLabel)
         .accessibilityHint(workspaceSearchAccessibilityHint)
     }
@@ -787,16 +786,15 @@ private struct WorkspaceDetailColumnView: View {
             isFocused: focusBinding,
             placeholder: paneSearchPlaceholder
         )
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 8)
         .padding(.vertical, 3)
-        .background(Capsule().fill(Color(nsColor: .tertiarySystemFill)))
+        .frame(minWidth: Self.paneSearchMinWidth, idealWidth: Self.paneSearchIdealWidth, maxWidth: Self.paneSearchMaxWidth, minHeight: 28)
         .overlay {
             if showsSearchRing {
                 Capsule().strokeBorder(Color.accentColor.opacity(0.55), lineWidth: 1.5)
             }
         }
-        .frame(minWidth: Self.paneSearchMinWidth, idealWidth: Self.paneSearchIdealWidth, maxWidth: Self.paneSearchMaxWidth)
-        .frame(minHeight: 28)
         .accessibilityLabel(paneSearchPlaceholder)
         .onChange(of: focusBinding.wrappedValue) { _, focused in
             if focused {
