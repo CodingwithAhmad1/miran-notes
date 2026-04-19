@@ -219,7 +219,39 @@ final class AppModel {
 
     func allowsToolbarNewNote(forPane pane: Int) -> Bool {
         guard let id = workspacePanes[pane].selectedFolderID else { return false }
-        return id != FolderCatalog.rootFolderID
+        guard id != FolderCatalog.rootFolderID else { return false }
+        return folderCatalog.allowsNotes(in: id)
+    }
+
+    /// Role for non-root folders; `nil` means the user has not classified the folder yet.
+    func folderRole(for folderID: UUID) -> FolderRole? {
+        guard folderID != FolderCatalog.rootFolderID else { return nil }
+        return folderCatalog.folder(id: folderID)?.role
+    }
+
+    func setFolderRole(_ role: FolderRole, folderID: UUID) {
+        Task { @MainActor in
+            do {
+                try await repository.setFolderRole(role, folderID: folderID)
+                await refreshNotes()
+            } catch {
+                userAlert = .recoverable(
+                    message: error.localizedDescription,
+                    kind: .retryRefreshNotesAndFolderUI
+                )
+            }
+        }
+    }
+
+    /// Parent for **New Folder** from the toolbar or shortcut: nested under the selected dashboard, otherwise vault root.
+    func newFolderParentID(forPane pane: Int) -> UUID {
+        guard let selected = workspacePanes[pane].selectedFolderID else {
+            return FolderCatalog.rootFolderID
+        }
+        if folderCatalog.allowsNestedFolders(in: selected) {
+            return selected
+        }
+        return FolderCatalog.rootFolderID
     }
 
     /// Menu / keyboard entry point for new folder; gates on workspace readiness, then delegates to ``createFolder()``.
@@ -757,7 +789,13 @@ final class AppModel {
         defer { isLoading = false }
         do {
             noteSummaries = try await repository.listNotes().sorted(by: Self.noteSummarySortPredicate)
-            folderCatalog = try await repository.loadFolderCatalog()
+            var catalog = try await repository.loadFolderCatalog()
+            catalog.ensureRoot()
+            if catalog.isDirty {
+                try await repository.persistFolderCatalog(catalog)
+                catalog.isDirty = false
+            }
+            folderCatalog = catalog
             scheduleBodySearchIndexRebuild()
         } catch {
             userAlert = .recoverable(
@@ -987,11 +1025,12 @@ final class AppModel {
         nil
     }
 
-    func createFolder(parentID: UUID = FolderCatalog.rootFolderID, name: String = "New Folder", pane: Int? = nil) {
+    func createFolder(parentID: UUID? = nil, name: String = "New Folder", pane: Int? = nil) {
         let targetPane = pane ?? activePaneIndex
+        let resolvedParent = parentID ?? newFolderParentID(forPane: targetPane)
         Task { @MainActor in
             do {
-                let id = try await repository.createFolder(parentID: parentID, name: name)
+                let id = try await repository.createFolder(parentID: resolvedParent, name: name)
                 markVaultWelcomeDismissedIfNeeded()
                 await refreshNotes()
                 self.workspacePanes[targetPane].selectedFolderID = id
@@ -1235,6 +1274,12 @@ final class AppModel {
             guard let targetFolder = workspacePanes[pane].selectedFolderID, targetFolder != FolderCatalog.rootFolderID else {
                 userAlert = .message(
                     "Select a folder in the sidebar before creating a note. New notes cannot be added at the vault root."
+                )
+                return
+            }
+            guard folderCatalog.allowsNotes(in: targetFolder) else {
+                userAlert = .message(
+                    "Notes can only be created in a Repository folder (or after you finish classifying this folder). Dashboard folders hold nested folders only."
                 )
                 return
             }

@@ -85,6 +85,24 @@ extension FolderCatalog {
         return parts.reversed().joined(separator: "/")
     }
 
+    /// Catalog folder whose on-disk directory is the immediate parent of the note file(s), or vault root when the path is a single segment.
+    ///
+    /// Uses ``relativeDirectoryPath(for:)`` so nested dashboard/repository trees resolve to the correct leaf folder for ``PathIndex`` / folder pages.
+    func folderIDOwningNote(relativePathWithoutExtension: String) -> UUID? {
+        let trimmed = relativePathWithoutExtension.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let parent = (trimmed as NSString).deletingLastPathComponent
+        if parent.isEmpty {
+            return Self.rootFolderID
+        }
+        for folder in folders where folder.id != Self.rootFolderID {
+            if relativeDirectoryPath(for: folder.id) == parent {
+                return folder.id
+            }
+        }
+        return nil
+    }
+
     /// On-disk directory URL for a folder (may not exist yet if empty).
     func directoryURL(vaultRoot: URL, folderID: UUID) -> URL {
         let rel = relativeDirectoryPath(for: folderID)
@@ -96,10 +114,14 @@ extension FolderCatalog {
         return url
     }
 
+    /// Throws ``NoteRepositoryError/invalidFolderMove`` when `parentID` is not the vault root or a dashboard folder.
     mutating func addFolder(parentID: UUID, name: String) throws -> UUID {
         ensureRoot()
-        guard folder(id: parentID) != nil else {
+        guard folder(id: parentID) != nil || parentID == Self.rootFolderID else {
             throw NoteRepositoryError.folderNotFound(parentID)
+        }
+        guard allowsNestedFolders(in: parentID) else {
+            throw NoteRepositoryError.invalidFolderMove
         }
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
@@ -107,7 +129,7 @@ extension FolderCatalog {
         }
         let id = UUID()
         let storageSegment = allocateStorageSegment(name: trimmed, parentID: parentID)
-        folders.append(FolderEntry(id: id, name: trimmed, storageSegment: storageSegment, parentFolderID: parentID))
+        folders.append(FolderEntry(id: id, name: trimmed, storageSegment: storageSegment, parentFolderID: parentID, role: nil))
         isDirty = true
         return id
     }

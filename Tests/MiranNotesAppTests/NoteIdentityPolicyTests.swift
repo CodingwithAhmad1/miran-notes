@@ -14,6 +14,7 @@ final class NoteIdentityPolicyTests: XCTestCase {
         let repo = NoteRepository(vaultURL: vault)
         try await repo.ensureVault()
         let folderID = try await repo.createFolder(parentID: FolderCatalog.rootFolderID, name: "Work")
+        try await repo.setFolderRole(.repository, folderID: folderID)
         let (doc, path) = try await repo.createNote(named: "alpha", folderID: folderID)
         let expectedID = doc.metadata.noteID
 
@@ -124,6 +125,7 @@ final class NoteIdentityPolicyTests: XCTestCase {
         let repo = NoteRepository(vaultURL: vault)
         try await repo.ensureVault()
         let folderID = try await repo.createFolder(parentID: FolderCatalog.rootFolderID, name: "NoWrite")
+        try await repo.setFolderRole(.repository, folderID: folderID)
         let (_, lockedPath) = try await repo.createNote(named: "locked-inner", folderID: folderID)
         let (_, openPath) = try await repo.createNote(named: "open-root", folderID: FolderCatalog.rootFolderID)
 

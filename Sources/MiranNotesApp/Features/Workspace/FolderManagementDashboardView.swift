@@ -97,6 +97,7 @@ struct FolderManagementDashboardView: View {
                     onWorkspaceShortcutsChanged: onWorkspaceShortcutsChanged
                 )
             }
+            .scrollContentBackground(.hidden)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .confirmationDialog(
                 "Hide folders from sidebar?",

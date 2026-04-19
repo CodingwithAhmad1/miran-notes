@@ -35,6 +35,8 @@ final class AppModelFirstNoteBodyPickerTests: XCTestCase {
         model.createFolder(name: "EmptyTopic")
         try await waitUntil { model.topLevelFolderEntries.count == 1 }
         let folderID = try XCTUnwrap(model.topLevelFolderEntries.first?.id)
+        try await repo.setFolderRole(.repository, folderID: folderID)
+        await model.refreshNotes()
         model.selectFolderForPage(folderID)
 
         model.createNote()

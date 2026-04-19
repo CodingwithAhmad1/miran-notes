@@ -51,7 +51,7 @@ final class WorkspaceCompatibilityScannerTests: XCTestCase {
         XCTAssertNil(scan.notes[0].parentFolderName)
     }
 
-    func testNestedFolderRejected() throws {
+    func testNestedEmptyFoldersAreCompatible() throws {
         let root = try tempRoot()
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let topic = root.appendingPathComponent("Business", isDirectory: true)
@@ -60,10 +60,44 @@ final class WorkspaceCompatibilityScannerTests: XCTestCase {
         try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
 
         let outcome = WorkspaceCompatibilityScanner.scan(vaultRoot: root)
+        guard case .compatible(let scan) = outcome else {
+            return XCTFail("Expected .compatible, got \(outcome)")
+        }
+        XCTAssertEqual(scan.folders.count, 2)
+        XCTAssertTrue(scan.notes.isEmpty)
+    }
+
+    func testNestedFolderWithNoteInsideIsCompatible() throws {
+        let root = try tempRoot()
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let topic = root.appendingPathComponent("Business", isDirectory: true)
+        try FileManager.default.createDirectory(at: topic, withIntermediateDirectories: true)
+        let nested = topic.appendingPathComponent("Inside", isDirectory: true)
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        try "hi".write(to: nested.appendingPathComponent("Deep.txt"), atomically: true, encoding: .utf8)
+
+        let outcome = WorkspaceCompatibilityScanner.scan(vaultRoot: root)
+        guard case .compatible(let scan) = outcome else {
+            return XCTFail("Expected .compatible, got \(outcome)")
+        }
+        XCTAssertEqual(scan.notes.count, 1)
+        XCTAssertEqual(scan.notes[0].relativePathWithoutExtension, "Business/Inside/Deep")
+    }
+
+    func testNotesAndSubfoldersInSameFolderRejected() throws {
+        let root = try tempRoot()
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let topic = root.appendingPathComponent("Hub", isDirectory: true)
+        try FileManager.default.createDirectory(at: topic, withIntermediateDirectories: true)
+        try "a".write(to: topic.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        let nested = topic.appendingPathComponent("Child", isDirectory: true)
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+
+        let outcome = WorkspaceCompatibilityScanner.scan(vaultRoot: root)
         guard case .incompatible(let report) = outcome else {
             return XCTFail("Expected .incompatible, got \(outcome)")
         }
-        XCTAssertTrue(report.issues.contains { $0.code == .nestedFolder })
+        XCTAssertTrue(report.issues.contains { $0.code == .folderContainsNotesAndSubfolders })
     }
 
     func testNonNoteBodyFileInTopicFolderRejected() throws {

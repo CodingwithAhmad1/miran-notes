@@ -119,6 +119,7 @@ final class NoteRepositoryTests: XCTestCase {
         let repo = NoteRepository(vaultURL: vault)
         try await repo.ensureVault()
         let folderID = try await repo.createFolder(parentID: FolderCatalog.rootFolderID, name: "MdFolder")
+        try await repo.setFolderRole(.repository, folderID: folderID)
         let (created, base) = try await repo.createNote(named: "md-round", folderID: folderID, bodyFileExtension: "md")
         XCTAssertEqual(created.metadata.blocks.first?.type, .paragraph)
 

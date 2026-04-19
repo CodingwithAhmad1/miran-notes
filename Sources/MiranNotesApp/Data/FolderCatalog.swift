@@ -1,8 +1,16 @@
 import Foundation
 import MiranNotesCore
 
+/// How a non-root folder behaves in the main content column: navigation hub vs note container.
+enum FolderRole: String, Codable, Equatable, Hashable, Sendable {
+    /// Lists child folders only; may not contain notes.
+    case dashboard
+    /// Lists notes (classic folder page); may not contain nested folders from the app.
+    case repository
+}
+
 struct FolderCatalog: Codable, Equatable, Sendable {
-    static let currentSchemaVersion = 2
+    static let currentSchemaVersion = 3
     static let rootFolderID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
 
     var schemaVersion: Int
@@ -24,6 +32,34 @@ struct FolderCatalog: Codable, Equatable, Sendable {
             isDirty = true
         }
         ensureStorageSegments()
+        applyFolderRoleSchemaV3MigrationIfNeeded()
+    }
+
+    /// Pre-v3 catalogs had no roles. Assign ``FolderRole/repository`` to every non-root folder once so existing vaults keep note-only folder pages without a classification prompt.
+    mutating func applyFolderRoleSchemaV3MigrationIfNeeded() {
+        guard schemaVersion < Self.currentSchemaVersion else { return }
+        for i in folders.indices {
+            if folders[i].id == Self.rootFolderID { continue }
+            if folders[i].role == nil {
+                folders[i].role = .repository
+            }
+        }
+        schemaVersion = Self.currentSchemaVersion
+        isDirty = true
+    }
+
+    /// Vault root and folders classified as repositories may contain notes. Unclassified non-root folders do not until the user picks a role.
+    func allowsNotes(in folderID: UUID) -> Bool {
+        if folderID == Self.rootFolderID { return true }
+        guard let entry = folder(id: folderID) else { return false }
+        return entry.role == .repository
+    }
+
+    /// Vault root and dashboard folders may contain nested catalog folders.
+    func allowsNestedFolders(in parentID: UUID) -> Bool {
+        if parentID == Self.rootFolderID { return true }
+        guard let entry = folder(id: parentID) else { return false }
+        return entry.role == .dashboard
     }
 }
 
@@ -33,8 +69,10 @@ struct FolderEntry: Codable, Equatable, Hashable, Sendable {
     /// Stable on-disk segment used for directory layout (independent from display `name`).
     var storageSegment: String
     var parentFolderID: UUID?
+    /// `nil` for the vault root (ignored). For other folders, `nil` until the user classifies the folder once.
+    var role: FolderRole?
 
-    init(id: UUID, name: String, storageSegment: String? = nil, parentFolderID: UUID?) {
+    init(id: UUID, name: String, storageSegment: String? = nil, parentFolderID: UUID?, role: FolderRole? = nil) {
         self.id = id
         self.name = name
         if let storageSegment {
@@ -43,10 +81,11 @@ struct FolderEntry: Codable, Equatable, Hashable, Sendable {
             self.storageSegment = id == FolderCatalog.rootFolderID ? "" : VaultPath.slugifySegment(name)
         }
         self.parentFolderID = parentFolderID
+        self.role = id == FolderCatalog.rootFolderID ? nil : role
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, name, storageSegment, parentFolderID
+        case id, name, storageSegment, parentFolderID, role
     }
 
     init(from decoder: Decoder) throws {
@@ -54,18 +93,32 @@ struct FolderEntry: Codable, Equatable, Hashable, Sendable {
         id = try container.decode(UUID.self, forKey: .id)
         name = try container.decode(String.self, forKey: .name)
         parentFolderID = try container.decodeIfPresent(UUID.self, forKey: .parentFolderID)
+        role = try container.decodeIfPresent(FolderRole.self, forKey: .role)
         if let stored = try container.decodeIfPresent(String.self, forKey: .storageSegment), !stored.isEmpty || id == FolderCatalog.rootFolderID {
             storageSegment = id == FolderCatalog.rootFolderID ? "" : stored
         } else {
             storageSegment = id == FolderCatalog.rootFolderID ? "" : VaultPath.slugifySegment(name)
         }
+        if id == FolderCatalog.rootFolderID {
+            role = nil
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(name, forKey: .name)
+        try container.encode(storageSegment, forKey: .storageSegment)
+        try container.encodeIfPresent(parentFolderID, forKey: .parentFolderID)
+        try container.encodeIfPresent(role, forKey: .role)
     }
 
     static let root = FolderEntry(
         id: FolderCatalog.rootFolderID,
         name: "Vault",
         storageSegment: "",
-        parentFolderID: nil
+        parentFolderID: nil,
+        role: nil
     )
 }
 

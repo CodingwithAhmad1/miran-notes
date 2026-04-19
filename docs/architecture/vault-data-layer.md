@@ -34,7 +34,14 @@ This note summarizes how on-disk vault state, the repository, and `AppModel` fit
 ## Path containment and symlinks
 
 - **User-chosen root:** All vault I/O is rooted at the directory the user opens. `NoteRepository` and `VaultPath` build URLs from that root plus manifest-relative paths (see [ADR 0003](../adr/0003-folders-paths-and-manifest-v2.md) for canonical `relativePath` rules).
-- **Workspace gate:** On vault load and on vault watch refresh, `WorkspaceCompatibilityScanner` (`Sources/MiranNotesApp/Data/WorkspaceCompatibility.swift`) performs a **structural** scan of the vault root. It **rejects symbolic links** at the root and inside each top-level topic folder, and it **rejects nested directories** inside those topic folders (flat topic layout). That keeps the gate aligned with how the app creates folders today (`NoteRepository.createFolder` only adds children of the catalog root). Paths that appear only after reconcile (e.g. from external tools) still flow through normal file APIs; the app does not treat symlink targets as a separate security boundary.
+- **Workspace gate:** On vault load and on vault watch refresh, `WorkspaceCompatibilityScanner` performs a **structural** scan of the vault root. It **rejects symbolic links** in vault data directories, allows **nested subfolders** under topic folders (for **dashboard** hubs), and rejects a directory that **mixes direct note files and subfolders** in the same folder (matching dashboard vs repository layout). Paths that appear only after reconcile still flow through normal file APIs; the app does not treat symlink targets as a separate security boundary.
+
+## Folder catalog roles (`folder-catalog.json` v3)
+
+- Each **non-root** folder has an optional **FolderRole**: **dashboard** (nested folders only—no notes) or **repository** (notes—classic folder page). New folders stay unclassified until the user chooses once in the folder page; that choice is persisted and is not changed afterward.
+- **Migration:** Catalogs with `schemaVersion` below 3 are upgraded in `FolderCatalog.ensureRoot()`: every existing non-root folder gets **repository** so current vaults keep working without a mass classification prompt.
+- **Enforcement:** `NoteRepository` blocks `createNote` / `moveNote` into dashboards and unclassified folders, and blocks `createFolder` under repositories. Helpers: `FolderCatalog.allowsNotes(in:)` and `allowsNestedFolders(in:)`.
+- **Inferring folder for a path:** When reconciling or materializing sidecars, owning `folderID` is ``FolderCatalog/folderIDOwningNote(relativePathWithoutExtension:)`` (parent directory must match ``relativeDirectoryPath(for:)`` for a catalog folder), with a legacy first-segment fallback for unmatched paths. Paths whose resolved folder does not allow notes are skipped and logged instead of failing the whole reconcile.
 - **Environmental risk:** If the vault lives in a cloud-sync folder or contains items created outside Miran, containment is ultimately **filesystem + user process** behavior. Prefer normal directories for vault data; see [VaultSafety.md](../guides/VaultSafety.md).
 
 ## Telemetry

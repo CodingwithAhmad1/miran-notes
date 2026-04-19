@@ -446,8 +446,6 @@ private struct MiranNotesMainWindowContent: View {
         let activePane = model.activePaneIndex
         let activeNote = model.workspacePanes.indices.contains(activePane)
             ? model.workspacePanes[activePane].selectedNoteID : nil
-        let showsBackNavigation =
-            model.isFolderManagementPresented || activeNote != nil
 
         NavigationStack {
             Group {
@@ -523,10 +521,7 @@ private struct MiranNotesMainWindowContent: View {
                 }
                 if model.currentLayout == .single {
                     ToolbarItem(placement: .principal) {
-                        vaultToolbarSearchField(
-                            toolbarLayoutWidth: toolbarLayoutWidth,
-                            showsBackNavigation: showsBackNavigation
-                        )
+                        vaultToolbarSearchField(toolbarLayoutWidth: toolbarLayoutWidth)
                     }
                 }
                 if !Self.shouldHideTrailingToolbarControls(width: outerToolbarLayoutWidth) {
@@ -627,21 +622,16 @@ private struct MiranNotesMainWindowContent: View {
     /// Space reserved for back/navigation column, trailing icon buttons, and unified-toolbar insets.
     private static let toolbarChromeReserveForTrailingItems: CGFloat = 300
 
-    /// Horizontal space reserved in the detail toolbar for the back control and unified bar insets when sizing search.
+    /// Reserved when sizing the principal search field so its width stays stable when the back button appears.
     private static let toolbarSearchLeadingChromeWhenBackVisible: CGFloat = 120
-    private static let toolbarSearchLeadingChromeWhenNoBack: CGFloat = 56
 
     private static let toolbarSearchFieldMinWidth: CGFloat = 400
     private static let toolbarSearchFieldIdealWidth: CGFloat = 500
     private static let toolbarSearchFieldMaxWidth: CGFloat = 600
 
-    private static func toolbarSearchFieldFrameWidths(
-        toolbarLayoutWidth: CGFloat,
-        showsBackNavigation: Bool
-    ) -> (min: CGFloat, ideal: CGFloat, max: CGFloat) {
-        let chrome =
-            showsBackNavigation ? toolbarSearchLeadingChromeWhenBackVisible : toolbarSearchLeadingChromeWhenNoBack
-        let budget = max(96, toolbarLayoutWidth - chrome)
+    private static func toolbarSearchFieldFrameWidths(toolbarLayoutWidth: CGFloat) -> (min: CGFloat, ideal: CGFloat, max: CGFloat) {
+        // Always reserve the wider leading chrome so the search pill does not resize when back navigation appears.
+        let budget = max(96, toolbarLayoutWidth - toolbarSearchLeadingChromeWhenBackVisible)
         let rawMin = min(toolbarSearchFieldMinWidth, budget)
         let minW = max(200, rawMin)
         let idealW = min(toolbarSearchFieldIdealWidth, max(minW, budget))
@@ -650,15 +640,9 @@ private struct MiranNotesMainWindowContent: View {
     }
 
     @ViewBuilder
-    private func vaultToolbarSearchField(
-        toolbarLayoutWidth: CGFloat,
-        showsBackNavigation: Bool
-    ) -> some View {
+    private func vaultToolbarSearchField(toolbarLayoutWidth: CGFloat) -> some View {
         let showsSearchRing = isToolbarSearchFocused && controlActiveState == .active
-        let frames = Self.toolbarSearchFieldFrameWidths(
-            toolbarLayoutWidth: toolbarLayoutWidth,
-            showsBackNavigation: showsBackNavigation
-        )
+        let frames = Self.toolbarSearchFieldFrameWidths(toolbarLayoutWidth: toolbarLayoutWidth)
         ToolbarSearchField(
             text: workspaceSearchBinding,
             isFocused: $isToolbarSearchFocused,
@@ -720,6 +704,11 @@ private struct MiranNotesMainWindowContent: View {
 }
 
 // MARK: - Workspace detail (folder list vs note editor)
+
+/// Matches `NSTextView` / markdown preview document surface so the detail column reads as one paper sheet.
+private enum WorkspaceDocumentSurface {
+    static var background: Color { Color(nsColor: .textBackgroundColor) }
+}
 
 private struct WorkspaceDetailColumnView: View {
     @Bindable var model: AppModel
@@ -855,9 +844,12 @@ private struct WorkspaceDetailColumnView: View {
                     }
                 )
                 .background {
-                    if paneIndex == model.activePaneIndex || model.currentLayout == .single {
-                        GeometryReader { geo in
-                            Color.clear.preference(key: DetailColumnWidthPreferenceKey.self, value: geo.size.width)
+                    ZStack(alignment: .topLeading) {
+                        WorkspaceDocumentSurface.background
+                        if paneIndex == model.activePaneIndex || model.currentLayout == .single {
+                            GeometryReader { geo in
+                                Color.clear.preference(key: DetailColumnWidthPreferenceKey.self, value: geo.size.width)
+                            }
                         }
                     }
                 }

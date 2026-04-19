@@ -43,6 +43,7 @@ final class AppModelNavigationTests: XCTestCase {
         let repo = NoteRepository(vaultURL: vault)
         try await repo.ensureVault()
         let folderID = try await repo.createFolder(parentID: FolderCatalog.rootFolderID, name: "Inbox")
+        try await repo.setFolderRole(.repository, folderID: folderID)
         let (_, baseA) = try await repo.createNote(named: "prior-note", folderID: folderID)
 
         let model = AppModel(repository: repo)

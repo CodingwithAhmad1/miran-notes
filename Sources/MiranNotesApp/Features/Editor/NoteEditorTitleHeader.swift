@@ -25,7 +25,7 @@ struct NoteEditorTitleHeader: View {
                 .padding(.horizontal, 48)
                 .padding(.vertical, 14)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color(nsColor: .controlBackgroundColor))
+                .background(Color(nsColor: .textBackgroundColor))
                 .onSubmit {
                     commitTitle(moveCaretToBody: true)
                 }

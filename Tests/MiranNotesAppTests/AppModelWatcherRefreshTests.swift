@@ -11,6 +11,7 @@ final class AppModelWatcherRefreshTests: XCTestCase {
         try await repo.ensureVault()
 
         let folderID = try await repo.createFolder(parentID: FolderCatalog.rootFolderID, name: "ImportMd")
+        try await repo.setFolderRole(.repository, folderID: folderID)
         let (_, seedPath) = try await repo.createNote(named: "seed", folderID: folderID, bodyFileExtension: "md")
         let folderPrefix = (seedPath as NSString).deletingLastPathComponent
         let droppedStem = "dropped-import"
@@ -30,6 +31,7 @@ final class AppModelWatcherRefreshTests: XCTestCase {
         try await repo.ensureVault()
 
         let folderID = try await repo.createFolder(parentID: FolderCatalog.rootFolderID, name: "ImportMd")
+        try await repo.setFolderRole(.repository, folderID: folderID)
         let (_, seedPath) = try await repo.createNote(named: "seed", folderID: folderID, bodyFileExtension: "md")
         let folderPrefix = (seedPath as NSString).deletingLastPathComponent
         let droppedStem = "dropped-import"

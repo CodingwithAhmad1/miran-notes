@@ -61,6 +61,8 @@ struct CompatibilityIssue: Equatable, Sendable, Identifiable {
 
 enum IssueCode: String, Sendable, Codable {
     case nestedFolder
+    /// A single directory contains both note files and subfolders (dashboard vs repository layout).
+    case folderContainsNotesAndSubfolders
     case disallowedRootFile
     case disallowedItemInNoteFolder
     case symlinkNotAllowed
@@ -83,7 +85,7 @@ struct WorkspaceNoteFileMetadata: Hashable, Sendable {
 
 /// Structural gate for the vault root before the main shell loads.
 ///
-/// Implements the **flat topic-folder** layout: top-level directories (except `.miran` / `_aux`) are topic folders; each topic folder’s **immediate** children must be note files or ignored noise—**not** nested directories or symbolic links. This aligns with ``NoteRepository/createFolder``, which only adds folders under the catalog root. Canonical multi-segment note paths and indexes follow ADR 0003 (`docs/adr/0003-folders-paths-and-manifest-v2.md`).
+/// Top-level directories (except `.miran` / `_aux`) are topic folders. Each directory may contain either **note files** (and sidecars) **or** **nested subfolders** (dashboard hubs), not both in the same folder—matching dashboard vs repository folder semantics. Nested directories are scanned recursively; leaf folders hold notes only. Canonical multi-segment note paths and indexes follow ADR 0003 (`docs/adr/0003-folders-paths-and-manifest-v2.md`).
 ///
 /// **Symlinks:** Reported as ``IssueCode/symlinkNotAllowed`` at scanned levels. The scanner does not walk every manifest path to re-validate symlinks on each segment.
 enum WorkspaceCompatibilityScanner {
@@ -232,108 +234,14 @@ enum WorkspaceCompatibilityScanner {
         for folderURL in topicFolders.sorted(by: { $0.lastPathComponent.localizedCaseInsensitiveCompare($1.lastPathComponent) == .orderedAscending }) {
             let folderName = folderURL.lastPathComponent
             let folderRel = WorkspaceRelativePath(folderName)
-
-            let inner: [URL]
-            do {
-                inner = try FileManager.default.contentsOfDirectory(
-                    at: folderURL,
-                    includingPropertiesForKeys: Array(resourceKeys),
-                    options: [.skipsSubdirectoryDescendants]
-                )
-            } catch {
-                issues.append(
-                    CompatibilityIssue(
-                        code: .unreadableDirectory,
-                        message: "Could not read folder “\(folderName)”: \(error.localizedDescription)",
-                        path: folderRel
-                    )
-                )
-                continue
-            }
-
             folderEntries.append(WorkspaceFolderScanEntry(name: folderName, relativePath: folderRel))
-
-            var bodyExtensionsSeenInFolder = Set<String>()
-
-            for item in inner {
-                let values = try? item.resourceValues(forKeys: resourceKeys)
-                let isSymlink = values?.isSymbolicLink == true
-                let isDirectory = values?.isDirectory == true
-                let isRegular = values?.isRegularFile == true
-                let itemName = item.lastPathComponent
-                let itemRel = WorkspaceRelativePath("\(folderName)/\(itemName)")
-
-                if isSymlink {
-                    issues.append(
-                        CompatibilityIssue(
-                            code: .symlinkNotAllowed,
-                            message: "Symbolic links are not allowed inside topic folders.",
-                            path: itemRel
-                        )
-                    )
-                    continue
-                }
-
-                if isDirectory {
-                    issues.append(
-                        CompatibilityIssue(
-                            code: .nestedFolder,
-                            message: "Nested folders are not allowed (folders may only contain note files).",
-                            path: itemRel
-                        )
-                    )
-                    continue
-                }
-
-                if isRegular {
-                    if WorkspaceCompatibilityPolicy.ignoredNoiseFileNames.contains(itemName) {
-                        continue
-                    }
-                    let ext = item.pathExtension.lowercased()
-                    if WorkspaceCompatibilityPolicy.noteBodyExtensions.contains(ext) {
-                        bodyExtensionsSeenInFolder.insert(ext)
-                        let stem = (itemName as NSString).deletingPathExtension
-                        let relNoExt = "\(folderName)/\(stem)"
-                        noteEntries.append(
-                            WorkspaceNoteScanEntry(
-                                fileName: itemName,
-                                relativePathWithoutExtension: relNoExt,
-                                parentFolderName: folderName
-                            )
-                        )
-                        continue
-                    }
-                    if itemName.lowercased().hasSuffix(WorkspaceCompatibilityPolicy.metadataSidecarSuffix) {
-                        continue
-                    }
-                    issues.append(
-                        CompatibilityIssue(
-                            code: .disallowedItemInNoteFolder,
-                            message: "Only .txt or .md notes (and .meta.json sidecars) are allowed inside topic folders.",
-                            path: itemRel
-                        )
-                    )
-                    continue
-                }
-
-                issues.append(
-                    CompatibilityIssue(
-                        code: .disallowedItemInNoteFolder,
-                        message: "Unexpected item inside topic folder.",
-                        path: itemRel
-                    )
-                )
-            }
-
-            if bodyExtensionsSeenInFolder.count > 1 {
-                issues.append(
-                    CompatibilityIssue(
-                        code: .mixedNoteBodyExtensionsInFolder,
-                        message: "Folder “\(folderName)” mixes .txt and .md notes. Use one body format per folder.",
-                        path: folderRel
-                    )
-                )
-            }
+            scanVaultFolderContents(
+                at: folderURL,
+                posixPrefix: folderName,
+                issues: &issues,
+                folderEntries: &folderEntries,
+                noteEntries: &noteEntries
+            )
         }
 
         if !issues.isEmpty {
@@ -346,6 +254,137 @@ enum WorkspaceCompatibilityScanner {
 
         let scan = WorkspaceStructureScan(folders: folderEntries, notes: noteEntries)
         return .compatible(scan)
+    }
+
+    /// Recursively scans a vault topic or nested folder: each directory may contain either note files or subfolders, not both.
+    private static func scanVaultFolderContents(
+        at dirURL: URL,
+        posixPrefix: String,
+        issues: inout [CompatibilityIssue],
+        folderEntries: inout [WorkspaceFolderScanEntry],
+        noteEntries: inout [WorkspaceNoteScanEntry]
+    ) {
+        let inner: [URL]
+        do {
+            inner = try FileManager.default.contentsOfDirectory(
+                at: dirURL,
+                includingPropertiesForKeys: Array(resourceKeys),
+                options: [.skipsSubdirectoryDescendants]
+            )
+        } catch {
+            issues.append(
+                CompatibilityIssue(
+                    code: .unreadableDirectory,
+                    message: "Could not read folder “\(posixPrefix)”: \(error.localizedDescription)",
+                    path: WorkspaceRelativePath(posixPrefix)
+                )
+            )
+            return
+        }
+
+        var childDirs: [URL] = []
+        var bodyExtensionsSeenInFolder = Set<String>()
+        var hasDirectNoteFile = false
+        let parentDisplayName = (posixPrefix as NSString).lastPathComponent
+
+        for item in inner {
+            let values = try? item.resourceValues(forKeys: resourceKeys)
+            let isSymlink = values?.isSymbolicLink == true
+            let isDirectory = values?.isDirectory == true
+            let isRegular = values?.isRegularFile == true
+            let itemName = item.lastPathComponent
+            let itemRel = WorkspaceRelativePath("\(posixPrefix)/\(itemName)")
+
+            if isSymlink {
+                issues.append(
+                    CompatibilityIssue(
+                        code: .symlinkNotAllowed,
+                        message: "Symbolic links are not allowed inside vault folders.",
+                        path: itemRel
+                    )
+                )
+                continue
+            }
+
+            if isDirectory {
+                childDirs.append(item)
+                continue
+            }
+
+            if isRegular {
+                if WorkspaceCompatibilityPolicy.ignoredNoiseFileNames.contains(itemName) {
+                    continue
+                }
+                let ext = item.pathExtension.lowercased()
+                if WorkspaceCompatibilityPolicy.noteBodyExtensions.contains(ext) {
+                    hasDirectNoteFile = true
+                    bodyExtensionsSeenInFolder.insert(ext)
+                    let stem = (itemName as NSString).deletingPathExtension
+                    let relNoExt = "\(posixPrefix)/\(stem)"
+                    noteEntries.append(
+                        WorkspaceNoteScanEntry(
+                            fileName: itemName,
+                            relativePathWithoutExtension: relNoExt,
+                            parentFolderName: parentDisplayName
+                        )
+                    )
+                    continue
+                }
+                if itemName.lowercased().hasSuffix(WorkspaceCompatibilityPolicy.metadataSidecarSuffix) {
+                    continue
+                }
+                issues.append(
+                    CompatibilityIssue(
+                        code: .disallowedItemInNoteFolder,
+                        message: "Only .txt or .md notes (and .meta.json sidecars) are allowed inside vault folders.",
+                        path: itemRel
+                    )
+                )
+                continue
+            }
+
+            issues.append(
+                CompatibilityIssue(
+                    code: .disallowedItemInNoteFolder,
+                    message: "Unexpected item inside vault folder.",
+                    path: itemRel
+                )
+            )
+        }
+
+        if !childDirs.isEmpty, hasDirectNoteFile {
+            issues.append(
+                CompatibilityIssue(
+                    code: .folderContainsNotesAndSubfolders,
+                    message: "A folder cannot contain both notes and subfolders (use a Dashboard folder for nesting).",
+                    path: WorkspaceRelativePath(posixPrefix)
+                )
+            )
+            return
+        }
+
+        if bodyExtensionsSeenInFolder.count > 1 {
+            issues.append(
+                CompatibilityIssue(
+                    code: .mixedNoteBodyExtensionsInFolder,
+                    message: "Folder “\(parentDisplayName)” mixes .txt and .md notes. Use one body format per folder.",
+                    path: WorkspaceRelativePath(posixPrefix)
+                )
+            )
+        }
+
+        for sub in childDirs.sorted(by: { $0.lastPathComponent.localizedCaseInsensitiveCompare($1.lastPathComponent) == .orderedAscending }) {
+            let name = sub.lastPathComponent
+            let childPrefix = "\(posixPrefix)/\(name)"
+            folderEntries.append(WorkspaceFolderScanEntry(name: name, relativePath: WorkspaceRelativePath(childPrefix)))
+            scanVaultFolderContents(
+                at: sub,
+                posixPrefix: childPrefix,
+                issues: &issues,
+                folderEntries: &folderEntries,
+                noteEntries: &noteEntries
+            )
+        }
     }
 
     /// Builds metadata for a `.txt` file (never throws for read errors — uses empty data on failure).

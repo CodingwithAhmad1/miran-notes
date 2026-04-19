@@ -25,6 +25,8 @@ enum NoteRepositoryError: LocalizedError, Equatable {
     case ambiguousNoteBody(String)
     /// The vault root path is missing or is not a directory (the app does not create the vault folder itself).
     case vaultRootNotDirectory(path: String)
+    /// Notes cannot live in a dashboard folder or in an unclassified non-root folder.
+    case folderCannotContainNotes(UUID)
 
     var errorDescription: String? {
         switch self {
@@ -52,6 +54,8 @@ enum NoteRepositoryError: LocalizedError, Equatable {
             return "Note has both .txt and .md files: \(path)"
         case let .vaultRootNotDirectory(path):
             return "Vault folder does not exist or is not a directory: \(path)"
+        case let .folderCannotContainNotes(id):
+            return "Notes cannot be stored in this folder: \(id.uuidString)"
         }
     }
 }
@@ -118,9 +122,16 @@ actor NoteRepository {
         return pathIndex.entries.first(where: { $0.relativePath == relativePath })?.bodyFileExtension
     }
 
-    /// Rewrites a relative path when a folder prefix changes; returns `nil` if the path is outside `oldPrefix`.
-    /// Maps `folder/title` notes to the folder catalog’s top-level folder; single-segment paths use vault root.
+    /// Resolves owning folder for ``PathIndex`` from the note path (no extension): parent directory must match ``FolderCatalog/relativeDirectoryPath(for:)``, with legacy first-segment fallback when unmatched.
     private static func inferFolderID(forNotePath relativePath: String, folderCatalog: FolderCatalog) -> UUID {
+        if let resolved = folderCatalog.folderIDOwningNote(relativePathWithoutExtension: relativePath) {
+            return resolved
+        }
+        return legacyInferFolderIDFirstSegment(forNotePath: relativePath, folderCatalog: folderCatalog)
+    }
+
+    /// Legacy: map `topic/note` to a **top-level** catalog child whose `storageSegment` equals the first path segment.
+    private static func legacyInferFolderIDFirstSegment(forNotePath relativePath: String, folderCatalog: FolderCatalog) -> UUID {
         let parts = relativePath.split(separator: "/").map(String.init)
         guard parts.count > 1, let first = parts.first else {
             return FolderCatalog.rootFolderID
@@ -559,6 +570,9 @@ actor NoteRepository {
 
         var folderCatalog = try await index.loadFolderCatalog()
         folderCatalog.ensureRoot()
+        guard folderCatalog.allowsNotes(in: folderID) else {
+            throw NoteRepositoryError.folderCannotContainNotes(folderID)
+        }
         pathIndex.upsert(
             noteID: documentToPersist.metadata.noteID,
             folderID: folderID,
@@ -719,6 +733,36 @@ actor NoteRepository {
         try await index.loadFolderCatalog()
     }
 
+    /// Persists the folder catalog when ``FolderCatalog/isDirty`` (e.g. after schema migration in ``FolderCatalog/ensureRoot()``).
+    func persistFolderCatalog(_ folderCatalog: FolderCatalog) async throws {
+        let manifest = try await loadOrRebuildManifest()
+        let graph = try await index.loadLinkGraph()
+        let rel = try await index.loadRelationshipIndex()
+        let pathIndex = try await index.loadPathIndex()
+        await index.logIfIntegrityIssues(try await index.commitIndexOnly(
+            manifest: manifest,
+            linkGraph: graph,
+            relationshipIndex: rel,
+            folderCatalog: folderCatalog,
+            pathIndex: pathIndex
+        ))
+    }
+
+    /// Sets ``FolderRole`` the first time the user opens a non-root folder; later calls are ignored.
+    func setFolderRole(_ role: FolderRole, folderID: UUID) async throws {
+        try await files.ensureVault()
+        guard folderID != FolderCatalog.rootFolderID else { return }
+        var folderCatalog = try await index.loadFolderCatalog()
+        folderCatalog.ensureRoot()
+        guard let idx = folderCatalog.folders.firstIndex(where: { $0.id == folderID }) else {
+            throw NoteRepositoryError.folderNotFound(folderID)
+        }
+        guard folderCatalog.folders[idx].role == nil else { return }
+        folderCatalog.folders[idx].role = role
+        folderCatalog.isDirty = true
+        try await persistFolderCatalog(folderCatalog)
+    }
+
     /// Read-only consistency report (manifest, path index, `.txt` / `.meta.json` pairing).
     func validateVaultDrift() async throws -> VaultDriftReport {
         try await files.ensureVault()
@@ -739,6 +783,9 @@ actor NoteRepository {
         folderCatalog.ensureRoot()
         guard folderID == FolderCatalog.rootFolderID || folderCatalog.folder(id: folderID) != nil else {
             throw NoteRepositoryError.folderNotFound(folderID)
+        }
+        guard folderCatalog.allowsNotes(in: folderID) else {
+            throw NoteRepositoryError.folderCannotContainNotes(folderID)
         }
 
         let resolvedExt = PathIndexEntry.normalizeBodyFileExtension(bodyFileExtension)
@@ -855,6 +902,10 @@ actor NoteRepository {
             }
             guard needsWrite else { continue }
             let folderID = folderByNote[entry.noteID] ?? Self.inferFolderID(forNotePath: entry.relativePath, folderCatalog: folderCatalog)
+            guard folderCatalog.allowsNotes(in: folderID) else {
+                Logger.vault.error("materializeMissingSidecars skip path=\(entry.relativePath, privacy: .public) folderID=\(folderID.uuidString, privacy: .public) cannot contain notes")
+                continue
+            }
             do {
                 let hint = bodyExtensionForPath(relativePath: entry.relativePath, noteID: entry.noteID, pathIndex: pathIndex)
                 let doc = try await files.loadNote(
@@ -901,10 +952,14 @@ actor NoteRepository {
             } else {
                 allocatedID = UUID()
             }
+            let folderID = Self.inferFolderID(forNotePath: rel, folderCatalog: folderCatalog)
+            guard folderCatalog.allowsNotes(in: folderID) else {
+                Logger.vault.error("reconcileManifestWithDisk skip new path=\(rel, privacy: .public) folderID=\(folderID.uuidString, privacy: .public) cannot contain notes")
+                continue
+            }
             let title = VaultPath.displayTitle(forRelativePath: rel)
             next.upsert(noteID: allocatedID, relativePath: rel, title: title)
             added += 1
-            let folderID = Self.inferFolderID(forNotePath: rel, folderCatalog: folderCatalog)
             let probed = try NoteFileActor.resolveBodyExtension(vaultRoot: vaultURL, relativePath: rel, preferred: nil)
             let doc = try await files.loadNote(relativePath: rel, fallbackNoteID: allocatedID, bodyFileExtension: probed).document
             let metaURL = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: rel, extension: "meta.json")
@@ -938,9 +993,13 @@ actor NoteRepository {
             } else {
                 allocatedID = UUID()
             }
+            let folderID = Self.inferFolderID(forNotePath: rel, folderCatalog: folderCatalog)
+            guard folderCatalog.allowsNotes(in: folderID) else {
+                Logger.vault.error("rebuildManifestFromDisk skip path=\(rel, privacy: .public) folderID=\(folderID.uuidString, privacy: .public) cannot contain notes")
+                continue
+            }
             let title = VaultPath.displayTitle(forRelativePath: rel)
             manifest.upsert(noteID: allocatedID, relativePath: rel, title: title)
-            let folderID = Self.inferFolderID(forNotePath: rel, folderCatalog: folderCatalog)
             let probed = try NoteFileActor.resolveBodyExtension(vaultRoot: vaultURL, relativePath: rel, preferred: nil)
             let doc = try await files.loadNote(relativePath: rel, fallbackNoteID: allocatedID, bodyFileExtension: probed).document
             let metaURL = VaultPath.fileURL(vaultRoot: vaultURL, relativePathWithoutExtension: rel, extension: "meta.json")
@@ -996,9 +1055,6 @@ actor NoteRepository {
 
     func createFolder(parentID: UUID, name: String) async throws -> UUID {
         try await files.ensureVault()
-        guard parentID == FolderCatalog.rootFolderID else {
-            throw NoteRepositoryError.invalidFolderMove
-        }
         var folderCatalog = try await index.loadFolderCatalog()
         folderCatalog.ensureRoot()
         let id = try folderCatalog.addFolder(parentID: parentID, name: name)
@@ -1149,14 +1205,14 @@ actor NoteRepository {
 
     func moveFolder(id: UUID, newParentID: UUID) async throws {
         try await files.ensureVault()
-        guard newParentID == FolderCatalog.rootFolderID else {
-            throw NoteRepositoryError.invalidFolderMove
-        }
         guard id != FolderCatalog.rootFolderID else {
             throw NoteRepositoryError.invalidFolderMove
         }
         var folderCatalog = try await index.loadFolderCatalog()
         folderCatalog.ensureRoot()
+        guard folderCatalog.allowsNestedFolders(in: newParentID) else {
+            throw NoteRepositoryError.invalidFolderMove
+        }
         let oldPrefix = folderCatalog.relativeDirectoryPath(for: id)
         let oldURL = folderCatalog.directoryURL(vaultRoot: vaultURL, folderID: id)
         try folderCatalog.moveFolder(id: id, newParentID: newParentID)
@@ -1197,6 +1253,9 @@ actor NoteRepository {
         folderCatalog.ensureRoot()
         guard toFolderID == FolderCatalog.rootFolderID || folderCatalog.folder(id: toFolderID) != nil else {
             throw NoteRepositoryError.folderNotFound(toFolderID)
+        }
+        guard folderCatalog.allowsNotes(in: toFolderID) else {
+            throw NoteRepositoryError.folderCannotContainNotes(toFolderID)
         }
 
         let doc = try await loadNote(noteID: noteID).document
