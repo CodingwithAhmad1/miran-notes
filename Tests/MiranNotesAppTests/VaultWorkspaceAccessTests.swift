@@ -124,7 +124,20 @@ final class VaultWorkspaceAccessTests: XCTestCase {
         try Data().write(to: junk, options: .atomic)
 
         XCTAssertThrowsError(try VaultWorkspaceAccess.adoptUserSelectedVaultRoot(vault)) { error in
-            XCTAssertTrue(error is VaultWorkspaceAdoptionError)
+            guard let adoption = error as? VaultWorkspaceAdoptionError else {
+                XCTFail("expected VaultWorkspaceAdoptionError")
+                return
+            }
+            guard case .incompatibleVault(let report) = adoption else {
+                XCTFail("expected incompatibleVault")
+                return
+            }
+            XCTAssertFalse(report.issues.isEmpty)
+            XCTAssertTrue(
+                report.issues.contains {
+                    $0.code == .disallowedRootFile || $0.code == .disallowedItemInNoteFolder
+                }
+            )
         }
         XCTAssertNil(VaultRootBookmarkStore.loadBookmarkData())
     }

@@ -2,6 +2,7 @@ import SwiftUI
 
 struct WorkspaceIncompatibleView: View {
     let report: CompatibilityReport
+    let vaultRootURL: URL
     let onChooseDifferentFolder: () -> Void
 
     private var visibleIssues: [CompatibilityIssue] {
@@ -52,9 +53,29 @@ struct WorkspaceIncompatibleView: View {
                                 Text(issue.message)
                                     .fixedSize(horizontal: false, vertical: true)
                                 if let path = issue.path {
-                                    Text(path.posixPath)
+                                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                        if issue.code == .disallowedRootFile || issue.code == .disallowedItemInNoteFolder {
+                                            Text("Unsupported")
+                                                .font(.caption)
+                                                .fontWeight(.medium)
+                                                .foregroundStyle(.secondary)
+                                                .padding(.horizontal, 6)
+                                                .padding(.vertical, 2)
+                                                .background(.quaternary.opacity(0.5))
+                                                .clipShape(Capsule())
+                                        }
+                                        Text(absolutePathDisplay(for: issue, relative: path))
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                            .textSelection(.enabled)
+                                    }
+                                    if issue.canRevealInFinder(vaultRoot: vaultRootURL) {
+                                        Button("Show in Finder") {
+                                            issue.revealInFinder(vaultRoot: vaultRootURL)
+                                        }
+                                        .buttonStyle(.link)
                                         .font(.caption)
-                                        .foregroundStyle(.secondary)
+                                    }
                                 }
                             }
                         }
@@ -67,5 +88,12 @@ struct WorkspaceIncompatibleView: View {
         }
         .padding(28)
         .frame(minWidth: 420, minHeight: 280)
+    }
+
+    private func absolutePathDisplay(for issue: CompatibilityIssue, relative: WorkspaceRelativePath) -> String {
+        if let url = issue.resolvedItemURL(vaultRoot: vaultRootURL) {
+            return url.path
+        }
+        return (vaultRootURL.path as NSString).appendingPathComponent(relative.posixPath)
     }
 }

@@ -21,6 +21,8 @@ struct MiranNotesApp: App {
     @State private var conflictDetailsDiskDate: Date?
     @State private var editingHelpPresented = false
     @State private var vaultPickerErrorMessage: String?
+    /// Picker chose a folder that failed the compatibility gate; full report (same UI as runtime gate).
+    @State private var incompatiblePick: (report: CompatibilityReport, vaultURL: URL)?
     /// Forces ``appCommands`` to re-read shortcuts from `KeyboardShortcuts` / UserDefaults.
     @State private var menuShortcutEpoch = 0
 
@@ -66,34 +68,48 @@ struct MiranNotesApp: App {
 
     var body: some Scene {
         WindowGroup {
-            Group {
-                if let model {
-                    MiranNotesMainWindowContent(
-                        model: model,
-                        presentOpenWorkspacePanel: presentOpenWorkspacePanel,
-                        conflictDetailsPresented: $conflictDetailsPresented,
-                        conflictDetailsDiskDate: $conflictDetailsDiskDate,
-                        editingHelpPresented: $editingHelpPresented,
-                        onWorkspaceShortcutsChanged: {
-                            menuShortcutEpoch &+= 1
-                            WorkspaceShortcutCarbonPolicy.suppressGlobalHotkeysForMenuShortcuts()
+            ZStack {
+                Group {
+                    if let model {
+                        MiranNotesMainWindowContent(
+                            model: model,
+                            presentOpenWorkspacePanel: presentOpenWorkspacePanel,
+                            conflictDetailsPresented: $conflictDetailsPresented,
+                            conflictDetailsDiskDate: $conflictDetailsDiskDate,
+                            editingHelpPresented: $editingHelpPresented,
+                            onWorkspaceShortcutsChanged: {
+                                menuShortcutEpoch &+= 1
+                                WorkspaceShortcutCarbonPolicy.suppressGlobalHotkeysForMenuShortcuts()
+                            }
+                        )
+                    } else {
+                        VaultWelcomeView(onOpenVault: presentOpenWorkspacePanel)
+                            .alert(
+                                "Error",
+                                isPresented: Binding(
+                                    get: { vaultPickerErrorMessage != nil },
+                                    set: { if !$0 { vaultPickerErrorMessage = nil } }
+                                )
+                            ) {
+                                Button("OK", role: .cancel) {
+                                    vaultPickerErrorMessage = nil
+                                }
+                            } message: {
+                                Text(vaultPickerErrorMessage ?? "")
+                            }
+                    }
+                }
+                if let pick = incompatiblePick {
+                    WorkspaceIncompatibleView(
+                        report: pick.report,
+                        vaultRootURL: pick.vaultURL,
+                        onChooseDifferentFolder: {
+                            incompatiblePick = nil
+                            presentOpenWorkspacePanel()
                         }
                     )
-                } else {
-                    VaultWelcomeView(onOpenVault: presentOpenWorkspacePanel)
-                        .alert(
-                            "Error",
-                            isPresented: Binding(
-                                get: { vaultPickerErrorMessage != nil },
-                                set: { if !$0 { vaultPickerErrorMessage = nil } }
-                            )
-                        ) {
-                            Button("OK", role: .cancel) {
-                                vaultPickerErrorMessage = nil
-                            }
-                        } message: {
-                            Text(vaultPickerErrorMessage ?? "")
-                        }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color(nsColor: .windowBackgroundColor))
                 }
             }
             .environment(sessionRegistry)
@@ -157,14 +173,14 @@ struct MiranNotesApp: App {
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
             let newAccess = try VaultWorkspaceAccess.adoptUserSelectedVaultRoot(url)
+            incompatiblePick = nil
             vaultAccess = newAccess
             model = AppModel(repository: NoteRepository(vaultURL: newAccess.vaultRootURL))
             model?.loadVault()
         } catch let adoption as VaultWorkspaceAdoptionError {
-            if let model {
-                model.userAlert = .message(adoption.localizedDescription)
-            } else {
-                vaultPickerErrorMessage = adoption.localizedDescription
+            switch adoption {
+            case .incompatibleVault(let report):
+                incompatiblePick = (report, url.standardizedFileURL)
             }
         } catch {
             let message =
@@ -421,7 +437,11 @@ private struct MiranNotesMainWindowContent: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             case .incompatible(let report):
-                WorkspaceIncompatibleView(report: report, onChooseDifferentFolder: presentOpenWorkspacePanel)
+                WorkspaceIncompatibleView(
+                    report: report,
+                    vaultRootURL: model.repository.vaultURL,
+                    onChooseDifferentFolder: presentOpenWorkspacePanel
+                )
             case .ready:
                 GeometryReader { geo in
                     readyWorkspaceShell(windowContentWidth: geo.size.width)

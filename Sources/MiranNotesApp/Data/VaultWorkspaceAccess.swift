@@ -10,16 +10,16 @@ enum VaultBootstrapOutcome {
 
 /// The chosen folder failed the workspace layout gate (see ``WorkspaceCompatibilityScanner``).
 enum VaultWorkspaceAdoptionError: LocalizedError, Equatable {
-    case incompatibleVault(summary: String)
+    case incompatibleVault(CompatibilityReport)
 
     init(report: CompatibilityReport) {
-        self = .incompatibleVault(summary: report.summary)
+        self = .incompatibleVault(report)
     }
 
     var errorDescription: String? {
         switch self {
-        case .incompatibleVault(let summary):
-            return summary
+        case .incompatibleVault(let report):
+            return report.summary
         }
     }
 }
