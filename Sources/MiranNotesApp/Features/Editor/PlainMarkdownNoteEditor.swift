@@ -13,6 +13,10 @@ struct PlainMarkdownNoteEditor: NSViewRepresentable {
     var onPendingEditorScrollConsumed: (() -> Void)?
     var onCommands: ([EditCommand]) -> NoteDocument
     var onWikiLinkClick: ((UUID) -> Void)?
+    /// Ranked entries for the `[[` autocomplete popover (model-backed; includes an optional Create row).
+    var wikiLinkCandidates: ((String) -> [WikiLinkMenuEntry])?
+    /// Create a note titled `String` for a `[[` Create row, then call back with its `noteID` (nil on failure).
+    var onCreateWikiLinkTarget: ((String, @escaping @MainActor (UUID?) -> Void) -> Void)?
     var onFullReplaceWarning: (() -> Void)?
     var onSizeLimitExceeded: (() -> Void)?
     var focusBodyNonce: Int = 0
@@ -80,11 +84,52 @@ struct PlainMarkdownNoteEditor: NSViewRepresentable {
         private var slashMenuPopover: NSPopover?
         private var slashMenuHost: NSHostingController<EditorSlashCommandMenuView>?
         private var lastStyledDocument: NoteDocument?
+        let wikiLinkMenu = WikiLinkMenuController()
 
         init(_ parent: PlainMarkdownNoteEditor) {
             self.parent = parent
             super.init()
             textStorageDelegateBridge.owner = self
+            wikiLinkMenu.candidates = { [weak self] query in
+                self?.parent.wikiLinkCandidates?(query) ?? []
+            }
+            wikiLinkMenu.onCommit = { [weak self] entry, query in
+                self?.commitWikiLinkEntry(entry, query: query)
+            }
+        }
+
+        /// Markdown source stays dumb: commit inserts plain `[[Title]]` text; `WikiLinkSyntaxReconciler`
+        /// derives the link metadata at save time, exactly as it does for externally edited `.md` files.
+        private func commitWikiLinkEntry(_ entry: WikiLinkMenuEntry, query: WikiLinkQueryMatch) {
+            switch entry {
+            case .note(_, let title, _):
+                insertPlainWikiLinkText(title: title, query: query)
+            case .create(let title):
+                parent.onCreateWikiLinkTarget?(title) { [weak self] newNoteID in
+                    guard let self, newNoteID != nil else { return }
+                    guard let textView = self.textView else { return }
+                    let ns = textView.string as NSString
+                    guard NSMaxRange(query.fullRange) <= ns.length,
+                          ns.substring(with: query.fullRange) == "[[" + query.queryText else { return }
+                    self.insertPlainWikiLinkText(title: title, query: query)
+                }
+            }
+        }
+
+        private func insertPlainWikiLinkText(title: String, query: WikiLinkQueryMatch) {
+            guard let textView else { return }
+            let replacement = "[[" + title + "]]"
+            let caretAfter = query.fullRange.location + replacement.utf16.count
+            _ = runCommandSession(
+                textView: textView,
+                commands: [
+                    .replaceText(
+                        range: TextRange(start: query.fullRange.location, length: query.fullRange.length),
+                        replacement: replacement
+                    )
+                ],
+                pendingSelection: NSRange(location: caretAfter, length: 0)
+            )
         }
 
         func bindWikiAndFormattingHandlers(textView: NoteEditorWikiLinkTextView) {
@@ -138,6 +183,7 @@ struct PlainMarkdownNoteEditor: NSViewRepresentable {
             slashMenuPopover?.performClose(nil)
             slashMenuPopover = nil
             slashMenuHost = nil
+            wikiLinkMenu.close()
         }
 
         fileprivate func consumeTextStorageEdit(
@@ -238,16 +284,20 @@ struct PlainMarkdownNoteEditor: NSViewRepresentable {
             return nil
         }
 
+        /// Refreshes both caret-anchored menus; the slash menu wins while a line-start `/` query is active.
         private func refreshSlashMenuState(for textView: NSTextView) {
             guard parent.modules.slashMenu else {
                 closeSlashMenu()
+                wikiLinkMenu.refresh(textView: textView)
                 return
             }
             let selectedRange = textView.selectedRange()
             guard let query = SlashQueryDetector.match(text: textView.string, selectedRange: selectedRange) else {
                 closeSlashMenu()
+                wikiLinkMenu.refresh(textView: textView)
                 return
             }
+            wikiLinkMenu.close()
 
             let catalog = SlashCommandRegistry.catalogItems()
             let matches = SlashCommandMatcher.filterAndRank(query: query.queryText, catalog: catalog)
@@ -553,6 +603,9 @@ struct PlainMarkdownNoteEditor: NSViewRepresentable {
         }
 
         fileprivate func handleSlashMenuCommand(_ command: NoteEditorSlashMenuCommand) -> Bool {
+            if wikiLinkMenu.isPresenting {
+                return wikiLinkMenu.handleMenuCommand(command)
+            }
             guard parent.modules.slashMenu else { return false }
             guard currentSlashQuery != nil else { return false }
             switch command {

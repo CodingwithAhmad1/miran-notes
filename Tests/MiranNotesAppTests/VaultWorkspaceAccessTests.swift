@@ -39,6 +39,35 @@ final class VaultWorkspaceAccessTests: XCTestCase {
         access2.stopAccessingIfNeeded()
     }
 
+    func testBootstrapSkipsBookmarkRestoreWhenReopenPreferenceOff() throws {
+        let root = try tempDir()
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let vault = root.appendingPathComponent("Remembered", isDirectory: true)
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+
+        let bookmarkFile = root.appendingPathComponent("vault-root.bookmark")
+        VaultRootBookmarkStore.setBookmarkFileURLForTesting(bookmarkFile)
+        let access = try VaultWorkspaceAccess.adoptUserSelectedVaultRoot(vault)
+        access.stopAccessingIfNeeded()
+
+        let previous = UserDefaults.standard.object(forKey: AppSettingsKey.reopenLastVaultAtLaunch)
+        UserDefaults.standard.set(false, forKey: AppSettingsKey.reopenLastVaultAtLaunch)
+        defer {
+            if let previous {
+                UserDefaults.standard.set(previous, forKey: AppSettingsKey.reopenLastVaultAtLaunch)
+            } else {
+                UserDefaults.standard.removeObject(forKey: AppSettingsKey.reopenLastVaultAtLaunch)
+            }
+        }
+
+        let outcome = VaultWorkspaceAccess.bootstrap(defaultVaultURL: nil)
+        guard case .needsUserSelectedVault = outcome else {
+            XCTFail("expected needsUserSelectedVault when reopen preference is off")
+            return
+        }
+        XCTAssertNotNil(VaultRootBookmarkStore.loadBookmarkData(), "preference off must not clear the saved bookmark")
+    }
+
     func testStopAccessingIfNeededIsIdempotent() throws {
         let root = try tempDir()
         let vault = root.appendingPathComponent("V", isDirectory: true)

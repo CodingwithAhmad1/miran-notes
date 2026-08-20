@@ -11,7 +11,10 @@ ADRs capture **significant, stable decisions** with context and consequences. Th
 | [0003-folders-paths-and-manifest-v2.md](0003-folders-paths-and-manifest-v2.md) | Nested folders, `relativePath`, manifest v2 |
 | [0004-vault-level-databases-and-planning.md](0004-vault-level-databases-and-planning.md) | Vault-level databases (`_databases/`) and Miran Planning integration |
 | [0005-block-metadata-invariants.md](0005-block-metadata-invariants.md) | Block metadata invariants (gapless UTF-16 partition, normalization contract) |
-| [0006-threat-model-app-sandbox-vault-access.md](0006-threat-model-app-sandbox-vault-access.md) | Threat model, vault-root capability, bookmarks, App Sandbox path |
+| [0006-threat-model-app-sandbox-vault-access.md](0006-threat-model-app-sandbox-vault-access.md) | Threat model, vault-root capability, bookmarks, App Sandbox path (amended: bookmark persists) |
+| [0007-knowledge-layer-activation.md](0007-knowledge-layer-activation.md) | Knowledge layer activation: wiki links UI, `[[` autocomplete, backlinks panel, full-text search |
+| [0008-trash-and-ui-state-stores.md](0008-trash-and-ui-state-stores.md) | Trash (`.miran/trash/`) and presentation state (`.miran/ui-state/`) outside the commit set |
+| [0009-task-blocks-and-todays-tasks.md](0009-task-blocks-and-todays-tasks.md) | `taskItem` blocks, `/task`, and one-way Today's Tasks integration |
 
 ## Adding an ADR
 

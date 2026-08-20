@@ -4,7 +4,9 @@ enum VaultRootBookmarkError: Error {
     case applicationSupportUnavailable
 }
 
-/// Vault-root bookmark file on disk. **Production** does not read or write it (legacy file is removed on launch); **unit tests** redirect the path via ``setBookmarkFileURLForTesting``. Separate from ``ExternalBookmarkStore`` (wiki targets).
+/// Vault-root bookmark file on disk (Application Support). Production persists the last vault here so
+/// launches can reopen it (see ``VaultWorkspaceAccess/bootstrap(defaultVaultURL:)`` and ADR 0006, amended);
+/// unit tests redirect the path via ``setBookmarkFileURLForTesting``. Separate from ``ExternalBookmarkStore`` (wiki targets).
 enum VaultRootBookmarkStore {
     private static let appFolderName = "MiranNotes"
     private static let bookmarkFileName = "vault-root.bookmark"

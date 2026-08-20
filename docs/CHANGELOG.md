@@ -2,6 +2,22 @@
 
 Versions in this file are **documentation milestones** for Miran Notes. They do not necessarily match an app marketing or bundle version until one is defined elsewhere.
 
+## 2.0 — Knowledge layer, daily-use overhaul (Aug 2026)
+
+One comprehensive pass (see the ADRs referenced per item) turned the built-but-dark knowledge layer on and filled in daily-use table stakes:
+
+- **Cleanup:** Planning-era dead code deleted outright — `DatabaseModels`/`TableModels`/`VaultDatabasePaths`, `EditCommand.registerDatabaseRow`, `NoteMetadata.artifacts`/`databaseRowReferences` (legacy sidecar keys ignored on decode), `LinkTarget` database/artifact cases, `NotesListView`/`sidebarOutline`, `VaultDriftReport`, extension-point placeholders. `AppModel` and the app shell were split into focused files (mechanical).
+- **Vault reopen:** production persists the vault-root security-scoped bookmark and reopens the last vault at launch; **Switch Vault…** (⇧⌘O) and a "Reopen last vault at launch" preference ([ADR 0006, amended](adr/0006-threat-model-app-sandbox-vault-access.md)).
+- **Knowledge layer on** ([ADR 0007](adr/0007-knowledge-layer-activation.md)): styled, clickable wiki links; `[[` autocomplete with a create-note row (mid-line, both editors); **Linked mentions** backlinks strip under the editor; vault search matches **title, path, and body** with snippets (background index; per-note patch on autosave).
+- **Navigation:** Quick Open palette (⌘P; pinned + recents when idle), find bar with next/previous/replace/replace-all (engine-batched, one undo step), pinned notes and recents.
+- **Structure:** nested sidebar folder tree with subtree focus; drag-and-drop note moving + "Move To"; **Finder-style icon browser** as the folder page's default view with per-folder persisted icon positions (`.miran/ui-state/`, [ADR 0008](adr/0008-trash-and-ui-state-stores.md)) and an icons/list toggle.
+- **Safety & organization:** **Trash** with restore (identity-preserving) and Empty Trash ([ADR 0008](adr/0008-trash-and-ui-state-stores.md)); **tags** on `properties["tags"]` with a chip strip and `#tag` search; **Export** as Markdown or PDF.
+- **Tasks** ([ADR 0009](adr/0009-task-blocks-and-todays-tasks.md)): `taskItem` blocks with `/task` (alias `/todo`), gutter checkboxes, strikethrough-when-done; Today's Tasks gains free day navigation (calendar picker), explicit/automatic rollover, and one-way note integration ("Add to Today's Tasks", source chips, "Mark Done in Note Too").
+- **Attachments:** files under `_aux/<noteID>/attachments/` referenced by clickable `[attachment: name]` text tokens; Attach File… and drag-onto-editor.
+- **Settings:** real ⌘, window — General (vault, reopen toggle), Editor (links, autocomplete, text size 12–20 pt with proportional headings, task rollover), Shortcuts (moved out of Folder Management).
+
+`swift test`: 353 tests + 6 swift-testing, all green at the 2.0 milestone.
+
 ## 1.1 — Workspace compatibility, identity, and drift (Apr 2026)
 
 Opening a folder as a workspace is gated by a **structural compatibility scan**: unsupported layouts produce a **report** instead of a partial import. **Note identity** resolution and **vault drift** validation support bulk import, reconcile, and automated checks.
@@ -30,7 +46,7 @@ Baseline after the **Apr 2026 pivot**: a minimal **knowledge storer** (editor, v
 - **Editing:** `EditCommandEngine`, `SingleSurfaceNoteEditor`, slash discovery and auto-commit, wiki links ([ADR 0001](adr/0001-wiki-links-and-identity.md)).
 - **Persistence:** Two-phase atomic vault commits, dirty index participants, startup recovery, `reconcileManifest()` vs read-only `listNotes()` ([architecture/vault-data-layer.md](architecture/vault-data-layer.md)).
 - **Integrity / metadata:** Block sidecar invariants ([ADR 0005](adr/0005-block-metadata-invariants.md)); load repair and user advisories; external-edit conflict flow ([Constraints.md](../Constraints.md)).
-- **Undo:** Hybrid inverse chains + full snapshots, capped stack ([Constraints.md](../Constraints.md), [plans/hybrid-undo-appmodel-wiring.md](plans/hybrid-undo-appmodel-wiring.md)).
+- **Undo:** Hybrid inverse chains + full snapshots, capped stack ([Constraints.md](../Constraints.md), [archive/hybrid-undo-appmodel-wiring.md](archive/hybrid-undo-appmodel-wiring.md)).
 - **App shell:** `AppModel` as `@MainActor` `@Observable`; Swift 6 language mode in `Package.swift`.
 - **Legacy:** Per-note JSONL table feature removed from UI; `_aux` cleanup per [ADR 0002](adr/0002-auxiliary-storage-jsonl.md).
 - **Databases:** Vault-level `_databases/` layout documented in [ADR 0004](adr/0004-vault-level-databases-and-planning.md); core types remain in `MiranNotesCore` for compatibility with older vaults.

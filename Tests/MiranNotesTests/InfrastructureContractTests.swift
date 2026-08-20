@@ -3,13 +3,6 @@ import XCTest
 @testable import MiranNotesCore
 
 final class InfrastructureContractTests: XCTestCase {
-    func testTableColumnTypeValidation() {
-        XCTAssertTrue(TableColumnType.number.accepts("42.5"))
-        XCTAssertFalse(TableColumnType.number.accepts("abc"))
-        XCTAssertTrue(TableColumnType.boolean.accepts("true"))
-        XCTAssertFalse(TableColumnType.boolean.accepts("maybe"))
-    }
-
     func testNoteDocumentIdDelegatestoMetadataNoteID() {
         let noteID = UUID()
         let meta = NoteMetadata(
@@ -27,7 +20,7 @@ final class InfrastructureContractTests: XCTestCase {
         let descriptor = ExtensionDescriptor(
             id: "ext.sample",
             version: 1,
-            capabilities: [.commandInterception, .commandProduction]
+            capabilities: [.commandInterception]
         )
         XCTAssertTrue(
             ExtensionCompatibility.supports(
@@ -40,7 +33,7 @@ final class InfrastructureContractTests: XCTestCase {
             ExtensionCompatibility.supports(
                 descriptor: descriptor,
                 requiredVersion: .v1,
-                requiredCapabilities: [.syncHooks]
+                requiredCapabilities: [.visualStyling]
             )
         )
     }

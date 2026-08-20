@@ -41,8 +41,4 @@ enum VaultIndexSubsystem {
         }
         return decoded
     }
-
-    static func loadDatabaseRegistry(vaultURL: URL, decoder: JSONDecoder) throws -> DatabaseRegistry {
-        try DatabaseRegistry.loadFromVault(vaultURL: vaultURL, decoder: decoder)
-    }
 }

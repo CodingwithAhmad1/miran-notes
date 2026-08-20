@@ -8,8 +8,6 @@ final class RangeNormalizerTests: XCTestCase {
         blocks: [Block],
         spans: [Span] = [],
         links: [NoteLink] = [],
-        artifacts: [EmbeddedArtifact] = [],
-        databaseRowReferences: [DatabaseRowReference] = [],
         properties: [String: String] = [:]
     ) -> NoteMetadata {
         NoteMetadata(
@@ -18,36 +16,11 @@ final class RangeNormalizerTests: XCTestCase {
             blocks: blocks,
             spans: spans,
             links: links,
-            artifacts: artifacts,
-            databaseRowReferences: databaseRowReferences,
             properties: properties
         )
     }
 
     // MARK: - Metadata field preservation
-
-    func testNormalizePreservesDatabaseRowReferences() {
-        let refs = [
-            DatabaseRowReference(databaseID: UUID(), rowID: UUID(), blockID: "b0"),
-            DatabaseRowReference(databaseID: UUID(), rowID: UUID())
-        ]
-        let m = meta(
-            blocks: [Block(id: "b0", type: .paragraph, range: TextRange(start: 0, length: 5), level: nil, icon: nil)],
-            databaseRowReferences: refs
-        )
-        let result = RangeNormalizer.normalize(metadata: m, for: "hello")
-        XCTAssertEqual(result.normalizedMetadata.databaseRowReferences, refs)
-    }
-
-    func testNormalizePreservesArtifacts() {
-        let artifact = EmbeddedArtifact(id: UUID(), kind: .databaseView, relativePath: "views/foo.json")
-        let m = meta(
-            blocks: [Block(id: "b0", type: .paragraph, range: TextRange(start: 0, length: 2), level: nil, icon: nil)],
-            artifacts: [artifact]
-        )
-        let result = RangeNormalizer.normalize(metadata: m, for: "hi")
-        XCTAssertEqual(result.normalizedMetadata.artifacts, [artifact])
-    }
 
     func testNormalizePreservesProperties() {
         let m = meta(
@@ -225,7 +198,6 @@ final class RangeNormalizerTests: XCTestCase {
                 Block(id: "b", type: .paragraph, range: TextRange(start: 5, length: 3), level: nil, icon: nil)
             ],
             spans: [Span(range: TextRange(start: 0, length: 20), style: .bold)],
-            databaseRowReferences: [DatabaseRowReference(databaseID: UUID(), rowID: UUID())],
             properties: ["key": "value"]
         )
         let text = "abcdefgh"

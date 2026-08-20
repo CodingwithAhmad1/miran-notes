@@ -4,21 +4,26 @@ import MiranNotesCore
 /// Applies model-driven typography to `NSTextStorage`: block fonts, then span styles, then optional wiki-link color when enabled.
 /// Order must stay stable; canonical text lives in `NoteDocument.text`.
 enum EditorVisualStyle {
-    static let bodyPointSize: CGFloat = 15
+    /// User-adjustable body size (Settings → Appearance); headings/code scale proportionally.
+    static var bodyPointSize: CGFloat {
+        let stored = UserDefaults.standard.object(forKey: AppSettingsKey.editorBodyPointSize) as? Double
+        return CGFloat(min(max(stored ?? 15, 12), 20))
+    }
 
     static var bodyFont: NSFont { .systemFont(ofSize: bodyPointSize) }
 
     static func fontForBlock(_ block: Block) -> NSFont {
+        let scale = bodyPointSize / 15
         switch block.type {
         case .heading:
             let level = min(max(block.level ?? 1, 1), 3)
-            let size: CGFloat = [30, 24, 20][level - 1]
+            let size: CGFloat = [30, 24, 20][level - 1] * scale
             return .systemFont(ofSize: size, weight: .bold)
         case .code:
-            return .monospacedSystemFont(ofSize: 14, weight: .regular)
+            return .monospacedSystemFont(ofSize: 14 * scale, weight: .regular)
         case .divider:
-            return .systemFont(ofSize: 13, weight: .medium)
-        case .paragraph, .listItem, .callout:
+            return .systemFont(ofSize: 13 * scale, weight: .medium)
+        case .paragraph, .listItem, .callout, .taskItem:
             return bodyFont
         }
     }
@@ -64,11 +69,16 @@ enum EditorVisualStyle {
 
         storage.addAttribute(.foregroundColor, value: bodyColor, range: fullRange)
 
+        storage.removeAttribute(.strikethroughStyle, range: fullRange)
         let sortedBlocks = document.metadata.blocks.sorted { $0.range.start < $1.range.start }
         for block in sortedBlocks {
             let r = clampedNSRange(block.range, maxUTF16: len)
             guard r.length > 0 else { continue }
             storage.addAttribute(.font, value: fontForBlock(block), range: r)
+            if block.type == .taskItem, block.isDone == true {
+                storage.addAttribute(.strikethroughStyle, value: NSUnderlineStyle.single.rawValue, range: r)
+                storage.addAttribute(.foregroundColor, value: NSColor.secondaryLabelColor, range: r)
+            }
         }
 
         let sortedSpans = document.metadata.spans.sorted { $0.range.start < $1.range.start }
@@ -86,6 +96,15 @@ enum EditorVisualStyle {
                 guard r.length > 0 else { continue }
                 storage.addAttribute(.foregroundColor, value: linkColor, range: r)
             }
+        }
+
+        for token in AttachmentTokenScanner.tokens(in: document.text) where token.range.length > 0 {
+            let r = clampedNSRange(
+                MiranNotesCore.TextRange(start: token.range.location, length: token.range.length),
+                maxUTF16: len
+            )
+            guard r.length > 0 else { continue }
+            storage.addAttribute(.foregroundColor, value: linkColor, range: r)
         }
     }
 

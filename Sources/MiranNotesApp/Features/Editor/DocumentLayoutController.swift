@@ -16,7 +16,7 @@ enum DocumentLayoutController {
             // Use the text-engine insertion rule so we identify the same block that adjustBlocks would.
             if let selectedBlockIndex = blockIndexMatchingTextEngineInsertion(at: selectedLocation, blocks: document.metadata.blocks) {
                 let selectedBlock = document.metadata.blocks[selectedBlockIndex]
-                if selectedBlock.type == .listItem,
+                if selectedBlock.type == .listItem || selectedBlock.type == .taskItem,
                    isBlockTextEmpty(selectedBlock, in: document.text) {
                     return [
                         .changeBlockType(blockID: selectedBlock.id, type: .paragraph, headingLevel: nil)

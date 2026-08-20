@@ -4,6 +4,17 @@
 
 Accepted (implementation follows this ADR).
 
+**Amended 2026-08-20 — folder roles (catalog v3):** `FolderEntry` gained a one-way `role`
+(`dashboard` = nested folders only, `repository` = notes only), chosen once per folder on its page;
+`folder-catalog.json` is at schemaVersion 3 with tolerant decode of v2 entries (`role == nil` =
+unclassified, prompts the picker). `WorkspaceCompatibilityScanner` enforces that a folder holds
+notes **or** subfolders, never both; the vault root remains the special case that may hold both
+top-level folders and root notes. `PathIndex` (v2) additionally records `bodyFileExtension`
+(`txt`/`md`) per note — see `docs/guides/ImportingNotes.md` for the per-folder body-format
+convention. Notes and folders can be **moved** (`moveNote`/`moveFolder`, surfaced via drag-and-drop
+and "Move To"); moves rewrite `relativePath`s through the normal commit pipeline while `noteID`
+identity keeps links intact.
+
 ## Context
 
 Notes were stored flat at the vault root as `{baseName}.txt` with a single-path segment identifier. `FolderCatalog` and `PathIndex` existed on disk but only the root folder was used; `PathIndex.relativePath` duplicated the flat slug.

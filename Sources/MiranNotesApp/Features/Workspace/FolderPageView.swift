@@ -41,23 +41,59 @@ struct FolderPageView: View {
     @ViewBuilder
     private var folderPageForSelectedFolder: some View {
         if let folderID = model.workspacePanes[paneIndex].selectedFolderID {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 24) {
-                    folderPageHeader
-                        .padding(.bottom, 4)
+            let needsRolePicker = folderID != FolderCatalog.rootFolderID && model.folderRole(for: folderID) == nil
+            let usesIconBrowser = !needsRolePicker && model.folderPageViewMode(folderID: folderID) == .icons
 
-                    if folderID == FolderCatalog.rootFolderID {
-                        repositoryNoteListContent
-                    } else if model.folderRole(for: folderID) == nil {
-                        folderRolePickerContent(folderID: folderID)
-                    } else if model.folderRole(for: folderID) == .dashboard {
-                        dashboardFolderListContent(parentFolderID: folderID)
-                    } else {
-                        repositoryNoteListContent
+            Group {
+                if usesIconBrowser {
+                    VStack(alignment: .leading, spacing: 0) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            folderBreadcrumb(folderID: folderID)
+                            HStack(alignment: .firstTextBaseline) {
+                                folderPageHeader
+                                Spacer()
+                                viewModeToggle(folderID: folderID)
+                            }
+                        }
+                        .padding(.horizontal, 20)
+                        .padding(.top, 20)
+                        .padding(.bottom, 8)
+                        FolderIconBrowserView(
+                            model: model,
+                            paneIndex: paneIndex,
+                            folderID: folderID,
+                            items: browserItems(folderID: folderID)
+                        )
+                    }
+                } else {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 24) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                folderBreadcrumb(folderID: folderID)
+                                HStack(alignment: .firstTextBaseline) {
+                                    folderPageHeader
+                                    Spacer()
+                                    if !needsRolePicker {
+                                        viewModeToggle(folderID: folderID)
+                                    }
+                                }
+                            }
+                            .padding(.bottom, 4)
+
+                            if folderID == FolderCatalog.rootFolderID {
+                                repositoryNoteListContent
+                            } else if needsRolePicker {
+                                folderRolePickerContent(folderID: folderID)
+                            } else if model.folderRole(for: folderID) == .dashboard {
+                                dashboardFolderListContent(parentFolderID: folderID)
+                            } else {
+                                repositoryNoteListContent
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(20)
                     }
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(20)
             }
             .onAppear {
                 folderTitleDraft = model.selectedFolderDisplayTitle(forPane: paneIndex)
@@ -68,26 +104,126 @@ struct FolderPageView: View {
         }
     }
 
+    /// Items on the icon canvas: child folders for dashboards, notes for repositories / the root tray.
+    private func browserItems(folderID: UUID) -> [FolderBrowserItem] {
+        if folderID != FolderCatalog.rootFolderID, model.folderRole(for: folderID) == .dashboard {
+            return model.folderCatalog.childFolders(of: folderID)
+                .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+                .map { .folder($0) }
+        }
+        return model.folderPageNoteSummaries(forPane: paneIndex).map { .note($0) }
+    }
+
+    @ViewBuilder
+    private func viewModeToggle(folderID: UUID) -> some View {
+        Picker("View mode", selection: Binding(
+            get: { model.folderPageViewMode(folderID: folderID) },
+            set: { model.setFolderPageViewMode($0, folderID: folderID) }
+        )) {
+            Image(systemName: "square.grid.2x2").tag(FolderPageViewMode.icons)
+            Image(systemName: "list.bullet").tag(FolderPageViewMode.list)
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .frame(width: 88)
+        .help("Show contents as icons or a list")
+    }
+
+    /// Tappable path segments for nested folders (dashboard drill-down trail).
+    @ViewBuilder
+    private func folderBreadcrumb(folderID: UUID) -> some View {
+        let chain = breadcrumbChain(folderID: folderID)
+        if chain.count > 1 {
+            HStack(spacing: 4) {
+                ForEach(Array(chain.enumerated()), id: \.element.id) { index, folder in
+                    if index > 0 {
+                        Image(systemName: "chevron.right")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                    Button(folder.name) {
+                        model.activatePane(index: paneIndex)
+                        model.selectFolderForPage(folder.id, pane: paneIndex)
+                    }
+                    .buttonStyle(.plain)
+                    .font(.caption)
+                    .foregroundStyle(index == chain.count - 1 ? .secondary : Color.accentColor)
+                    .disabled(index == chain.count - 1)
+                }
+            }
+        }
+    }
+
+    private func breadcrumbChain(folderID: UUID) -> [FolderEntry] {
+        var chain: [FolderEntry] = []
+        var currentID: UUID? = folderID
+        var guardCounter = 0
+        while let id = currentID, id != FolderCatalog.rootFolderID, guardCounter < 64 {
+            guard let entry = model.folderCatalog.folder(id: id) else { break }
+            chain.insert(entry, at: 0)
+            currentID = entry.parentFolderID
+            guardCounter += 1
+        }
+        return chain
+    }
+
     @ViewBuilder
     private var repositoryNoteListContent: some View {
-        ForEach(model.folderPageNoteSummaries(forPane: paneIndex)) { summary in
-            NoteLinkRow(
-                title: summary.title,
-                pathTooltip: summary.relativePath,
-                onTap: {
-                    model.activatePane(index: paneIndex)
-                    model.openNote(noteID: summary.noteID, pane: paneIndex)
-                },
-                onDelete: {
-                    model.deleteNoteFromFolder(noteID: summary.noteID)
+        let summaries = model.folderPageNoteSummaries(forPane: paneIndex)
+        let pinned = summaries.filter { model.isNotePinned($0.noteID) }
+        let unpinned = summaries.filter { !model.isNotePinned($0.noteID) }
+
+        if !pinned.isEmpty {
+            VStack(alignment: .leading, spacing: 4) {
+                Label("Pinned", systemImage: "pin.fill")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                ForEach(pinned) { summary in
+                    noteRow(summary)
                 }
-            )
+            }
+            Divider()
         }
 
-        if model.folderPageNoteSummaries(forPane: paneIndex).isEmpty {
+        ForEach(unpinned) { summary in
+            noteRow(summary)
+        }
+
+        if summaries.isEmpty {
             Text("No notes in this folder yet.")
                 .foregroundStyle(.secondary)
         }
+    }
+
+    @ViewBuilder
+    private func noteRow(_ summary: NoteSummary) -> some View {
+        NoteLinkRow(
+            title: summary.title,
+            pathTooltip: summary.relativePath,
+            onTap: {
+                model.activatePane(index: paneIndex)
+                model.openNote(noteID: summary.noteID, pane: paneIndex)
+            },
+            onDelete: {
+                model.deleteNoteFromFolder(noteID: summary.noteID)
+            }
+        )
+        .contextMenu {
+            Button(model.isNotePinned(summary.noteID) ? "Unpin Note" : "Pin Note") {
+                model.togglePinned(noteID: summary.noteID)
+            }
+            let destinations = model.moveDestinationFolders(excludingFolderID: summary.folderID)
+            if !destinations.isEmpty {
+                Menu("Move To") {
+                    ForEach(destinations, id: \.id) { destination in
+                        Button(destination.name) {
+                            model.moveNote(noteID: summary.noteID, toFolderID: destination.id)
+                        }
+                    }
+                }
+            }
+        }
+        .draggable(NoteTransfer(noteID: summary.noteID, title: summary.title))
     }
 
     @ViewBuilder
@@ -174,10 +310,18 @@ struct FolderPageView: View {
                     .fontWeight(.bold)
                     .padding(.bottom, 4)
 
+                if model.isBodySearchIndexBuilding {
+                    Label("Indexing note text…", systemImage: "clock")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
                 let matches = model.vaultSearchMatchingNoteSummaries(forPane: paneIndex)
                 ForEach(matches) { summary in
                     NoteLinkRow(
                         title: summary.title,
+                        subtitle: model.searchSnippet(for: summary, pane: paneIndex)
+                            ?? model.vaultSearchResultSubtitle(for: summary),
                         pathTooltip: summary.relativePath,
                         onTap: {
                             model.activatePane(index: paneIndex)

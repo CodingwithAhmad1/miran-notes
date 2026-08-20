@@ -11,8 +11,10 @@ public enum EditCommand: Sendable {
     /// Inserts `[[displayText]]` at UTF-16 offset and records a wiki link to `targetNoteID` over the inserted token.
     /// Remains available in the core engine for tests and future UI; the app may omit editor affordances without removing this case.
     case insertWikiLink(utf16Offset: Int, targetNoteID: UUID, displayText: String)
-    /// Registers an inline database row reference in note metadata.
-    case registerDatabaseRow(databaseID: UUID, rowID: UUID)
+    /// Sets (or removes, when `value` is nil) one `metadata.properties` entry — e.g. tags. Text untouched.
+    case setProperty(key: String, value: String?)
+    /// Sets a `taskItem` block's checkbox state. Ranges untouched (`isDone` is orthogonal to text).
+    case setBlockDone(blockID: String, isDone: Bool)
     case repairMetadata
     /// Replaces `metadata.blocks` after a full-buffer text sync, reconstraining spans and links. Text must already match `document.text`.
     case replaceMetadataBlocks(blocks: [Block])
@@ -39,8 +41,13 @@ public struct EditCommandEngine {
             next = toggleSpan(document: next, range: range, style: style)
         case let .insertWikiLink(utf16Offset, targetNoteID, displayText):
             next = insertWikiLink(document: next, utf16Offset: utf16Offset, targetNoteID: targetNoteID, displayText: displayText)
-        case let .registerDatabaseRow(databaseID, rowID):
-            next = registerDatabaseRow(document: next, databaseID: databaseID, rowID: rowID)
+        case let .setProperty(key, value):
+            next.metadata.properties[key] = value
+        case let .setBlockDone(blockID, isDone):
+            if let index = next.metadata.blocks.firstIndex(where: { $0.id == blockID }),
+               next.metadata.blocks[index].type == .taskItem {
+                next.metadata.blocks[index].isDone = isDone
+            }
         case .repairMetadata:
             next = repair(document: next)
         case let .replaceMetadataBlocks(blocks):
@@ -133,7 +140,9 @@ public struct EditCommandEngine {
             type: block.type,
             range: TextRange(start: splitOffset, length: rightLength),
             level: block.level,
-            icon: block.icon
+            icon: block.icon,
+            // A task continuation starts unchecked; other types carry no checkbox state.
+            isDone: block.type == .taskItem ? false : nil
         )
         next.metadata.blocks.insert(newBlock, at: index + 1)
 
@@ -173,6 +182,13 @@ public struct EditCommandEngine {
         }
 
         next.metadata.blocks[index].type = type
+        if type == .taskItem {
+            if next.metadata.blocks[index].isDone == nil {
+                next.metadata.blocks[index].isDone = false
+            }
+        } else {
+            next.metadata.blocks[index].isDone = nil
+        }
         if type != .heading {
             next.metadata.blocks[index].level = nil
         } else if let level = headingLevel {
@@ -222,16 +238,6 @@ public struct EditCommandEngine {
         if !RangeNormalizer.isValid(metadata: next.metadata, for: next.text) {
             let repaired = RangeNormalizer.normalize(metadata: next.metadata, for: next.text, stripZeroLengthBlocks: false)
             next.metadata = repaired.normalizedMetadata
-        }
-        return next
-    }
-
-    private static func registerDatabaseRow(document: NoteDocument, databaseID: UUID, rowID: UUID) -> NoteDocument {
-        var next = document
-        if !next.metadata.databaseRowReferences.contains(where: { $0.databaseID == databaseID && $0.rowID == rowID }) {
-            next.metadata.databaseRowReferences.append(
-                DatabaseRowReference(databaseID: databaseID, rowID: rowID, blockID: nil)
-            )
         }
         return next
     }

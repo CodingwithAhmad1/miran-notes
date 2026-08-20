@@ -63,21 +63,6 @@ struct FolderFirstNoteBodyPickerContext: Identifiable, Equatable, Sendable {
     var pane: Int
 }
 
-/// One row in the sidebar outline (folder tree + notes).
-enum SidebarOutlineEntry: Identifiable {
-    case folder(FolderEntry, [SidebarOutlineEntry])
-    case note(NoteSummary, searchSnippet: String?)
-
-    var id: String {
-        switch self {
-        case .folder(let f, _):
-            return "f:\(f.id.uuidString)"
-        case .note(let n, _):
-            return "n:\(n.noteID.uuidString)"
-        }
-    }
-}
-
 @MainActor
 @Observable
 final class AppModel {
@@ -90,9 +75,9 @@ final class AppModel {
     /// When set, the editor scrolls to this range once that note is loaded.
     var pendingEditorScroll: PendingEditorScroll?
     /// Raw note body text per `noteID`, built asynchronously after `refreshNotes()` for substring search.
-    private(set) var bodySearchIndex: [UUID: String] = [:]
+    var bodySearchIndex: [UUID: String] = [:]
     /// True while `buildBodySearchIndex` is in flight after the latest `scheduleBodySearchIndexRebuild()` (excludes cancelled superseded work).
-    private(set) var isBodySearchIndexBuilding = false
+    var isBodySearchIndexBuilding = false
     var isLoading = false
     /// User-visible error alert (generic or with optional recovery — e.g. retry body search index).
     var userAlert: UserAlertState = .none
@@ -142,7 +127,7 @@ final class AppModel {
     }
 
     /// Client preference: hidden top-level folder IDs (per vault; see ``VaultHiddenFoldersStore``).
-    private(set) var hiddenTopLevelFolderIDs: Set<UUID> = []
+    var hiddenTopLevelFolderIDs: Set<UUID> = []
 
     /// When creating the first note in an empty topic folder, the user picks `.txt` vs `.md`; persisted under `.miran/`.
     private(set) var folderNoteBodyConventions: [UUID: String] = [:]
@@ -162,7 +147,7 @@ final class AppModel {
     /// Present the Folder Management sheet (window-local toolbar).
     var isFolderManagementPresented = false
 
-    private var scopeParentIDForTopLevelFolders: UUID {
+    var scopeParentIDForTopLevelFolders: UUID {
         switch workspaceScope {
         case .fullVault:
             FolderCatalog.rootFolderID
@@ -224,37 +209,6 @@ final class AppModel {
     }
 
     /// Role for non-root folders; `nil` means the user has not classified the folder yet.
-    func folderRole(for folderID: UUID) -> FolderRole? {
-        guard folderID != FolderCatalog.rootFolderID else { return nil }
-        return folderCatalog.folder(id: folderID)?.role
-    }
-
-    func setFolderRole(_ role: FolderRole, folderID: UUID) {
-        Task { @MainActor in
-            do {
-                try await repository.setFolderRole(role, folderID: folderID)
-                await refreshNotes()
-            } catch {
-                userAlert = .recoverable(
-                    message: error.localizedDescription,
-                    kind: .retryRefreshNotesAndFolderUI
-                )
-            }
-        }
-    }
-
-    /// Parent for **New Folder** from the toolbar or shortcut: nested under the selected dashboard, otherwise vault root.
-    func newFolderParentID(forPane pane: Int) -> UUID {
-        guard let selected = workspacePanes[pane].selectedFolderID else {
-            return FolderCatalog.rootFolderID
-        }
-        if folderCatalog.allowsNestedFolders(in: selected) {
-            return selected
-        }
-        return FolderCatalog.rootFolderID
-    }
-
-    /// Menu / keyboard entry point for new folder; gates on workspace readiness, then delegates to ``createFolder()``.
     func performNewFolderFromShortcut() {
         guard ensureWorkspaceReadyForVaultShortcuts() else { return }
         createFolder()
@@ -303,130 +257,6 @@ final class AppModel {
         }
     }
 
-    private var isEligibleForTodaysTasksVaultExperience: Bool {
-        workspaceScope == .fullVault && !visibleTopLevelFolderEntries.isEmpty
-    }
-
-    /// Full vault with visible top-level folders: the vault tray row is shown as a button.
-    var showsVaultTrayAsButton: Bool {
-        isEligibleForTodaysTasksVaultExperience
-    }
-
-    /// Detail column shows the Today’s Tasks page instead of vault-root notes.
-    func showsTodaysTasksVaultRootPage(forPane pane: Int) -> Bool {
-        guard isEligibleForTodaysTasksVaultExperience,
-            workspacePanes.indices.contains(pane),
-            workspacePanes[pane].selectedFolderID == FolderCatalog.rootFolderID
-        else { return false }
-        return true
-    }
-
-    func addTodaysTaskRow() -> UUID {
-        let id = UUID()
-        todaysTasksItems.append(VaultTodaysTaskRow(id: id, lines: [""], isDone: false))
-        scheduleTodaysTasksPersist()
-        return id
-    }
-
-    func setTodaysTaskLine(taskID: UUID, lineIndex: Int, text: String) {
-        guard let i = todaysTasksItems.firstIndex(where: { $0.id == taskID }) else { return }
-        guard todaysTasksItems[i].lines.indices.contains(lineIndex) else { return }
-        todaysTasksItems[i].lines[lineIndex] = text
-        scheduleTodaysTasksPersist()
-    }
-
-    /// Inserts an empty line after `afterIndex`. Returns the index of the new line.
-    func insertTodaysTaskLineAfter(taskID: UUID, afterIndex: Int) -> Int {
-        guard let i = todaysTasksItems.firstIndex(where: { $0.id == taskID }) else { return afterIndex + 1 }
-        var row = todaysTasksItems[i]
-        let insertAt = min(max(afterIndex + 1, 0), row.lines.count)
-        row.lines.insert("", at: insertAt)
-        row.lineIDs.insert(UUID(), at: insertAt)
-        todaysTasksItems[i] = row
-        scheduleTodaysTasksPersist()
-        return insertAt
-    }
-
-    /// Removes a detail line (`lineIndex` > 0). Keeps at least one line per task.
-    func removeTodaysTaskLine(taskID: UUID, lineIndex: Int) {
-        guard lineIndex > 0 else { return }
-        guard let i = todaysTasksItems.firstIndex(where: { $0.id == taskID }) else { return }
-        var row = todaysTasksItems[i]
-        guard row.lines.indices.contains(lineIndex) else { return }
-        row.lines.remove(at: lineIndex)
-        row.lineIDs.remove(at: lineIndex)
-        if row.lines.isEmpty {
-            row.lines = [""]
-            row.lineIDs = [UUID()]
-        }
-        todaysTasksItems[i] = row
-        scheduleTodaysTasksPersist()
-    }
-
-    func toggleTodaysTaskDone(id: UUID) {
-        guard let i = todaysTasksItems.firstIndex(where: { $0.id == id }) else { return }
-        todaysTasksItems[i].isDone.toggle()
-        scheduleTodaysTasksPersist()
-    }
-
-    func bindingForTodaysTaskLine(taskID: UUID, lineIndex: Int) -> Binding<String> {
-        Binding(
-            get: {
-                guard let row = self.todaysTasksItems.first(where: { $0.id == taskID }),
-                    row.lines.indices.contains(lineIndex)
-                else { return "" }
-                return row.lines[lineIndex]
-            },
-            set: { self.setTodaysTaskLine(taskID: taskID, lineIndex: lineIndex, text: $0) }
-        )
-    }
-
-    var todaysTasksSelectedDayDisplayShort: String {
-        todaysTasksSelectedDay.displayShortYYMMDD(calendar: Self.vaultTasksCalendar())
-    }
-
-    var canGoToPreviousTodaysTasksDay: Bool {
-        VaultTasksDayNavigation.previous(before: todaysTasksSelectedDay, knownSorted: todaysTasksKnownDays) != nil
-    }
-
-    var canGoToNextTodaysTasksDay: Bool {
-        VaultTasksDayNavigation.next(after: todaysTasksSelectedDay, knownSorted: todaysTasksKnownDays) != nil
-    }
-
-    func goToPreviousTodaysTasksDay() {
-        guard let prev = VaultTasksDayNavigation.previous(before: todaysTasksSelectedDay, knownSorted: todaysTasksKnownDays) else { return }
-        persistTodaysTasksImmediatelyForSelectedDay()
-        todaysTasksSelectedDay = prev
-        todaysTasksItems = VaultTodaysTasksDayStore.load(day: prev, vaultURL: repository.vaultURL)
-    }
-
-    func goToNextTodaysTasksDay() {
-        guard let next = VaultTasksDayNavigation.next(after: todaysTasksSelectedDay, knownSorted: todaysTasksKnownDays) else { return }
-        persistTodaysTasksImmediatelyForSelectedDay()
-        todaysTasksSelectedDay = next
-        todaysTasksItems = VaultTodaysTasksDayStore.load(day: next, vaultURL: repository.vaultURL)
-    }
-
-    /// Call when the app may have crossed midnight (e.g. scene became active). Snaps selection to wall-clock today and ensures that page exists.
-    func refreshTodaysTasksIfCalendarDayChanged() {
-        let cal = Self.vaultTasksCalendar()
-        let today = VaultTasksCalendarDay.today(calendar: cal)
-        guard today != todaysTasksSelectedDay else { return }
-        persistTodaysTasksImmediatelyForSelectedDay()
-        do {
-            var known = try VaultTodaysTasksIndexStore.loadOrBootstrap(vaultURL: repository.vaultURL, calendar: cal)
-            if !known.contains(today) {
-                try VaultTodaysTasksDayStore.save(day: today, items: [], vaultURL: repository.vaultURL)
-                known = try VaultTodaysTasksIndexStore.insertDayIfMissing(today, vaultURL: repository.vaultURL, existing: known)
-            }
-            todaysTasksKnownDays = known
-            todaysTasksSelectedDay = today
-            todaysTasksItems = VaultTodaysTasksDayStore.load(day: today, vaultURL: repository.vaultURL)
-        } catch {
-            userAlert = .message("Could not update Today’s Tasks for the new day: \(error.localizedDescription)")
-        }
-    }
-
     /// True when the vault has no notes and no folder to show yet (same condition as ``pickDefaultFolderID()`` returning `nil`).
     var isEmptyVaultOnboardingState: Bool {
         noteSummaries.isEmpty && topLevelFolderEntries.isEmpty && !hasRootLevelNotes
@@ -444,18 +274,35 @@ final class AppModel {
 
     let repository: NoteRepository
     private let manifestRefreshFacade = VaultManifestRefreshFacade()
-    private let bodySearchIndexController = NoteBodySearchIndexController()
-    private let backlinkRefreshScheduler = DebouncedAsyncWorkScheduler()
+    let bodySearchIndexController = NoteBodySearchIndexController()
+    let backlinkRefreshScheduler = DebouncedAsyncWorkScheduler()
     /// In-flight debounced autosave tasks keyed by pane index.
-    private var saveTasks: [Int: Task<Void, Never>] = [:]
-    private var todaysTasksPersistTask: Task<Void, Never>?
-    private var vaultWatcherSubscription: VaultWatcherSubscription?
+    var saveTasks: [Int: Task<Void, Never>] = [:]
+    var todaysTasksPersistTask: Task<Void, Never>?
+    /// Pinned notes (vault UI state; see ``VaultUIStateStore``).
+    var pinnedNoteIDs: [UUID] = []
+    /// Recently opened notes, most recent first (vault UI state; persisted debounced).
+    var recentNoteIDs: [UUID] = []
+    var recentsPersistTask: Task<Void, Never>?
+    /// Quick-open palette state (⌘P overlay).
+    let quickOpen = QuickOpenModel()
+    /// Icon-browser positions per folder (cache over `.miran/ui-state/icon-layout/`).
+    var folderIconLayoutCache: [UUID: [UUID: CGPoint]] = [:]
+    /// Trashed notes shown in the Trash sheet (refreshed on trash operations and sheet open).
+    var trashedNotes: [TrashedNoteSummary] = []
+    /// Parsed `properties["tags"]` per note (built with the body search index; patched on save).
+    var tagIndex: [UUID: Set<String>] = [:]
+    /// Presents the Trash sheet.
+    var isTrashPresented = false
+    /// Per-folder icons/list choice (raw ``FolderPageViewMode``; cache over `folder-view-modes.json`).
+    var folderViewModes: [UUID: String] = [:]
+    var vaultWatcherSubscription: VaultWatcherSubscription?
     /// Set when the vault watcher fires; processed after autosave finishes so events are not dropped.
-    private var pendingExternalDiskCheck = false
-    private var undoManager: UndoManager?
+    var pendingExternalDiskCheck = false
+    var undoManager: UndoManager?
     private let undoPolicy: UndoPolicy
     /// Pane index used by window-level bindings (toolbar, menu); always in range of ``workspacePanes``.
-    private var keyPaneIndex: Int {
+    var keyPaneIndex: Int {
         guard !workspacePanes.isEmpty else { return 0 }
         return min(max(0, activePaneIndex), workspacePanes.count - 1)
     }
@@ -537,12 +384,12 @@ final class AppModel {
     /// Insertion-ordered list of interceptor keys, so interceptors fire in registration order.
     private var localCommandInterceptorOrder: [UUID] = []
 
-    private let autosaveDebounceMilliseconds: UInt64
+    let autosaveDebounceMilliseconds: UInt64
     private let largeVaultLinkGraphSyncThreshold: Int
     private let startupLinkGraphSyncBudgetMs: Double
     private let startupLinkGraphSyncHistoryWeight: Double
     private var startupLinkGraphSyncTask: Task<Void, Never>?
-    private var activeNoteFilePresenter: ActiveNoteFilePresenter?
+    var activeNoteFilePresenter: ActiveNoteFilePresenter?
 
     /// Canonical default note ordering (A→Z by title, then path for stable ties).
     private static func noteSummarySortPredicate(_ lhs: NoteSummary, _ rhs: NoteSummary) -> Bool {
@@ -577,7 +424,7 @@ final class AppModel {
         VaultSecurityScopeCoordinator.shared.retain(repository.vaultURL)
     }
 
-    private static func vaultTasksCalendar() -> Calendar {
+    static func vaultTasksCalendar() -> Calendar {
         var c = Calendar.autoupdatingCurrent
         c.timeZone = TimeZone.current
         return c
@@ -643,6 +490,8 @@ final class AppModel {
             hasDismissedVaultWelcome = VaultWelcomeDismissalStore.isDismissed(vaultURL: repository.vaultURL)
             hiddenTopLevelFolderIDs = VaultHiddenFoldersStore.load(vaultURL: repository.vaultURL)
             folderNoteBodyConventions = FolderNoteBodyConventionStore.load(vaultURL: repository.vaultURL)
+            loadPinsAndRecents()
+            loadFolderViewModes()
             do {
                 try loadVaultTodaysTasksStateAfterPreferences()
             } catch {
@@ -749,7 +598,7 @@ final class AppModel {
 
     /// Canonical vault-refresh sequence for disk-driven changes: optional cache invalidation + manifest reconciliation.
     /// - Parameter refreshNotesOnSuccess: When true (e.g. vault watcher), refreshes sidebar/search summaries after a successful reconcile so externally added `.md` / `.txt` files appear without a manual reload.
-    private func reconcileVaultState(invalidateCaches: Bool, refreshNotesOnSuccess: Bool = false) async {
+    func reconcileVaultState(invalidateCaches: Bool, refreshNotesOnSuccess: Bool = false) async {
         if let err = await manifestRefreshFacade.reconcileAfterDiskChange(
             repository: repository,
             invalidateCaches: invalidateCaches
@@ -808,40 +657,6 @@ final class AppModel {
             await syncFolderSelectionAfterRefresh()
         }
     }
-
-    private func reconcileHiddenFoldersWithCatalogIfNeeded() {
-        let parent = scopeParentIDForTopLevelFolders
-        let pruned = VaultHiddenFoldersStore.pruned(
-            hiddenTopLevelFolderIDs,
-            folderCatalog: folderCatalog,
-            parentFolderID: parent
-        )
-        guard pruned != hiddenTopLevelFolderIDs else { return }
-        hiddenTopLevelFolderIDs = pruned
-        VaultHiddenFoldersStore.save(pruned, vaultURL: repository.vaultURL)
-    }
-
-    private func persistHiddenTopLevelFolderIDs() {
-        VaultHiddenFoldersStore.save(hiddenTopLevelFolderIDs, vaultURL: repository.vaultURL)
-    }
-
-    func hideTopLevelFolders(ids: Set<UUID>) {
-        guard !ids.isEmpty else { return }
-        hiddenTopLevelFolderIDs.formUnion(ids)
-        persistHiddenTopLevelFolderIDs()
-        for i in workspacePanes.indices {
-            if let selected = workspacePanes[i].selectedFolderID, ids.contains(selected) {
-                workspacePanes[i].selectedFolderID = pickDefaultFolderID()
-            }
-        }
-    }
-
-    func unhideTopLevelFolders(ids: Set<UUID>) {
-        guard !ids.isEmpty else { return }
-        hiddenTopLevelFolderIDs.subtract(ids)
-        persistHiddenTopLevelFolderIDs()
-    }
-
     private func syncFolderSelectionAfterRefresh() async {
         for i in workspacePanes.indices {
             if let id = workspacePanes[i].selectedFolderID, !isSelectedFolderStillValid(id) {
@@ -852,7 +667,7 @@ final class AppModel {
         // (`!hasDismissedVaultWelcome`) or the user cleared selection after dismissing the welcome.
     }
 
-    private func markVaultWelcomeDismissedIfNeeded() {
+    func markVaultWelcomeDismissedIfNeeded() {
         guard !hasDismissedVaultWelcome else { return }
         do {
             try VaultWelcomeDismissalStore.markDismissed(vaultURL: repository.vaultURL)
@@ -876,7 +691,7 @@ final class AppModel {
         return true
     }
 
-    private func pickDefaultFolderID() -> UUID? {
+    func pickDefaultFolderID() -> UUID? {
         let children = visibleTopLevelFolderEntries
         if let first = children.first {
             return first.id
@@ -901,7 +716,7 @@ final class AppModel {
         clearUndoStack(forPane: p)
     }
 
-    private func applyIncompatibleWorkspaceReport(_ report: CompatibilityReport) {
+    func applyIncompatibleWorkspaceReport(_ report: CompatibilityReport) {
         vaultWatcherSubscription = nil
         workspaceGateState = .incompatible(report)
         noteSummaries = []
@@ -917,28 +732,6 @@ final class AppModel {
         isBodySearchIndexBuilding = false
         backlinkRefreshScheduler.cancel()
     }
-
-    private func scheduleBodySearchIndexRebuild() {
-        bodySearchIndex = [:]
-        isBodySearchIndexBuilding = true
-        bodySearchIndexController.scheduleRebuild(
-            repository: repository,
-            apply: { [weak self] index in
-                guard let self else { return }
-                self.bodySearchIndex = index
-                self.isBodySearchIndexBuilding = false
-            },
-            onFailure: { [weak self] in
-                guard let self else { return }
-                self.isBodySearchIndexBuilding = false
-                self.userAlert = .recoverable(
-                    message: "Could not update text search for this library.",
-                    kind: .retryBodySearchIndex
-                )
-            }
-        )
-    }
-
     func performUserAlertRecovery(kind: UserAlertRecoveryKind) {
         userAlert = .none
         switch kind {
@@ -980,111 +773,7 @@ final class AppModel {
         }
     }
 
-    /// Hierarchical rows for the sidebar (`FolderCatalog` + notes from `filteredNoteSummaries`).
-    var sidebarOutline: [SidebarOutlineEntry] {
-        sidebarOutline(forPane: activePaneIndex)
-    }
-
-    func sidebarOutline(forPane pane: Int) -> [SidebarOutlineEntry] {
-        Self.buildSidebarOutline(
-            folderCatalog: folderCatalog,
-            notes: filteredNoteSummaries(forPane: pane),
-            parentID: FolderCatalog.rootFolderID,
-            searchSnippet: { self.searchSnippet(for: $0) }
-        )
-    }
-
-    private static func buildSidebarOutline(
-        folderCatalog: FolderCatalog,
-        notes: [NoteSummary],
-        parentID: UUID,
-        searchSnippet: (NoteSummary) -> String?
-    ) -> [SidebarOutlineEntry] {
-        let folders = folderCatalog.childFolders(of: parentID).sorted {
-            $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
-        }
-        let noteList = notes.filter { $0.folderID == parentID }
-        var rows: [SidebarOutlineEntry] = []
-        for f in folders {
-            let children = buildSidebarOutline(
-                folderCatalog: folderCatalog,
-                notes: notes,
-                parentID: f.id,
-                searchSnippet: searchSnippet
-            )
-            rows.append(.folder(f, children))
-        }
-        for n in noteList {
-            rows.append(.note(n, searchSnippet: searchSnippet(n)))
-        }
-        return rows
-    }
-
     /// Legacy outline hook: vault search is name/path-only, so body snippets are not shown.
-    func searchSnippet(for _: NoteSummary) -> String? {
-        nil
-    }
-
-    func createFolder(parentID: UUID? = nil, name: String = "New Folder", pane: Int? = nil) {
-        let targetPane = pane ?? activePaneIndex
-        let resolvedParent = parentID ?? newFolderParentID(forPane: targetPane)
-        Task { @MainActor in
-            do {
-                let id = try await repository.createFolder(parentID: resolvedParent, name: name)
-                markVaultWelcomeDismissedIfNeeded()
-                await refreshNotes()
-                self.workspacePanes[targetPane].selectedFolderID = id
-            } catch {
-                userAlert = .recoverable(
-                    message: error.localizedDescription,
-                    kind: .retryRefreshNotesAndFolderUI
-                )
-            }
-        }
-    }
-
-    func deleteFolder(id: UUID) {
-        Task { @MainActor in
-            do {
-                try await repository.deleteFolder(id: id)
-                hiddenTopLevelFolderIDs.remove(id)
-                persistHiddenTopLevelFolderIDs()
-                await refreshNotes()
-            } catch {
-                userAlert = .recoverable(
-                    message: error.localizedDescription,
-                    kind: .retryRefreshNotesAndFolderUI
-                )
-            }
-        }
-    }
-
-    /// Deletes several folders in order; refreshes once after all succeed. On first failure, refreshes and sets ``userAlert``.
-    func deleteTopLevelFolders(ids: Set<UUID>, onSuccess: @escaping @MainActor (_ deletedCount: Int) -> Void) {
-        guard !ids.isEmpty else { return }
-        Task { @MainActor in
-            var deleted = 0
-            for id in ids {
-                do {
-                    try await repository.deleteFolder(id: id)
-                    hiddenTopLevelFolderIDs.remove(id)
-                    deleted += 1
-                } catch {
-                    persistHiddenTopLevelFolderIDs()
-                    await refreshNotes()
-                    userAlert = .recoverable(
-                        message: error.localizedDescription,
-                        kind: .retryRefreshNotesAndFolderUI
-                    )
-                    return
-                }
-            }
-            persistHiddenTopLevelFolderIDs()
-            await refreshNotes()
-            onSuccess(deleted)
-        }
-    }
-
     func deleteSelectedNote(pane: Int? = nil) {
         let pane = pane ?? activePaneIndex
         guard let path = workspacePanes[pane].selectedBaseName else { return }
@@ -1092,7 +781,8 @@ final class AppModel {
             do {
                 let manifest = try await repository.loadManifest()
                 guard let id = manifest.entry(relativePath: path)?.noteID else { return }
-                try await repository.deleteNote(noteID: id)
+                try await repository.trashNote(noteID: id)
+                refreshTrashedNotes()
                 await refreshNotes()
                 if noteSummaries.isEmpty {
                     self.workspacePanes[pane].selectedBaseName = nil
@@ -1121,99 +811,6 @@ final class AppModel {
     }
 
     /// Filtered list for vault search UI: **title and relative path only** (no body matching).
-    var filteredNoteSummaries: [NoteSummary] {
-        filteredNoteSummaries(forPane: activePaneIndex)
-    }
-
-    func filteredNoteSummaries(forPane pane: Int) -> [NoteSummary] {
-        let q = workspacePanes[pane].vaultSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !q.isEmpty else { return noteSummaries }
-        return noteSummaries.filter { vaultNameOrPathMatches($0, queryLowercased: q) }
-    }
-
-    /// Vault-wide note rows matching the pane's vault search (sorted by title).
-    var vaultSearchMatchingNoteSummaries: [NoteSummary] {
-        vaultSearchMatchingNoteSummaries(forPane: activePaneIndex)
-    }
-
-    func vaultSearchMatchingNoteSummaries(forPane pane: Int) -> [NoteSummary] {
-        let q = workspacePanes[pane].vaultSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !q.isEmpty else { return [] }
-        return noteSummaries
-            .filter { vaultNameOrPathMatches($0, queryLowercased: q) }
-    }
-
-    /// Secondary line for vault search results (folder label and path).
-    func vaultSearchResultSubtitle(for summary: NoteSummary) -> String {
-        let folderLabel =
-            summary.folderID == FolderCatalog.rootFolderID ? "Vault"
-            : (folderCatalog.folder(id: summary.folderID)?.name ?? "Folder")
-        return "\(folderLabel) — \(summary.relativePath)"
-    }
-
-    private func vaultNameOrPathMatches(_ summary: NoteSummary, queryLowercased q: String) -> Bool {
-        if summary.relativePath.lowercased().contains(q) { return true }
-        if summary.title.lowercased().contains(q) { return true }
-        return false
-    }
-
-    func refreshBacklinks() async {
-        await refreshBacklinks(forPane: activePaneIndex)
-    }
-
-    func refreshBacklinks(forPane pane: Int) async {
-        guard workspacePanes.indices.contains(pane) else { return }
-        guard let doc = workspacePanes[pane].activeDocument else {
-            workspacePanes[pane].backlinks = []
-            return
-        }
-        let targetNoteID = doc.metadata.noteID
-        do {
-            let graph = try await repository.loadLinkGraph()
-            let resolver = try await repository.linkResolver()
-            let sourceIDs = graph.backlinks(to: targetNoteID)
-            var result: [BacklinkItem] = []
-            for sid in sourceIDs {
-                guard let relPath = resolver.baseName(forTargetNoteID: sid) else { continue }
-                let title =
-                    noteSummaries.first(where: { $0.noteID == sid })?.title
-                    ?? (relPath as NSString).lastPathComponent.replacingOccurrences(of: "-", with: " ").capitalized
-                var snippet = ""
-                var linkRange = MiranNotesCore.TextRange(start: 0, length: 0)
-                if let sourceResult = try? await repository.loadNote(noteID: sid) {
-                    let sourceDoc = sourceResult.document
-                    if let link = sourceDoc.metadata.links.first(where: { $0.targetNoteID == targetNoteID }) {
-                        linkRange = link.range
-                        snippet = BacklinkSnippetBuilder.snippet(around: link.range, in: sourceDoc.text)
-                    }
-                }
-                result.append(
-                    BacklinkItem(
-                        sourceNoteID: sid,
-                        title: title,
-                        relativePath: relPath,
-                        snippet: snippet,
-                        linkRange: linkRange
-                    )
-                )
-            }
-            workspacePanes[pane].backlinks = result
-        } catch {
-            workspacePanes[pane].backlinks = []
-            userAlert = .recoverable(
-                message: "Could not refresh backlinks: \(error.localizedDescription)",
-                kind: .retryRefreshBacklinks
-            )
-        }
-    }
-
-    private func scheduleBacklinkRefresh(forPane pane: Int) {
-        backlinkRefreshScheduler.schedule(delay: .milliseconds(1500)) { [weak self] in
-            guard let self else { return }
-            await self.refreshBacklinks(forPane: pane)
-        }
-    }
-
     func openNote(noteID: UUID, pane: Int? = nil) {
         guard noteSummaries.contains(where: { $0.noteID == noteID }) else {
             userAlert = .recoverable(
@@ -1230,20 +827,6 @@ final class AppModel {
     func closeToFolderPage(pane: Int? = nil) {
         changeSelection(noteID: nil, pane: pane ?? activePaneIndex)
     }
-
-    func openBacklinkSource(_ item: BacklinkItem, pane: Int? = nil) {
-        let p = pane ?? activePaneIndex
-        if !item.linkRange.isEmpty {
-            pendingEditorScroll = PendingEditorScroll(noteID: item.sourceNoteID, range: item.linkRange)
-        } else {
-            pendingEditorScroll = nil
-        }
-        if workspacePanes[p].activeDocument?.metadata.noteID == item.sourceNoteID {
-            return
-        }
-        changeSelection(noteID: item.sourceNoteID, pane: p)
-    }
-
     func clearPendingEditorScroll() {
         pendingEditorScroll = nil
     }
@@ -1327,7 +910,7 @@ final class AppModel {
         return EditorActivationProfile(editorKind: kind, modules: editorActivationProfile.modules)
     }
 
-    private func resolvedBodyExtensionForNewNote(in folderID: UUID) -> String? {
+    func resolvedBodyExtensionForNewNote(in folderID: UUID) -> String? {
         let inFolder = noteSummaries.filter { $0.folderID == folderID }
         if let first = inFolder.first {
             return first.bodyFileExtension
@@ -1369,7 +952,7 @@ final class AppModel {
         }
     }
 
-    private func resolvedBodyFileExtensionForSelectedNote(pane: Int) -> String {
+    func resolvedBodyFileExtensionForSelectedNote(pane: Int) -> String {
         guard workspacePanes.indices.contains(pane),
               let noteID = workspacePanes[pane].selectedNoteID,
               let summary = noteSummaries.first(where: { $0.noteID == noteID })
@@ -1378,33 +961,11 @@ final class AppModel {
         }
         return summary.bodyFileExtension
     }
-
-    func renameFolder(id: UUID, newName: String) {
-        Task { @MainActor in
-            _ = await renameFolderAndWait(id: id, newName: newName)
-        }
-    }
-
-    /// Performs folder rename and refresh; on failure sets ``userAlert`` and returns `false`.
-    @discardableResult
-    func renameFolderAndWait(id: UUID, newName: String) async -> Bool {
-        do {
-            try await repository.renameFolder(id: id, newName: newName)
-            await refreshNotes()
-            return true
-        } catch {
-            userAlert = .recoverable(
-                message: error.localizedDescription,
-                kind: .retryRefreshNotesAndFolderUI
-            )
-            return false
-        }
-    }
-
     func deleteNoteFromFolder(noteID: UUID) {
         Task { @MainActor in
             do {
-                try await repository.deleteNote(noteID: noteID)
+                try await repository.trashNote(noteID: noteID)
+                refreshTrashedNotes()
                 await refreshNotes()
             } catch {
                 userAlert = .recoverable(
@@ -1661,7 +1222,7 @@ final class AppModel {
         }
     }
 
-    private func reregisterAllUndoActions(forPane pane: Int) {
+    func reregisterAllUndoActions(forPane pane: Int) {
         undoManager?.removeAllActions(withTarget: self)
         let cps = workspacePanes[pane].undoCheckpoints
         guard cps.count >= 2 else { return }
@@ -1677,7 +1238,7 @@ final class AppModel {
         }
     }
 
-    private func clearUndoStack(forPane pane: Int) {
+    func clearUndoStack(forPane pane: Int) {
         undoManager?.removeAllActions(withTarget: self)
         workspacePanes[pane].undoCheckpoints.removeAll()
         workspacePanes[pane].undoActionNames.removeAll()
@@ -1773,6 +1334,9 @@ final class AppModel {
             } else {
                 path = nil
             }
+            if let id = noteID, path != nil {
+                recordRecentNote(id)
+            }
             if self.workspacePanes[pane].selectedBaseName == path,
                 self.workspacePanes[pane].activeDocument?.metadata.noteID == noteID { return }
             if let p = pendingEditorScroll, p.noteID != noteID {
@@ -1785,7 +1349,7 @@ final class AppModel {
         }
     }
 
-    private func refreshOnDiskFingerprints(for path: String, pane: Int) async {
+    func refreshOnDiskFingerprints(for path: String, pane: Int) async {
         guard workspacePanes.indices.contains(pane) else { return }
         do {
             workspacePanes[pane].lastKnownDiskDate = try await repository.noteModifiedDate(relativePath: path)
@@ -1800,7 +1364,7 @@ final class AppModel {
     }
 
     /// Cancels any debounced save for the pane, then persists if dirty.
-    private func flushPaneIfDirty(_ pane: Int) async {
+    func flushPaneIfDirty(_ pane: Int) async {
         if let t = saveTasks[pane] {
             t.cancel()
             saveTasks.removeValue(forKey: pane)
@@ -1816,6 +1380,8 @@ final class AppModel {
             applyVaultIntegrityAfterSave(integrity)
             await refreshOnDiskFingerprints(for: path, pane: pane)
             workspacePanes[pane].lastPersistedDocument = doc
+            bodySearchIndex[doc.metadata.noteID] = doc.text
+            tagIndex[doc.metadata.noteID] = Set(NoteTags.parse(doc.metadata.properties))
             await refreshBacklinks(forPane: pane)
         } catch {
             userAlert = .recoverable(
@@ -1857,6 +1423,8 @@ final class AppModel {
                 applyVaultIntegrityAfterSave(integrity)
                 await refreshOnDiskFingerprints(for: expectedPath, pane: pane)
                 self.workspacePanes[pane].lastPersistedDocument = latest
+                self.bodySearchIndex[latest.metadata.noteID] = latest.text
+                self.tagIndex[latest.metadata.noteID] = Set(NoteTags.parse(latest.metadata.properties))
                 let latencyMs = Int(Date().timeIntervalSince(startedAt) * 1000)
                 VaultTelemetry.logAutosave(latencyMs: max(0, latencyMs))
                 await self.refreshBacklinks(forPane: pane)
@@ -1868,317 +1436,5 @@ final class AppModel {
             }
         }
         saveTasks[pane] = task
-    }
-
-    private func scheduleTodaysTasksPersist() {
-        todaysTasksPersistTask?.cancel()
-        todaysTasksPersistTask = Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(autosaveDebounceMilliseconds))
-            guard !Task.isCancelled else { return }
-            let day = self.todaysTasksSelectedDay
-            let items = self.todaysTasksItems
-            do {
-                try VaultTodaysTasksDayStore.save(day: day, items: items, vaultURL: self.repository.vaultURL)
-            } catch {
-                userAlert = .message("Could not save Today’s Tasks: \(error.localizedDescription)")
-            }
-        }
-    }
-
-    private func loadVaultTodaysTasksStateAfterPreferences() throws {
-        let cal = Self.vaultTasksCalendar()
-        let vaultURL = repository.vaultURL
-        var known = try VaultTodaysTasksIndexStore.loadOrBootstrap(vaultURL: vaultURL, calendar: cal)
-        let today = VaultTasksCalendarDay.today(calendar: cal)
-        if !known.contains(today) {
-            try VaultTodaysTasksDayStore.save(day: today, items: [], vaultURL: vaultURL)
-            known = try VaultTodaysTasksIndexStore.insertDayIfMissing(today, vaultURL: vaultURL, existing: known)
-        }
-        todaysTasksKnownDays = known
-        todaysTasksSelectedDay = today
-        todaysTasksItems = VaultTodaysTasksDayStore.load(day: today, vaultURL: vaultURL)
-    }
-
-    private func persistTodaysTasksImmediatelyForSelectedDay() {
-        todaysTasksPersistTask?.cancel()
-        todaysTasksPersistTask = nil
-        do {
-            try VaultTodaysTasksDayStore.save(
-                day: todaysTasksSelectedDay,
-                items: todaysTasksItems,
-                vaultURL: repository.vaultURL
-            )
-        } catch {
-            userAlert = .message("Could not save Today’s Tasks: \(error.localizedDescription)")
-        }
-    }
-
-    func reloadFromDisk() {
-        Task { @MainActor in
-            await loadSelectedNote()
-        }
-    }
-
-    /// Dismisses the conflict alert. If `reloadFromDisk` is true, loads the note from the vault (discarding local edits). Otherwise keeps the buffer and records the external file time so the same change does not re-alert until the file changes again.
-    func resolveExternalEditConflict(reloadFromDisk: Bool) {
-        let diskDate = externalEditConflictAlert?.diskDate
-        let diskRevision = externalEditConflictAlert?.revisionToken
-        externalEditConflictAlert = nil
-        diskActivityBanner = nil
-        let pane = activePaneIndex
-        if reloadFromDisk {
-            Task { @MainActor in
-                await loadSelectedNote(pane: pane)
-            }
-        } else if let path = workspacePanes[pane].selectedBaseName {
-            Task { @MainActor in
-                await refreshOnDiskFingerprints(for: path, pane: pane)
-            }
-        } else if let diskDate {
-            workspacePanes[pane].lastKnownDiskDate = diskDate
-            workspacePanes[pane].lastKnownDiskRevision = diskRevision
-        }
-    }
-
-    /// Test helper: mirrors what the vault watcher closure does without relying on filesystem events.
-    func simulateWatcherEvent() async {
-        await processVaultFilesystemRefreshPipeline()
-    }
-
-    /// Workspace gate, reconcile manifest after external FS churn, then deferred external-edit reconciliation.
-    private func processVaultFilesystemRefreshPipeline() async {
-        let outcome = WorkspaceCompatibilityScanner.scan(vaultRoot: repository.vaultURL)
-        if case .incompatible(let report) = outcome {
-            applyIncompatibleWorkspaceReport(report)
-            return
-        }
-        await reconcileVaultState(invalidateCaches: true, refreshNotesOnSuccess: true)
-        pendingExternalDiskCheck = true
-        await runPendingExternalDiskReconciliationIfNeeded()
-    }
-
-    private func startVaultWatcher() {
-        vaultWatcherSubscription = nil
-        vaultWatcherSubscription = VaultWatcherHub.shared.subscribe(
-            vaultURL: repository.vaultURL,
-            onSetupFailed: { [weak self] error in
-                self?.userAlert = .recoverable(
-                    message: "Vault watch failed: \(error.localizedDescription)",
-                    kind: .retryVaultWatcher
-                )
-            },
-            onEvent: { [weak self] in
-                guard let self else { return }
-                Task { @MainActor [weak self] in
-                    await self?.processVaultFilesystemRefreshPipeline()
-                }
-            }
-        )
-    }
-
-    func runPendingExternalDiskReconciliationIfNeeded() async {
-        guard pendingExternalDiskCheck else { return }
-        guard saveTasks.isEmpty else { return }
-        pendingExternalDiskCheck = false
-        await processExternalDiskActivity()
-    }
-
-    /// Package-internal for tests that simulate vault changes without relying on filesystem timing.
-    func processExternalDiskActivity() async {
-        guard externalEditConflictAlert == nil else { return }
-        let pane = activePaneIndex
-        guard workspacePanes.indices.contains(pane) else { return }
-        guard let path = workspacePanes[pane].selectedBaseName, workspacePanes[pane].activeDocument != nil else { return }
-
-        let diskDate: Date?
-        let diskRevision: DocumentRevisionToken?
-        do {
-            diskDate = try await repository.noteModifiedDate(relativePath: path)
-            diskRevision = try await repository.noteRevisionToken(relativePath: path)
-        } catch {
-            userAlert = .recoverable(
-                message: "Failed to read note timestamps: \(error.localizedDescription)",
-                kind: .retryProcessExternalDiskActivity
-            )
-            return
-        }
-        guard let diskDate else { return }
-        if let diskRevision, diskRevision == workspacePanes[pane].lastKnownDiskRevision {
-            workspacePanes[pane].lastKnownDiskDate = diskDate
-            if let h = try? await repository.noteTextFileSHA256(relativePath: path) {
-                workspacePanes[pane].lastKnownNoteTextSHA256 = h
-            }
-            return
-        }
-        if let lastKnown = workspacePanes[pane].lastKnownDiskDate, diskDate <= lastKnown {
-            return
-        }
-
-        let observedTextHash: String
-        do {
-            let h1 = try await repository.noteTextFileSHA256(relativePath: path)
-            let h2 = try await repository.noteTextFileSHA256(relativePath: path)
-            if h1 != h2 {
-                VaultTelemetry.logToctouTextHashDrift()
-            }
-            observedTextHash = h2
-        } catch {
-            userAlert = .recoverable(
-                message: "Failed to read note body fingerprint: \(error.localizedDescription)",
-                kind: .retryProcessExternalDiskActivity
-            )
-            return
-        }
-
-        let loadedFromDisk: NoteDocument
-        do {
-            let raw = try await repository.loadNote(baseName: path)
-            loadedFromDisk = EditCommandEngine.apply(.repairMetadata, to: raw.document)
-        } catch {
-            userAlert = .recoverable(
-                message: "Failed to read external changes: \(error.localizedDescription)",
-                kind: .retryProcessExternalDiskActivity
-            )
-            return
-        }
-
-        let isDirty = workspacePanes[pane].lastPersistedDocument != workspacePanes[pane].activeDocument
-
-        if !isDirty {
-            if loadedFromDisk == workspacePanes[pane].activeDocument {
-                workspacePanes[pane].lastKnownDiskDate = diskDate
-                workspacePanes[pane].lastKnownDiskRevision = diskRevision
-                workspacePanes[pane].lastKnownNoteTextSHA256 = observedTextHash
-                return
-            }
-            clearUndoStack(forPane: pane)
-            workspacePanes[pane].activeDocument = loadedFromDisk
-            workspacePanes[pane].lastPersistedDocument = loadedFromDisk
-            workspacePanes[pane].lastKnownDiskDate = diskDate
-            workspacePanes[pane].lastKnownDiskRevision = diskRevision
-            workspacePanes[pane].lastKnownNoteTextSHA256 = observedTextHash
-            Task { @MainActor in await refreshBacklinks(forPane: pane) }
-            return
-        }
-
-        if loadedFromDisk == workspacePanes[pane].activeDocument {
-            workspacePanes[pane].lastPersistedDocument = loadedFromDisk
-            workspacePanes[pane].lastKnownDiskDate = diskDate
-            workspacePanes[pane].lastKnownDiskRevision = diskRevision
-            workspacePanes[pane].lastKnownNoteTextSHA256 = observedTextHash
-            return
-        }
-
-        VaultTelemetry.logConflictDetected(isDirty: isDirty, hasRevisionToken: diskRevision != nil)
-        diskActivityBanner =
-            "The saved copy of this note changed on disk while you have unsaved edits. Choose an action below or compare versions."
-        externalEditConflictAlert = ExternalEditConflict(diskDate: diskDate, revisionToken: diskRevision)
-    }
-
-    func openExternalEditCompare() {
-        guard let path = selectedBaseName, let doc = activeDocument else { return }
-        Task { @MainActor in
-            let diskText: String
-            do {
-                diskText = try await repository.readRawNoteText(relativePath: path)
-            } catch {
-                userAlert = .recoverable(
-                    message: "Could not load disk copy: \(error.localizedDescription)",
-                    kind: .retryOpenExternalEditCompare
-                )
-                return
-            }
-            externalTextCompare = ExternalTextComparePayload(localText: doc.text, diskText: diskText)
-        }
-    }
-
-    func dismissDiskActivityBanner() {
-        diskActivityBanner = nil
-    }
-
-    private func updateActiveNoteFilePresenter() {
-        activeNoteFilePresenter?.stop()
-        activeNoteFilePresenter = nil
-        let pane = activePaneIndex
-        guard workspacePanes.indices.contains(pane),
-            let path = workspacePanes[pane].selectedBaseName else { return }
-        let ext = resolvedBodyFileExtensionForSelectedNote(pane: pane)
-        let url = VaultPath.fileURL(vaultRoot: repository.vaultURL, relativePathWithoutExtension: path, extension: ext)
-        let presenter = ActiveNoteFilePresenter(fileURL: url) { [weak self] in
-            guard let self else { return }
-            Task { @MainActor in
-                await self.handleActiveNotePresenterDidChange(noteRelativePath: path, pane: pane)
-            }
-        }
-        presenter.start()
-        activeNoteFilePresenter = presenter
-    }
-
-    /// `NSFilePresenter` only observes the active note body file (`.txt` or `.md`). If its body bytes still match the pane's last known hash, skip queuing a full reconciliation.
-    private func handleActiveNotePresenterDidChange(noteRelativePath path: String, pane: Int) async {
-        guard workspacePanes.indices.contains(pane) else { return }
-        do {
-            let h = try await repository.noteTextFileSHA256(relativePath: path)
-            if let known = workspacePanes[pane].lastKnownNoteTextSHA256, h == known {
-                return
-            }
-        } catch {
-            Logger.vault.debug(
-                "noteTextFileSHA256 failed for active presenter; queuing reconcile: \(error.localizedDescription, privacy: .public)"
-            )
-        }
-        pendingExternalDiskCheck = true
-        await runPendingExternalDiskReconciliationIfNeeded()
-    }
-
-    // MARK: - Layout management
-
-    /// Switches to a new pane layout. Flushes the active pane, then grows or shrinks ``workspacePanes``.
-    func setLayout(_ layout: PaneLayout) {
-        Task { @MainActor in
-            let newCount = layout.paneCount
-            let flushIndex = keyPaneIndex
-            await flushPaneIfDirty(flushIndex)
-            activePaneIndex = min(max(0, activePaneIndex), max(0, newCount - 1))
-            if workspacePanes.count < newCount {
-                while workspacePanes.count < newCount {
-                    workspacePanes.append(WorkspacePaneSession())
-                }
-            } else if workspacePanes.count > newCount {
-                workspacePanes = Array(workspacePanes.prefix(newCount))
-            }
-            currentLayout = layout
-            undoManager?.removeAllActions(withTarget: self)
-            reregisterAllUndoActions(forPane: activePaneIndex)
-            updateActiveNoteFilePresenter()
-        }
-    }
-
-    /// Makes `index` the pane that receives toolbar/search/primary undo registration. Each tile keeps its own navigation state.
-    func activatePane(index: Int) {
-        guard index != activePaneIndex, index < currentLayout.paneCount else { return }
-        Task { await activatePaneAwaitable(index: index) }
-    }
-
-    /// Switches the key pane immediately so a synchronous ``apply`` runs against the correct buffer; previous pane flush runs in the background.
-    func activatePaneForEditingSync(_ index: Int) {
-        guard index != activePaneIndex, index < currentLayout.paneCount else { return }
-        let previous = activePaneIndex
-        Task { await flushPaneIfDirty(previous) }
-        undoManager?.removeAllActions(withTarget: self)
-        activePaneIndex = index
-        reregisterAllUndoActions(forPane: index)
-        updateActiveNoteFilePresenter()
-    }
-
-    /// Awaitable activation (e.g. before applying edits so ``apply`` targets the key pane).
-    func activatePaneAwaitable(index: Int) async {
-        guard index != activePaneIndex, index < currentLayout.paneCount else { return }
-        let previous = activePaneIndex
-        await flushPaneIfDirty(previous)
-        undoManager?.removeAllActions(withTarget: self)
-        activePaneIndex = index
-        reregisterAllUndoActions(forPane: index)
-        updateActiveNoteFilePresenter()
     }
 }

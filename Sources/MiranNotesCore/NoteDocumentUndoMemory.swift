@@ -8,9 +8,8 @@ extension NoteDocument {
         let blockEstimate = metadata.blocks.count * 128
         let spanEstimate = metadata.spans.count * 64
         let linkEstimate = metadata.links.count * 96
-        let artifactEstimate = metadata.artifacts.count * 64
         let propsEstimate = metadata.properties.count * 48
-        return textEstimate + blockEstimate + spanEstimate + linkEstimate + artifactEstimate + propsEstimate + 512
+        return textEstimate + blockEstimate + spanEstimate + linkEstimate + propsEstimate + 512
     }
 
     /// Sum of `estimatedUndoMemoryBytes` for each checkpoint (full timeline retained in memory).

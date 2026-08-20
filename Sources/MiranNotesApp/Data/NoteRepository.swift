@@ -80,6 +80,12 @@ struct NoteSummary: Identifiable, Hashable, Sendable {
     }
 }
 
+/// Search inputs built in one vault pass (see `NoteRepository.buildSearchIndexes`).
+struct VaultSearchIndexes: Sendable {
+    var bodies: [UUID: String]
+    var tags: [UUID: Set<String>]
+}
+
 /// One incoming link from a source note (backlink row in the UI).
 struct BacklinkItem: Identifiable, Sendable {
     var id: UUID { sourceNoteID }
@@ -105,14 +111,7 @@ actor NoteRepository {
                 relationshipKind: "noteLink"
             )
         }
-        let artifactRels = document.metadata.artifacts.map { artifact in
-            LinkRelationship(
-                sourceNoteID: noteID,
-                target: .artifact(noteID: noteID, artifactID: artifact.id, kind: artifact.kind),
-                relationshipKind: "artifactLink"
-            )
-        }
-        relationshipIndex.replaceLinks(from: noteID, with: linkRels + artifactRels)
+        relationshipIndex.replaceLinks(from: noteID, with: linkRels)
     }
 
     private func bodyExtensionForPath(relativePath: String, noteID: UUID?, pathIndex: PathIndex) -> String? {
@@ -190,8 +189,8 @@ actor NoteRepository {
     }
 
     nonisolated let vaultURL: URL
-    private let files: NoteFileActor
-    private let index: VaultIndexActor
+    let files: NoteFileActor
+    let index: VaultIndexActor
 
     init(vaultURL: URL, commitCoordinator: VaultCommitCoordinator = VaultCommitCoordinator()) {
         self.vaultURL = vaultURL
@@ -488,10 +487,18 @@ actor NoteRepository {
     }
 
     func buildBodySearchIndex() async throws -> [UUID: String] {
+        try await buildSearchIndexes().bodies
+    }
+
+    /// One vault pass building both search inputs: raw body text per note, and the parsed
+    /// `properties["tags"]` set per note (sidecar reads are tolerant — a bad sidecar just has no tags).
+    func buildSearchIndexes() async throws -> VaultSearchIndexes {
         let manifest = try await loadOrRebuildManifest()
-        var result: [UUID: String] = [:]
-        result.reserveCapacity(manifest.entries.count)
+        var bodies: [UUID: String] = [:]
+        var tags: [UUID: Set<String>] = [:]
+        bodies.reserveCapacity(manifest.entries.count)
         let pathIndex = try await index.loadPathIndex()
+        let decoder = JSONDecoder()
         for entry in manifest.entries {
             let raw: String
             do {
@@ -499,13 +506,26 @@ actor NoteRepository {
                 raw = try await files.readRawNoteText(relativePath: entry.relativePath, bodyFileExtension: hint)
             } catch {
                 Logger.vault.debug(
-                    "buildBodySearchIndex skip path=\(entry.relativePath, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
+                    "buildSearchIndexes skip path=\(entry.relativePath, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
                 )
                 continue
             }
-            result[entry.noteID] = raw
+            bodies[entry.noteID] = raw
+
+            let metaURL = VaultPath.fileURL(
+                vaultRoot: vaultURL,
+                relativePathWithoutExtension: entry.relativePath,
+                extension: "meta.json"
+            )
+            if let data = try? Data(contentsOf: metaURL),
+               let metadata = try? decoder.decode(NoteMetadata.self, from: data) {
+                let parsed = NoteTags.parse(metadata.properties)
+                if !parsed.isEmpty {
+                    tags[entry.noteID] = Set(parsed)
+                }
+            }
         }
-        return result
+        return VaultSearchIndexes(bodies: bodies, tags: tags)
     }
 
     func noteModifiedDate(relativePath: String) async throws -> Date? {
@@ -763,20 +783,6 @@ actor NoteRepository {
         try await persistFolderCatalog(folderCatalog)
     }
 
-    /// Read-only consistency report (manifest, path index, `.txt` / `.meta.json` pairing).
-    func validateVaultDrift() async throws -> VaultDriftReport {
-        try await files.ensureVault()
-        let manifest = try await loadOrRebuildManifest()
-        let pathIndex = try await index.loadPathIndex()
-        let txts = try await files.listRelativePathsOnDisk()
-        return VaultDriftValidator.validate(
-            vaultURL: vaultURL,
-            manifest: manifest,
-            pathIndex: pathIndex,
-            txtPathsOnDisk: txts
-        )
-    }
-
     func createNote(named name: String, folderID: UUID, bodyFileExtension: String = "txt") async throws -> (NoteDocument, String) {
         try await files.ensureVault()
         var folderCatalog = try await index.loadFolderCatalog()
@@ -872,7 +878,7 @@ actor NoteRepository {
         return (documentToPersist, relativePath)
     }
 
-    private func loadOrRebuildManifest() async throws -> VaultManifest {
+    func loadOrRebuildManifest() async throws -> VaultManifest {
         let manifest: VaultManifest
         if let decoded = await index.loadManifestFromDiskOnly() {
             manifest = try await reconcileManifestWithDisk(decoded)

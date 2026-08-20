@@ -87,25 +87,6 @@ final class NoteIdentityPolicyTests: XCTestCase {
         XCTAssertEqual(loaded.metadata.noteID, id)
     }
 
-    func testDriftValidatorDetectsTxtMissingFromManifest() throws {
-        let vault = try tempVaultURL()
-        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
-        try FileManager.default.createDirectory(at: VaultPaths.miranDirectory(vaultURL: vault), withIntermediateDirectories: true)
-        let orphanTxt = "orphan"
-        try "x".write(to: vault.appendingPathComponent("\(orphanTxt).txt"), atomically: true, encoding: .utf8)
-
-        var manifest = VaultManifest()
-        manifest.ensureSchemaVersionIsCurrent()
-        let pathIndex = PathIndex()
-        let report = VaultDriftValidator.validate(
-            vaultURL: vault,
-            manifest: manifest,
-            pathIndex: pathIndex,
-            txtPathsOnDisk: [orphanTxt]
-        )
-        XCTAssertTrue(report.txtRelativePathsMissingFromManifest.contains(orphanTxt))
-    }
-
     func testMaterializingSidecarNoOpWhenAlreadyValid() async throws {
         let vault = try tempVaultURL()
         let repo = NoteRepository(vaultURL: vault)
@@ -157,32 +138,6 @@ final class NoteIdentityPolicyTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: lockedMeta.path))
     }
 
-    func testDriftValidatorDetectsOrphanMetaWithoutTxt() throws {
-        let vault = try tempVaultURL()
-        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
-        try FileManager.default.createDirectory(at: VaultPaths.miranDirectory(vaultURL: vault), withIntermediateDirectories: true)
-
-        let meta = NoteMetadata(
-            schemaVersion: NoteMetadata.currentSchemaVersion,
-            noteID: UUID(),
-            blocks: [],
-            spans: []
-        )
-        let enc = JSONEncoder()
-        enc.outputFormatting = [.sortedKeys]
-        try enc.encode(meta).write(to: vault.appendingPathComponent("only-meta.meta.json"))
-
-        var manifest = VaultManifest()
-        manifest.ensureSchemaVersionIsCurrent()
-        let report = VaultDriftValidator.validate(
-            vaultURL: vault,
-            manifest: manifest,
-            pathIndex: PathIndex(),
-            txtPathsOnDisk: []
-        )
-        XCTAssertTrue(report.orphanMetaRelativePaths.contains("only-meta"))
-    }
-
     func testBulkTxtFilesDiscoveredInSingleManifestLoad() async throws {
         let vault = try tempVaultURL()
         let repo = NoteRepository(vaultURL: vault)
@@ -203,38 +158,6 @@ final class NoteIdentityPolicyTests: XCTestCase {
         }
     }
 
-    func testDriftValidatorDetectsDuplicateSidecarNoteIDs() throws {
-        let vault = try tempVaultURL()
-        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
-        let shared = UUID()
-        let meta1 = NoteMetadata(
-            schemaVersion: NoteMetadata.currentSchemaVersion,
-            noteID: shared,
-            blocks: [],
-            spans: []
-        )
-        let enc = JSONEncoder()
-        enc.outputFormatting = [.sortedKeys]
-        let d1 = try enc.encode(meta1)
-        try FileManager.default.createDirectory(at: vault.appendingPathComponent("A", isDirectory: true), withIntermediateDirectories: true)
-        try FileManager.default.createDirectory(at: vault.appendingPathComponent("B", isDirectory: true), withIntermediateDirectories: true)
-        try d1.write(to: vault.appendingPathComponent("A/one.meta.json"))
-        try d1.write(to: vault.appendingPathComponent("B/two.meta.json"))
-        try "a".write(to: vault.appendingPathComponent("A/one.txt"), atomically: true, encoding: .utf8)
-        try "b".write(to: vault.appendingPathComponent("B/two.txt"), atomically: true, encoding: .utf8)
-
-        var manifest = VaultManifest()
-        manifest.ensureSchemaVersionIsCurrent()
-        let report = VaultDriftValidator.validate(
-            vaultURL: vault,
-            manifest: manifest,
-            pathIndex: PathIndex(),
-            txtPathsOnDisk: ["A/one", "B/two"]
-        )
-        let dups = report.duplicateNoteIDsInSidecars.filter { $0.noteID == shared }
-        XCTAssertEqual(dups.count, 1)
-        XCTAssertEqual(Set(dups[0].relativePaths), Set(["A/one", "B/two"]))
-    }
 }
 
 private func writeManifestFile(_ manifest: VaultManifest, to url: URL) throws {

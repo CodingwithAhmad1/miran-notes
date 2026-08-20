@@ -12,24 +12,24 @@ final class NoteBodySearchIndexController {
         rebuildTask = nil
     }
 
-    /// Cancels any in-flight build, bumps generation, and starts `NoteRepository/buildBodySearchIndex()`.
+    /// Cancels any in-flight build, bumps generation, and starts `NoteRepository/buildSearchIndexes()`.
     func scheduleRebuild(
         repository: NoteRepository,
-        apply: @escaping @MainActor ([UUID: String]) -> Void,
+        apply: @escaping @MainActor (VaultSearchIndexes) -> Void,
         onFailure: @escaping @MainActor () -> Void
     ) {
         rebuildTask?.cancel()
         generation += 1
         let gen = generation
         rebuildTask = Task {
-            let index: [UUID: String]
+            let index: VaultSearchIndexes
             do {
-                index = try await repository.buildBodySearchIndex()
+                index = try await repository.buildSearchIndexes()
             } catch {
                 if error is CancellationError { return }
                 await MainActor.run {
                     Logger.vault.error(
-                        "buildBodySearchIndex failed: \(error.localizedDescription, privacy: .public)"
+                        "buildSearchIndexes failed: \(error.localizedDescription, privacy: .public)"
                     )
                     onFailure()
                 }

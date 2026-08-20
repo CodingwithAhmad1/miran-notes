@@ -43,26 +43,31 @@ final class VaultWorkspaceAccess {
         }
     }
 
-    /// Production: clears any legacy vault-root bookmark file, does not restore it—user picks a folder each launch unless `defaultVaultURL` is set (e.g. `MIRAN_USE_DEFAULT_VAULT`).
-    /// Unit tests: when ``VaultRootBookmarkStore/isBookmarkFileRedirectedForTesting`` is true, restores from the redirected bookmark file like before.
+    /// Restores the last vault from its persisted security-scoped bookmark when the
+    /// "Reopen last vault at launch" preference is on (the default); otherwise — and when the
+    /// bookmark is stale, missing, or points at an incompatible workspace — falls back to
+    /// `defaultVaultURL` (e.g. `MIRAN_USE_DEFAULT_VAULT`) or the open-vault welcome UI.
+    /// See ADR 0006 (amended: production persists the vault-root bookmark).
     static func bootstrap(defaultVaultURL: URL?) -> VaultBootstrapOutcome {
-        if VaultRootBookmarkStore.isBookmarkFileRedirectedForTesting {
-            if let data = VaultRootBookmarkStore.loadBookmarkData() {
-                if let restored = resolveBookmarkData(data) {
-                    switch WorkspaceCompatibilityScanner.scan(vaultRoot: restored) {
-                    case .incompatible:
-                        VaultRootBookmarkStore.clearBookmarkData()
-                    case .empty, .compatible:
-                        return .resolved(
-                            VaultWorkspaceAccess(vaultRootURL: restored, isSecurityScopedAccessActive: false)
-                        )
+        if AppSettings.reopenLastVaultAtLaunchPreference(), let data = VaultRootBookmarkStore.loadBookmarkData() {
+            if let restored = resolveBookmarkData(data) {
+                switch WorkspaceCompatibilityScanner.scan(vaultRoot: restored.url) {
+                case .incompatible:
+                    if restored.isSecurityScopeActive {
+                        restored.url.stopAccessingSecurityScopedResource()
                     }
-                } else {
                     VaultRootBookmarkStore.clearBookmarkData()
+                case .empty, .compatible:
+                    return .resolved(
+                        VaultWorkspaceAccess(
+                            vaultRootURL: restored.url,
+                            isSecurityScopedAccessActive: restored.isSecurityScopeActive
+                        )
+                    )
                 }
+            } else {
+                VaultRootBookmarkStore.clearBookmarkData()
             }
-        } else {
-            VaultRootBookmarkStore.clearBookmarkData()
         }
         guard let defaultVaultURL else {
             return .needsUserSelectedVault
@@ -79,7 +84,7 @@ final class VaultWorkspaceAccess {
     }
 
     /// Call after the user selects a directory from ``NSOpenPanel``.
-    /// Production does not persist a vault-root bookmark; unit tests do when ``VaultRootBookmarkStore/isBookmarkFileRedirectedForTesting`` is true.
+    /// Persists a vault-root bookmark (best-effort) so the next launch can reopen the vault.
     /// Caller should invoke ``stopAccessingIfNeeded()`` on the previous instance before replacing it.
     static func adoptUserSelectedVaultRoot(_ url: URL) throws -> VaultWorkspaceAccess {
         let standardized = url.standardizedFileURL
@@ -89,14 +94,13 @@ final class VaultWorkspaceAccess {
         case .empty, .compatible:
             break
         }
-        if VaultRootBookmarkStore.isBookmarkFileRedirectedForTesting {
-            let data = try makeBookmarkData(for: standardized)
-            try VaultRootBookmarkStore.saveBookmarkData(data)
+        if let data = try? makeBookmarkData(for: standardized) {
+            try? VaultRootBookmarkStore.saveBookmarkData(data)
         }
         return VaultWorkspaceAccess(vaultRootURL: standardized, isSecurityScopedAccessActive: false)
     }
 
-    private static func resolveBookmarkData(_ data: Data) -> URL? {
+    private static func resolveBookmarkData(_ data: Data) -> (url: URL, isSecurityScopeActive: Bool)? {
         do {
             var stale = false
             let url = try URL(
@@ -105,8 +109,10 @@ final class VaultWorkspaceAccess {
                 relativeTo: nil,
                 bookmarkDataIsStale: &stale
             )
-            if stale { return nil }
-            if directoryExists(url) { return url }
+            if !stale, directoryExists(url) {
+                let started = url.startAccessingSecurityScopedResource()
+                return (url, started)
+            }
         } catch {}
 
         do {
@@ -117,8 +123,9 @@ final class VaultWorkspaceAccess {
                 relativeTo: nil,
                 bookmarkDataIsStale: &stale
             )
-            if stale { return nil }
-            if directoryExists(url) { return url }
+            if !stale, directoryExists(url) {
+                return (url, false)
+            }
         } catch {}
 
         return nil

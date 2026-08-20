@@ -29,6 +29,16 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
     /// eliminating the brief lag between command dispatch and the next SwiftUI render cycle.
     var onCommands: ([EditCommand]) -> NoteDocument
     var onWikiLinkClick: ((UUID) -> Void)?
+    /// Ranked entries for the `[[` autocomplete popover (model-backed; includes an optional Create row).
+    var wikiLinkCandidates: ((String) -> [WikiLinkMenuEntry])?
+    /// Create a note titled `String` for a `[[` Create row, then call back with its `noteID` (nil on failure).
+    var onCreateWikiLinkTarget: ((String, @escaping @MainActor (UUID?) -> Void) -> Void)?
+    /// "Add to Today's Tasks" from the block context menu: `(blockID, blockText)`.
+    var onAddBlockToTodaysTasks: ((String, String) -> Void)?
+    /// Click on an `[attachment: name]` token.
+    var onOpenAttachment: ((String) -> Void)?
+    /// Files dropped on the editor: `(urls, utf16InsertionIndex)` — copy in + insert tokens.
+    var onAttachFilesDropped: (([URL], Int) -> Void)?
     /// Called when the incremental diff fails and a full-buffer replace fallback fires (block structure may be partially lost).
     var onFullReplaceWarning: (() -> Void)?
     /// Called when a typed insertion would push the note past the 1 MB UTF-16 size limit.
@@ -65,6 +75,14 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
         textView.linkHitHandler = { [weak coordinator] id in
             coordinator?.parent.onWikiLinkClick?(id)
         }
+        textView.attachmentHitHandler = { [weak coordinator] filename in
+            coordinator?.parent.onOpenAttachment?(filename)
+        }
+        textView.attachmentDropHandler = { [weak coordinator] urls, index in
+            guard let handler = coordinator?.parent.onAttachFilesDropped else { return false }
+            handler(urls, index)
+            return true
+        }
         textView.formattingCommandHandler = { [weak coordinator] style in
             coordinator?.toggleSpanStyle(style)
         }
@@ -89,6 +107,14 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
             let coordinator = context.coordinator
             tv.linkHitHandler = { [weak coordinator] id in
                 coordinator?.parent.onWikiLinkClick?(id)
+            }
+            tv.attachmentHitHandler = { [weak coordinator] filename in
+                coordinator?.parent.onOpenAttachment?(filename)
+            }
+            tv.attachmentDropHandler = { [weak coordinator] urls, index in
+                guard let handler = coordinator?.parent.onAttachFilesDropped else { return false }
+                handler(urls, index)
+                return true
             }
             tv.formattingCommandHandler = { [weak coordinator] style in
                 coordinator?.toggleSpanStyle(style)
@@ -123,6 +149,7 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
         private var highlightedSlashIndex = 0
         private var slashMenuPopover: NSPopover?
         private var slashMenuHost: NSHostingController<EditorSlashCommandMenuView>?
+        let wikiLinkMenu = WikiLinkMenuController()
         /// Last document snapshot for which `EditorVisualStyle.apply` ran (full equality skips redraw when text and metadata match).
         private var lastStyledDocument: NoteDocument?
 
@@ -136,6 +163,45 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
             self.parent = parent
             super.init()
             textStorageDelegateBridge.owner = self
+            wikiLinkMenu.candidates = { [weak self] query in
+                self?.parent.wikiLinkCandidates?(query) ?? []
+            }
+            wikiLinkMenu.onCommit = { [weak self] entry, query in
+                self?.commitWikiLinkEntry(entry, query: query)
+            }
+        }
+
+        private func commitWikiLinkEntry(_ entry: WikiLinkMenuEntry, query: WikiLinkQueryMatch) {
+            switch entry {
+            case .note(let noteID, let title, _):
+                insertWikiLinkReplacingQuery(targetNoteID: noteID, displayText: title, query: query)
+            case .create(let title):
+                parent.onCreateWikiLinkTarget?(title) { [weak self] newNoteID in
+                    guard let self, let newNoteID else { return }
+                    // Re-validate the query against the current buffer: the async create may have raced typing.
+                    guard let textView = self.textView else { return }
+                    let ns = textView.string as NSString
+                    guard NSMaxRange(query.fullRange) <= ns.length,
+                          ns.substring(with: query.fullRange) == "[[" + query.queryText else { return }
+                    self.insertWikiLinkReplacingQuery(targetNoteID: newNoteID, displayText: title, query: query)
+                }
+            }
+        }
+
+        /// One atomic batch: remove the `[[query` token, insert `[[displayText]]` with link metadata at the same offset.
+        private func insertWikiLinkReplacingQuery(targetNoteID: UUID, displayText: String, query: WikiLinkQueryMatch) {
+            guard let textView else { return }
+            let start = query.fullRange.location
+            let commands: [EditCommand] = [
+                .replaceText(range: TextRange(start: start, length: query.fullRange.length), replacement: ""),
+                .insertWikiLink(utf16Offset: start, targetNoteID: targetNoteID, displayText: displayText)
+            ]
+            let caretAfter = start + ("[[" + displayText + "]]").utf16.count
+            _ = runCommandSession(
+                textView: textView,
+                commands: commands,
+                pendingSelection: NSRange(location: caretAfter, length: 0)
+            )
         }
 
         /// Forwards TextKit storage callbacks on the main thread; `Coordinator` cannot adopt `NSTextStorageDelegate` directly under Swift 6 isolation rules.
@@ -169,6 +235,13 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
 
             let chrome = BlockChromeOverlayView()
             chrome.textView = textView
+            chrome.onToggleTask = { [weak self] blockID, isDone in
+                guard let self, let textView = self.textView else { return }
+                _ = self.runCommandSession(
+                    textView: textView,
+                    commands: [.setBlockDone(blockID: blockID, isDone: isDone)]
+                )
+            }
             chrome.autoresizingMask = [.width, .height]
             clipView.addSubview(chrome, positioned: .above, relativeTo: textView)
             chrome.frame = textView.frame
@@ -216,6 +289,7 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
             hoveredBlockID = nil
             chromeOverlay?.removeFromSuperview()
             chromeOverlay = nil
+            wikiLinkMenu.close()
         }
 
         private func syncChromeFrame() {
@@ -262,6 +336,17 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
             )
         }
 
+        @objc private func blockMenuAddToTodaysTasks(_ sender: NSMenuItem) {
+            guard let id = sender.representedObject as? String else { return }
+            guard let block = parent.document.metadata.blocks.first(where: { $0.id == id }) else { return }
+            let ns = parent.document.text as NSString
+            let clamped = block.range.clamped(to: ns.length)
+            let text = clamped.length > 0
+                ? ns.substring(with: NSRange(location: clamped.start, length: clamped.length))
+                : ""
+            parent.onAddBlockToTodaysTasks?(id, text)
+        }
+
         @objc private func blockMenuDuplicate(_ sender: NSMenuItem) {
             guard let id = sender.representedObject as? String, let textView else { return }
             _ = runCommandSession(textView: textView, commands: [.duplicateBlock(blockID: id)])
@@ -294,12 +379,21 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
             addTypeItem("Heading 2", type: .heading, headingLevel: 2)
             addTypeItem("Heading 3", type: .heading, headingLevel: 3)
             addTypeItem("List Item", type: .listItem, headingLevel: nil)
+            addTypeItem("Task", type: .taskItem, headingLevel: nil)
             addTypeItem("Callout", type: .callout, headingLevel: nil)
             addTypeItem("Code", type: .code, headingLevel: nil)
             addTypeItem("Divider", type: .divider, headingLevel: nil)
 
             let typeItem = NSMenuItem(title: "Change Block Type", action: nil, keyEquivalent: "")
             typeItem.submenu = typeMenu
+
+            let addToTasks = NSMenuItem(
+                title: "Add to Today’s Tasks",
+                action: #selector(blockMenuAddToTodaysTasks(_:)),
+                keyEquivalent: ""
+            )
+            addToTasks.target = self
+            addToTasks.representedObject = block.id
 
             let dup = NSMenuItem(title: "Duplicate Block", action: #selector(blockMenuDuplicate(_:)), keyEquivalent: "")
             dup.target = self
@@ -311,6 +405,7 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
 
             menu.addItem(typeItem)
             menu.addItem(.separator())
+            menu.addItem(addToTasks)
             menu.addItem(dup)
             menu.addItem(del)
 
@@ -332,6 +427,9 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
         }
 
         fileprivate func handleSlashMenuCommand(_ command: NoteEditorSlashMenuCommand) -> Bool {
+            if wikiLinkMenu.isPresenting {
+                return wikiLinkMenu.handleMenuCommand(command)
+            }
             guard currentSlashQuery != nil else { return false }
             switch command {
             case .moveUp:
@@ -447,12 +545,16 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
             return nil
         }
 
+        /// Refreshes both caret-anchored menus. The slash menu wins when a line-start `/` query is active;
+        /// the `[[` menu is evaluated only while no slash query matches, so at most one popover shows.
         private func refreshSlashMenuState(for textView: NSTextView) {
             let selectedRange = textView.selectedRange()
             guard let query = SlashQueryDetector.match(text: textView.string, selectedRange: selectedRange) else {
                 closeSlashMenu()
+                wikiLinkMenu.refresh(textView: textView)
                 return
             }
+            wikiLinkMenu.close()
 
             let catalog = SlashCommandRegistry.catalogItems()
             let matches = SlashCommandMatcher.filterAndRank(query: query.queryText, catalog: catalog)
@@ -651,6 +753,7 @@ struct SingleSurfaceNoteEditor: NSViewRepresentable {
             lastStyledDocument = document
             if let w = textView as? NoteEditorWikiLinkTextView {
                 w.wikiLinks = linkOverlay
+                w.attachmentTokens = AttachmentTokenScanner.tokens(in: document.text)
             }
         }
 

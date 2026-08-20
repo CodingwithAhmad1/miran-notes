@@ -163,6 +163,22 @@ enum SlashCommandRegistry {
                 }
             ),
             .init(
+                id: "task",
+                title: "Task",
+                category: "Lists",
+                aliases: ["todo"],
+                keywords: ["checkbox", "check", "to-do", "done"],
+                preview: "Turn text into a checkable task.",
+                commitPolicy: defaultCommitPolicy,
+                applicability: nil,
+                produce: { _, tokenRange, blockID in
+                    [
+                        .replaceText(range: tokenRange, replacement: ""),
+                        .changeBlockType(blockID: blockID, type: .taskItem, headingLevel: nil)
+                    ]
+                }
+            ),
+            .init(
                 id: "divider",
                 title: "Divider",
                 category: "Layout",

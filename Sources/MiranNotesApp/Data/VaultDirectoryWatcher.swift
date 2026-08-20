@@ -114,9 +114,23 @@ final class VaultDirectoryWatcher {
         scheduleDebounced()
     }
 
-    private static let fsCallback: FSEventStreamCallback = { _, clientCallBackInfo, _, _, _, _ in
+    private static let fsCallback: FSEventStreamCallback = { _, clientCallBackInfo, numEvents, eventPaths, _, _ in
         guard let raw = clientCallBackInfo else { return }
         let watcher = Unmanaged<VaultDirectoryWatcher>.fromOpaque(raw).takeUnretainedValue()
+        // Presentation-only state under `.miran/ui-state/` (recents, pins, icon layouts) must not
+        // trigger the external-disk reconcile pipeline; skip batches composed entirely of such paths.
+        if numEvents > 0 {
+            let paths = eventPaths.assumingMemoryBound(to: UnsafeMutablePointer<CChar>.self)
+            var allUIState = true
+            for i in 0..<Int(numEvents) {
+                let path = String(cString: paths[i])
+                if !path.contains("/.miran/ui-state") {
+                    allUIState = false
+                    break
+                }
+            }
+            if allUIState { return }
+        }
         watcher.handleFSEvent()
     }
 }

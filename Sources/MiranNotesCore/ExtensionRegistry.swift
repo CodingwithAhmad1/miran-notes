@@ -2,11 +2,8 @@ import Foundation
 import os
 
 public enum ExtensionCapability: String, Codable, Hashable, Sendable {
-    case commandProduction
     case commandInterception
     case visualStyling
-    case auxiliaryArtifacts
-    case syncHooks
 }
 
 public struct ExtensionDescriptor: Equatable, Sendable {
@@ -19,11 +16,6 @@ public struct ExtensionDescriptor: Equatable, Sendable {
         self.version = version
         self.capabilities = capabilities
     }
-}
-
-public protocol CommandProducerExtension: Sendable {
-    var descriptor: ExtensionDescriptor { get }
-    func makeCommands(document: NoteDocument, context: CommandContext) -> [EditCommand]
 }
 
 public protocol CommandInterceptorExtension: Sendable {
@@ -42,14 +34,13 @@ public struct CommandContext: Sendable {
     }
 }
 
-/// Stable registration surface for command producers and interceptors. Thread-safe; safe to call from `AppModel.apply` synchronously.
+/// Stable registration surface for command interceptors. Thread-safe; safe to call from `AppModel.apply` synchronously.
 ///
 /// **Interceptor order:** `applyInterceptors` runs registered interceptors sorted by `descriptor.id`, then `AppModel` runs
 /// closure-based interceptors in registration order. All interceptors see the **same** pre-`EditCommandEngine` `NoteDocument`
 /// snapshot; each transforms the command batch only (document is not re-read between interceptors).
 public final class ExtensionRegistry: Sendable {
     private final class Storage: @unchecked Sendable {
-        var commandProducers: [String: any CommandProducerExtension] = [:]
         var commandInterceptors: [String: any CommandInterceptorExtension] = [:]
     }
 
@@ -57,21 +48,9 @@ public final class ExtensionRegistry: Sendable {
 
     public init() {}
 
-    public func registerProducer(_ producer: any CommandProducerExtension) {
-        lock.withLock { storage in
-            storage.commandProducers[producer.descriptor.id] = producer
-        }
-    }
-
     public func registerInterceptor(_ interceptor: any CommandInterceptorExtension) {
         lock.withLock { storage in
             storage.commandInterceptors[interceptor.descriptor.id] = interceptor
-        }
-    }
-
-    public func producerList() -> [ExtensionDescriptor] {
-        lock.withLock { storage in
-            storage.commandProducers.values.map(\.descriptor).sorted { $0.id < $1.id }
         }
     }
 

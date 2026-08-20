@@ -4,7 +4,7 @@ This document records **non-negotiable product and engineering constraints** for
 
 ## Product scope
 
-> **Pivot (Apr 2026):** Miran Notes is now focused as a **simple, minimalistic, Mac-native knowledge storer**. The Miran Planning feature set (menu-bar calendar, task/session databases, dashboard, Zora migration) is **deactivated** — source preserved, not active. All new work should align with a clean, distraction-free note-taking direction.
+> **Pivot (Apr 2026):** Miran Notes is focused as a **simple, minimalistic, Mac-native knowledge storer**. The Miran Planning feature set (menu-bar calendar, task/session databases, dashboard, Zora migration) was deactivated and its remaining source **deleted in Aug 2026**. The **knowledge layer** (wiki links, backlinks, full-text search) was activated in Aug 2026 as the product centerpiece — see § Wiki links, backlinks, and search.
 
 - **Local-first, single-writer editing** is the baseline. Real-time multi-user collaboration is **not** a current goal and should not drive core architecture.
 - **Human-readable storage** (`note.txt` + sidecar JSON) remains the default mental model for notes.
@@ -61,12 +61,24 @@ The canonical note model and `NSTextView` are two representations of text. Engin
   - Keyboard contract is fixed for consistency: Up/Down moves highlight, Enter/Tab executes highlighted command, Esc closes menu without mutation.
   - Unknown tokens (for example `/doesntwork`) are **not errors** and are **not auto-transformed**: text remains plain, menu shows `No commands found`.
   - Enter without a selectable command follows normal editor behavior (no hidden slash fallback rewrite).
-  - Registered commands currently include `/h1`–`/h3`, `/p`, `/code`, `/list` (alias `/bullet`), `/divider`, `/callout`, `/task` (alias `/todo`), `/session`.
+  - Registered commands currently include `/h1`–`/h3`, `/p`, `/code`, `/list` (alias `/bullet`), `/task` (alias `/todo`), `/divider`, `/callout`. There is no `/session`.
   - **Registry order** defines precedence if two patterns could match.
   - **Open registry:** `SlashCommandRegistry.register(_:)` accepts external descriptors idempotently. Built-in commands are registered via `SlashCommandRegistry.registerBuiltins()`, called once at app startup (`MiranNotesApp.init`). Plugins or feature modules can call `register` at any time without modifying core registry code.
   - **Auto-commit path (active):** Typing `/token⎵` or `/token↵` without navigating the menu auto-commits via `SlashCommandDetector` in `inlineTriggerCommands` (parallel to `MarkdownCommandDetector`). Both the menu path and the auto-commit path produce identical `EditCommand` arrays through `SlashCommandRegistry`. Unknown tokens fall through to the normal `replaceText` path — no silent rewrite.
 - **External editors:** A literal `/h1` in `note.txt` stays plain text until the user edits in-app in a way that triggers detection (or a future explicit conversion). This aligns with **Semantic reconciliation**: no silent semantic rewrite of metadata without an explicit editing action the user can reason about.
 - **Notion parity limits:** Slash commands plus heading fonts improve the experience but do **not** deliver full per-block chrome (gutters, drag handles, block menus) in a single `NSTextView`; see **Block chrome and layout** above.
+
+## Wiki links, backlinks, and search (knowledge layer — activated 2026-08)
+
+See [ADR 0007](docs/adr/0007-knowledge-layer-activation.md). Constraints:
+
+- **Presentation is a preference, data is not.** `WikiLinkPresentationPolicy` reads the `AppSettings` toggles (link styling/click-through; `[[` autocomplete), both default **on**. Toggles never mutate `NoteLink` data on disk.
+- **`[[` autocomplete is mid-line** (unlike slash discovery, which stays line-start only). `WikiLinkQueryDetector` matches an unclosed `[[` before the caret on the current line; queries containing `[`, `]`, or a newline never match. Keyboard contract mirrors the slash menu (Up/Down, Enter/Tab, Esc). At most one caret popover is visible: an active slash query closes the wiki menu.
+- **Commit is one atomic batch** through `AppModel.apply`: `replaceText` removing the `[[query` token + `insertWikiLink` at the same offset — one undo step, engine-only mutation. The markdown source editor instead commits plain `[[Title]]` text; `WikiLinkSyntaxReconciler` derives link metadata at save (same path as external `.md` edits).
+- **IME:** no autocomplete while the view has marked text.
+- **Backlinks UI** reads only `WorkspacePaneSession.backlinks` (computed by `refreshBacklinks`, 1500 ms debounce on edits, immediate on note load); clicking a row navigates via `openBacklinkSource` + `PendingEditorScroll`.
+- **Search matches title, path, and body** (ranked in that order). Body matching reads `AppModel.bodySearchIndex` (background `NoteBodySearchIndexController` rebuild on refresh; per-note update on autosave). Body search may briefly lag edits; the UI shows an indexing hint while a rebuild is in flight. Snippets come from `SearchSnippetBuilder` and are presentation-only.
+- **Dangling links** (target note absent) alert on click and never block save or mutate the link.
 
 ## View sync and text pipeline (Phases 1–2)
 
@@ -142,9 +154,9 @@ The app uses **document-level undo** via the window `UndoManager`: each user edi
 
 **Backlink refresh debounce:** `AppModel` debounces backlink refreshes by **1 500 ms** via a cancellable `Task`. **`VaultIndexActor`** keeps in-memory caches for `LinkGraph` and the other `.miran/` indexes after load and refreshes them after successful commits; `NoteRepository.invalidateIndexCaches()` clears those caches (e.g. after startup recovery, manifest reconciliation that changed entries, or vault filesystem watch events). This avoids re-reading every index JSON on each autosave while keeping external edits coherent.
 
-## Future model and sync hooks (Phase 6)
+## Extension seam
 
-Types in [`Sources/MiranNotesCore/ExtensionPoints.swift`](Sources/MiranNotesCore/ExtensionPoints.swift) document **intentional extension points** only: rich inline canonical snapshots, tree-shaped blocks vs today's flat `[Block]` list, structured artifacts (tables / DB-like blobs) likely needing auxiliary storage, and a placeholder for a future sync transport. They are **not** wired into editing or persistence; they exist so features can name shared concepts without ad-hoc one-off types.
+The shipped extension mechanism is the **interceptor** half of `ExtensionRegistry` (`CommandInterceptorExtension`, ordered by descriptor id) plus `AppModel.registerCommandInterceptor` closures, and the open `SlashCommandRegistry`. The former roadmap placeholder types (`ExtensionPoints.swift`, `BlockChromeHooks.swift`, the producer half of the registry) were deleted in Aug 2026 as dead code; reintroduce a producer seam only when a concrete feature needs it.
 
 ## Vault tooling and observability
 
@@ -182,13 +194,34 @@ The fifteen additional gaps identified in the **Foundation Hardening** audit (se
 - `EditorVisualStyle.apply` is guarded by a document-ID and text-hash cache so styling passes only re-run when content changes.
 - `TextKit2BlockEditor` and `BlockListView` (unused code paths) have been removed.
 
-## Vault-level databases and planning (M6 — historical)
+## Vault-level databases and planning (M6 — removed)
 
-> M6 Planning and vault-database **persistence actors** are **not present** in the current codebase (removed after the Apr 2026 pivot to a minimal knowledge storer). The bullets below describe **on-disk compatibility** and **core types** that remain in `MiranNotesCore` for vaults created by earlier builds. See [ADR 0004](docs/adr/0004-vault-level-databases-and-planning.md).
+> The M6 database/Planning layer is **fully deleted** as of Aug 2026: `DatabaseModels`, `TableModels`, `VaultDatabasePaths`, `EditCommand.registerDatabaseRow`, `NoteMetadata.artifacts`/`databaseRowReferences`, and the `LinkTarget` database/artifact cases are gone (legacy sidecar keys are ignored on decode; see `NoteMetadataLegacyKeysDecodingTests`). Any `_databases/` trees in old vaults are inert files the app neither reads nor writes. [ADR 0004](docs/adr/0004-vault-level-databases-and-planning.md) is historical documentation of that on-disk format only.
 
-- **Database storage (on disk):** Vault-level databases may still appear under `_databases/{databaseID}/` with `schema.json`, `rows.jsonl`, and `views/`. The `database-registry.json` index may live in `.miran/`. Older layouts remain forward-compatible with the current app, which does not surface structured-database editing.
-- **Schema typing:** `DatabaseColumnType` in `MiranNotesCore` still defines validation semantics (`accepts(_:)`) for interpreting stored values if those files exist.
-- **Cross-feature linking:** `LinkTarget.database(databaseID:)` and `LinkTarget.databaseRow(databaseID:, rowID:)` remain in the model for integrity and decoding of metadata that references databases.
-- **Slash commands:** `/task` and `/session` are not registered in the shipping product.
+**Today's Tasks and `/task` blocks are a separate, deliberately lightweight feature** (see § Today's Tasks below and [ADR 0009](docs/adr/0009-task-blocks-and-todays-tasks.md)) — not a reactivation of Miran Planning.
 
-**No open implementation gaps remain against the constraints listed in this document.** Future feature work should add a constraint entry here before implementation begins.
+## Storage classes: commit participants vs UI state vs task pages
+
+Three classes of vault-local storage, by loss tolerance (see [ADR 0008](docs/adr/0008-trash-and-ui-state-stores.md)):
+
+- **Commit participants** (manifest, link graph, relationship index, folder catalog, path index, note files): two-phase `VaultCommitCoordinator` only; the participant set stays closed.
+- **UI state** (`.miran/ui-state/`: pins, recents, icon layouts, folder view modes): atomic single-file writes via `VaultUIStateStore`; deliberately **not** commit participants; corrupt files read as absent. The FSEvents watcher skips event batches composed entirely of `ui-state` paths so presentation writes never trigger the reconcile pipeline.
+- **Task pages** (`.miran/todays-tasks-days/` + index) and **trash** (`.miran/trash/`): atomic single-file writes outside the commit set; trash copies files **before** the delete commit so a crash leaves at most a harmless duplicate.
+
+## Trash
+
+- User-facing delete **moves to trash** (`NoteRepository.trashNote`): copy body/sidecar/`_aux` into `.miran/trash/<noteID>/` + `trash-record.json`, then run the exact `deleteNote` index commit. Permanent delete and Empty Trash live only in the Trash sheet.
+- Restore preserves `noteID` (incoming links resolve again as linking notes re-save); destination falls back original folder → vault root → first repository folder → a created "Recovered" folder.
+
+## Attachments
+
+- Files live under `vault/_aux/<noteID>/attachments/`; the body references them with the plain-text token `[attachment: name.ext]` (`AttachmentTokenScanner`), inserted through the normal `replaceText` pipeline — no sidecar schema. Tokens are styled like links and clickable (open with the system app); a missing file alerts on click. Inline thumbnails/rendering are explicitly out of scope (would require TextKit attachment cells).
+- Filenames are sanitized (no `/`, `:`, `[`, `]`) and deduplicated on copy-in. `_aux` rides along with delete (removed) and trash (copied/restored).
+
+## Today's Tasks and task blocks
+
+- `BlockType.taskItem` + optional `Block.isDone` (additive sidecar field; older sidecars decode with `isDone == nil`). `/task` (alias `/todo`) converts a block; `EditCommand.setBlockDone` toggles; splitting a task creates an **unchecked** continuation; converting away clears `isDone`. Checkboxes draw in the block-chrome gutter overlay (the only interactive region of that overlay).
+- The vault-root Today's Tasks page supports free day navigation (calendar picker) and explicit/automatic **rollover** of unfinished tasks (`rolledFromDayKey` records origin; dedupe by primary line).
+- **Note integration is one-way by design:** "Add to Today's Tasks" copies a block's text into today's list with `sourceNoteID`/`sourceBlockID` back-references; the chip opens the note and scrolls to the block. "Mark Done in Note Too" is an explicit user action — there is **no live sync** between day rows and note blocks (consistent with § Semantic reconciliation).
+
+**Future feature work should add a constraint entry here before implementation begins.**

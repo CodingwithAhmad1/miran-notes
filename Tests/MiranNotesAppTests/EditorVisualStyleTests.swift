@@ -203,6 +203,41 @@ final class EditorVisualStyleTests: XCTestCase {
         XCTAssertTrue(ids.contains(customID), "Custom descriptor must appear in catalog after registration")
     }
 
+    func testBodyPointSizeFollowsSettingsAndScalesHeadings() {
+        let key = AppSettingsKey.editorBodyPointSize
+        let previous = UserDefaults.standard.object(forKey: key)
+        defer {
+            if let previous {
+                UserDefaults.standard.set(previous, forKey: key)
+            } else {
+                UserDefaults.standard.removeObject(forKey: key)
+            }
+        }
+
+        UserDefaults.standard.removeObject(forKey: key)
+        XCTAssertEqual(EditorVisualStyle.bodyPointSize, 15, "default body size")
+
+        UserDefaults.standard.set(18.0, forKey: key)
+        XCTAssertEqual(EditorVisualStyle.bodyPointSize, 18)
+        let h1 = Block(id: "b", type: .heading, range: TextRange(start: 0, length: 1), level: 1, icon: nil)
+        XCTAssertEqual(EditorVisualStyle.fontForBlock(h1).pointSize, 30 * 18 / 15, accuracy: 0.01)
+
+        UserDefaults.standard.set(99.0, forKey: key)
+        XCTAssertEqual(EditorVisualStyle.bodyPointSize, 20, "clamped to the supported range")
+    }
+
+    func testDoneTaskBlockGetsStrikethrough() {
+        let text = "buy milk"
+        let tv = makeTextView(text: text)
+        var metadata = NoteMetadata.empty
+        metadata.blocks = [
+            Block(id: "t0", type: .taskItem, range: TextRange(start: 0, length: text.utf16.count), level: nil, icon: nil, isDone: true)
+        ]
+        EditorVisualStyle.apply(to: tv, document: NoteDocument(text: text, metadata: metadata))
+        let strike = tv.textStorage?.attribute(.strikethroughStyle, at: 0, effectiveRange: nil) as? Int
+        XCTAssertEqual(strike, NSUnderlineStyle.single.rawValue)
+    }
+
     func testDuplicateRegistrationIsIdempotent() {
         SlashCommandRegistry.registerBuiltins()
         let countBefore = SlashCommandRegistry.catalogItems().count

@@ -1,64 +1,76 @@
 # Miran Notes (macOS)
 
-A simple, minimalistic, Mac-native knowledge storer. Local-first, plain-text storage, zero cloud dependency.
+A simple, Mac-native knowledge storer. Local-first, plain-text storage, zero cloud dependency —
+with wiki links, backlinks, and full-text search as the connective tissue.
 
-> **Pivot note (Apr 2026):** Miran Notes is being refocused as a pure knowledge-storage tool. The Miran Planning / calendar feature set (menu-bar extra, task and session databases, dashboard, calendar views) has been **removed from the codebase** as part of that pivot. The shipping product is a clean, distraction-free note-taking experience native to macOS.
+**Documentation hub:** [docs/README.md](docs/README.md) — index of [Constraints.md](Constraints.md), ADRs, architecture notes, plans, and code pointers. **Change history:** [docs/CHANGELOG.md](docs/CHANGELOG.md).
 
-**Documentation hub:** [docs/README.md](docs/README.md) — index of [Constraints.md](Constraints.md), ADRs, architecture notes, plans, and code pointers. **Product / engineering brief:** [docs/investor-and-engineering-brief.md](docs/investor-and-engineering-brief.md).
+## What it does
 
-## Implemented architecture
+- **Notes** live in a vault folder you choose: canonical body in `{relativePath}.txt` (or `.md`,
+  chosen per folder), metadata in `{relativePath}.meta.json`. Everything stays human-readable on disk.
+- **Wiki links**: type `[[` anywhere for note autocomplete (or create the note on the spot); links
+  are styled, clickable, and survive rename/move because they target a persistent `noteID`
+  ([ADR 0001](docs/adr/0001-wiki-links-and-identity.md), [ADR 0007](docs/adr/0007-knowledge-layer-activation.md)).
+  A **Linked mentions** strip under the editor lists backlinks with snippets.
+- **Search** (toolbar or **Quick Open**, ⌘P) matches titles, paths, and note bodies with snippets;
+  `#tag` queries filter by tag. Pinned notes and recents fill the empty palette.
+- **Folders** have roles — *Dashboard* (nested folders) or *Repository* (notes) — shown in a nested
+  sidebar tree and on folder pages as a **Finder-style icon browser**: arrange icons freely
+  (positions persist per folder), double-click to open, drag a note onto a folder to move it, or use
+  list view. Drag-and-drop and "Move To" work from lists and the sidebar too.
+- **Editor**: block-based single surface (headings, lists, tasks, callouts, code, dividers) with a
+  slash menu (`/h1`, `/list`, `/task`…), bold/italic/code spans, find & replace, tags, and
+  **attachments** (`[attachment: file]` tokens; files stored beside the note). Markdown notes open
+  in a source view with a rendered preview.
+- **Today's Tasks**: a per-day checklist at the vault root with a calendar day picker, rollover of
+  unfinished tasks, and one-way links from note task blocks ([ADR 0009](docs/adr/0009-task-blocks-and-todays-tasks.md)).
+- **Trash**: deleting a note moves it to `.miran/trash/` for restore (identity preserved) until you
+  empty it ([ADR 0008](docs/adr/0008-trash-and-ui-state-stores.md)).
+- **Export**: any note as Markdown or PDF (File menu).
+- **Safety**: two-phase atomic vault commits with crash recovery, external-edit detection with an
+  explicit conflict flow, structural compatibility gating when opening folders, and repair
+  advisories instead of silent fixes.
 
-- **On-disk layout:** Canonical body in `{relativePath}.txt`, metadata in `{relativePath}.meta.json` relative to the vault root. Notes may live in **nested folders** (manifest v2, `FolderCatalog` / `PathIndex`; see [ADR 0003](docs/adr/0003-folders-paths-and-manifest-v2.md)). Indexes and staging live under `.miran/`. Optional per-note **`_aux/{noteID}/`** directories are removed when a note is deleted; legacy JSONL from an older **per-note table** experiment may still exist on disk until cleaned up (metadata no longer references those tables; see [ADR 0002](docs/adr/0002-auxiliary-storage-jsonl.md)). **Vault-level databases** under `_databases/{databaseID}/` with schema, JSONL rows, and view configs per [ADR 0004](docs/adr/0004-vault-level-databases-and-planning.md).
-- **Single source of truth for note identity:** `NoteDocument.id` is a computed property delegating to `metadata.noteID`.
-- **App state:** `AppModel` is `@MainActor @Observable` (Swift `Observation`); the app entry holds it with `@State`, and views that need bindings use `@Bindable`.
-- **Editing pipeline:** All structural mutations go through `EditCommandEngine`; `AppModel.apply(_:)` returns the resulting `NoteDocument` synchronously. `splitBlock` runs `SpanAdjuster` / `LinkAdjuster` `constrainToBlocks` after splits.
-- **Persistence:** Two-phase **atomic** vault commits (`VaultCommitCoordinator`); **dirty-flag** index participants skip unchanged `VaultManifest`, `LinkGraph`, `RelationshipIndex`, `FolderCatalog`, `PathIndex`. Startup **recovery** for interrupted commits under `.miran/pending-commits/`; **`reconcileManifest()`** scans/repairs manifest vs disk at vault open and on vault watch events; **`listNotes()`** reads the manifest only (no reconcile). In-memory **index caches** in `VaultIndexActor` avoid re-reading `.miran/` JSON on every save. Debounced autosave; load returns `NoteLoadResult` with repair warnings.
-- **Editor:** SwiftUI shell; single-surface `NSTextView` with `EditorVisualStyle`, slash discovery, wiki links, optional block chrome overlay. **1 MB (UTF-16)** note size cap with user-visible notice.
-- **Undo:** `NSUndoManager` with a checkpoint timeline. **Hybrid undo** stores inverse `replaceText` chains (`UndoInverseSupport`, `UndoCheckpoint`) for pure replace-text steps; **full snapshots** for structural or mixed batches. **Coalescing** of rapid single-`replaceText` edits (default 300 ms window). **Prune** to `UndoPolicy.maxUndoSteps` (default 200) rebases oldest entries to full snapshots. See [Constraints.md](Constraints.md) § Undo.
-- **Extension hooks:** `SlashCommandRegistry` (open registration), `ExtensionRegistry` + ordered closure interceptors on `AppModel` (see [extension-registry-and-interceptors.md](docs/architecture/extension-registry-and-interceptors.md)).
-- **Navigation / search:** Folder sidebar outline, searchable list with body snippets, backlinks panel with snippets; vault-wide filesystem watch (subtree) and optional active-note file coordination where implemented.
-- **Backlinks:** Debounced refresh; `LinkGraph` is cached inside `VaultIndexActor` (invalidated on external vault events and updated after commits).
-- **Vault-level databases (on-disk):** Vaults may still contain `_databases/{databaseID}/` trees and `database-registry.json` under `.miran/` from earlier builds ([ADR 0004](docs/adr/0004-vault-level-databases-and-planning.md)). **`MiranNotesCore`** keeps **`DatabaseModels`**, **`VaultDatabasePaths`**, and related types so those artifacts remain interpretable; the app does not ship persistence actors for structured databases or Planning UI.
-- **Miran Planning:** Removed. Prior integration (dashboard, calendar, task/session databases, Zora migration, `/task` and `/session`) is described only in ADRs and archived docs for historical context.
+## Architecture (implemented)
+
+- **Identity:** `NoteDocument.id` delegates to `metadata.noteID` — one source of truth.
+- **Editing pipeline:** all structural mutations go through `EditCommandEngine`;
+  `AppModel.apply(_:)` returns the resulting document synchronously; only `EditorSyncController`
+  assigns canonical text to the `NSTextView` (TextKit 1 by policy; see Constraints.md).
+- **Persistence:** two-phase atomic commits (`VaultCommitCoordinator`) over six participants with
+  dirty-flag skipping, startup recovery under `.miran/pending-commits/`, and in-memory index caches
+  (`VaultIndexActor`). Presentation state (`.miran/ui-state/`), task pages, and trash deliberately
+  live outside the commit set ([ADR 0008](docs/adr/0008-trash-and-ui-state-stores.md)).
+- **App state:** `AppModel` is `@MainActor @Observable`, split across focused extension files
+  (`AppModel+Search`, `+Backlinks`, `+WikiLinks`, `+Folders`, `+TodaysTasks`, `+Trash`, …).
+- **Undo:** window `NSUndoManager` with a hybrid checkpoint timeline (inverse `replaceText` chains +
+  full snapshots), 300 ms coalescing, 200-step cap.
+- **Vault access:** the vault-root security-scoped bookmark persists; launches reopen the last vault
+  (toggleable in Settings) with compatibility gating before any I/O ([ADR 0006](docs/adr/0006-threat-model-app-sandbox-vault-access.md), amended).
+- **Preferences:** `AppSettings` (UserDefaults-backed `@Observable`) behind the ⌘, Settings window.
 
 ## Module layout
 
-- `Sources/MiranNotesCore` — `NoteDocument`, `EditCommandEngine`, `UndoInverseSupport`, `TextEditDiff`, `NoteIntegrity`, `ExtensionRegistry`, `CommandPipelineContract`, `DatabaseModels`, `LinkTarget`.
-- `Sources/MiranNotesApp/Data` — `AppModel`, `NoteRepository`, vault/commit/index types (`VaultCommitCoordinator`, `LinkGraph`, `RelationshipIndex`, `FolderCatalog`, `PathIndex`, …).
-- `Sources/MiranNotesApp/Features/Editor` — `SingleSurfaceNoteEditor`, `SlashCommandRegistry`, editor features.
+- `Sources/MiranNotesCore` — `NoteDocument`, `EditCommandEngine`, span/link adjusters,
+  `NoteIntegrity`, `UndoInverseSupport`, `TextEditDiff`, `ExtensionRegistry` (interceptors).
+- `Sources/MiranNotesApp/Data` — `NoteRepository` (+`NoteFileActor`, `VaultIndexActor`), commits,
+  watchers, trash, attachments, search indexes, UI-state stores.
+- `Sources/MiranNotesApp/Features` — Editor (single-surface + markdown source, slash and `[[`
+  menus), Workspace (sidebar, folder pages, icon browser, backlinks, trash), QuickOpen, Tags,
+  Settings.
 - `Tests/MiranNotesTests`, `Tests/MiranNotesAppTests` — `swift test`.
-
-## Milestones (historical)
-
-1. **M1 Foundation** — model, schema, repository, invariants.  
-2. **M2 Editor shell** — TextKit bridge.  
-3. **M3 Core edits** — split/merge, block types, spans.  
-4. **M4 Quality** — autosave, atomic persistence.  
-5. **M5 Hardening** — migration seam, malformed metadata handling.
-6. **M6 Databases & Planning** — vault-level database layer, Miran Planning integration (dashboard, calendar, task/session databases, cross-feature linking, Zora migration). *(M6 planning features deactivated in pivot to minimalistic knowledge storer.)*
-
-## Acceptance checklist (high level)
-
-- [x] Local vault with `.txt` + `.meta.json`; nested paths and manifest v2.  
-- [x] Command-based edit pipeline; synchronous `apply` results.  
-- [x] Atomic multi-file commits + dirty index writes + startup recovery.  
-- [x] Repair / advisory surfaces for load repair, integrity, conflicts, size limit (see `RepairAdvisory`).  
-- [x] Hybrid + snapshot undo with cap, coalescing, and safe prune.  
-- [x] Slash commands + discovery menu; open registry.  
-- [~] Vault-level databases: on-disk format and core **types** preserved; **persistence/UI** removed (see [ADR 0004](docs/adr/0004-vault-level-databases-and-planning.md) amendment).
-- [~] Miran Planning: dashboard, calendar, task/session databases — **deactivated** during pivot.
-- [~] Zora vault migration engine and CSV export — **deactivated** during pivot.
-- [~] `/task` and `/session` slash commands — **deactivated** during pivot.  
-- [x] Project builds; `swift test` passes (268 tests).
 
 ## Vault (first launch)
 
-Each time you start the app, it shows **Open a vault** until you pick or create a folder; notes and folders live under that directory for the session. Production builds do not persist a vault-root bookmark (legacy files under Application Support are cleared on launch). To skip the picker during development, run with **`MIRAN_USE_DEFAULT_VAULT=1`** (uses `~/MiranNotesVault`).
+Pick or create a folder the first time; afterwards the app reopens your last vault automatically
+(disable in Settings → General). **Switch Vault…** is ⇧⌘O. For development,
+`MIRAN_USE_DEFAULT_VAULT=1` uses `~/MiranNotesVault` without a picker.
 
 ## Run
 
 ```bash
 swift build
 swift test
-swift run
+swift run          # or: Scripts/build-app.sh for a double-clickable MiranNotes.app
 ```

@@ -1,13 +1,12 @@
 import Foundation
 
+/// Target of a stored relationship (see `RelationshipIndex`). Note links are the only produced kind today;
+/// folder/external cases are reserved for wiki-link targets beyond notes (`ExternalBookmarkStore`).
 public enum LinkTarget: Codable, Equatable, Hashable, Sendable {
     case note(noteID: UUID)
     case folder(folderID: UUID)
     case externalFile(bookmarkID: UUID)
     case externalFolder(bookmarkID: UUID)
-    case artifact(noteID: UUID, artifactID: UUID, kind: EmbeddedArtifactKind)
-    case database(databaseID: UUID)
-    case databaseRow(databaseID: UUID, rowID: UUID)
 }
 
 public struct LinkRelationship: Codable, Equatable, Hashable, Sendable {

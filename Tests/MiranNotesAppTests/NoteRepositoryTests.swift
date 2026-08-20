@@ -275,7 +275,7 @@ final class NoteRepositoryTests: XCTestCase {
         try await repo.ensureVault()
         let noteID = UUID()
         let targetID = UUID()
-        var metadata = NoteMetadata(
+        let metadata = NoteMetadata(
             schemaVersion: NoteMetadata.currentSchemaVersion,
             noteID: noteID,
             blocks: [
@@ -286,10 +286,6 @@ final class NoteRepositoryTests: XCTestCase {
                 NoteLink(range: TextRange(start: 0, length: 5), targetNoteID: targetID, label: "target")
             ]
         )
-        let artifactID = UUID()
-        metadata.artifacts = [
-            EmbeddedArtifact(id: artifactID, kind: .databaseView, relativePath: "views/\(artifactID.uuidString.lowercased()).json")
-        ]
         let doc = NoteDocument(text: "hello", metadata: metadata)
         try await repo.save(doc, asBaseName: "index-check")
 
@@ -308,9 +304,6 @@ final class NoteRepositoryTests: XCTestCase {
 
         XCTAssertTrue(rel.relationships.contains { relationship in
             relationship.sourceNoteID == noteID && relationship.relationshipKind == "noteLink"
-        })
-        XCTAssertTrue(rel.relationships.contains { relationship in
-            relationship.sourceNoteID == noteID && relationship.relationshipKind == "artifactLink"
         })
         XCTAssertTrue(path.entries.contains { $0.noteID == noteID && $0.relativePath == "index-check" })
     }

@@ -7,12 +7,28 @@ struct VaultTodaysTaskRow: Codable, Equatable, Identifiable, Sendable {
     /// Session-stable keys for SwiftUI lists; not persisted (regenerated on decode).
     var lineIDs: [UUID]
     var isDone: Bool
+    /// Storage key of the day this row was rolled over from (additive; nil for rows created in place).
+    var rolledFromDayKey: String?
+    /// Origin note when the row was created from a note's task block ("Add to Today's Tasks").
+    var sourceNoteID: UUID?
+    /// Origin block within ``sourceNoteID`` (advisory; the block may no longer exist).
+    var sourceBlockID: String?
 
-    init(id: UUID, lines: [String], isDone: Bool) {
+    init(
+        id: UUID,
+        lines: [String],
+        isDone: Bool,
+        rolledFromDayKey: String? = nil,
+        sourceNoteID: UUID? = nil,
+        sourceBlockID: String? = nil
+    ) {
         self.id = id
         self.lines = lines.isEmpty ? [""] : lines
         self.lineIDs = self.lines.map { _ in UUID() }
         self.isDone = isDone
+        self.rolledFromDayKey = rolledFromDayKey
+        self.sourceNoteID = sourceNoteID
+        self.sourceBlockID = sourceBlockID
     }
 
     init(id: UUID, title: String, isDone: Bool) {
@@ -24,6 +40,9 @@ struct VaultTodaysTaskRow: Codable, Equatable, Identifiable, Sendable {
         case title
         case lines
         case isDone
+        case rolledFromDayKey
+        case sourceNoteID
+        case sourceBlockID
     }
 
     init(from decoder: Decoder) throws {
@@ -38,6 +57,9 @@ struct VaultTodaysTaskRow: Codable, Equatable, Identifiable, Sendable {
             lines = [""]
         }
         lineIDs = lines.map { _ in UUID() }
+        rolledFromDayKey = try c.decodeIfPresent(String.self, forKey: .rolledFromDayKey)
+        sourceNoteID = try c.decodeIfPresent(UUID.self, forKey: .sourceNoteID)
+        sourceBlockID = try c.decodeIfPresent(String.self, forKey: .sourceBlockID)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -45,10 +67,16 @@ struct VaultTodaysTaskRow: Codable, Equatable, Identifiable, Sendable {
         try c.encode(id, forKey: .id)
         try c.encode(lines, forKey: .lines)
         try c.encode(isDone, forKey: .isDone)
+        try c.encodeIfPresent(rolledFromDayKey, forKey: .rolledFromDayKey)
+        try c.encodeIfPresent(sourceNoteID, forKey: .sourceNoteID)
+        try c.encodeIfPresent(sourceBlockID, forKey: .sourceBlockID)
     }
 
     static func == (lhs: VaultTodaysTaskRow, rhs: VaultTodaysTaskRow) -> Bool {
         lhs.id == rhs.id && lhs.lines == rhs.lines && lhs.isDone == rhs.isDone
+            && lhs.rolledFromDayKey == rhs.rolledFromDayKey
+            && lhs.sourceNoteID == rhs.sourceNoteID
+            && lhs.sourceBlockID == rhs.sourceBlockID
     }
 }
 

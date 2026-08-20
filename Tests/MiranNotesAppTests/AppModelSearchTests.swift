@@ -42,7 +42,7 @@ final class AppModelSearchTests: XCTestCase {
         }
     }
 
-    func testVaultSearchFiltersByTitleNotBody() async throws {
+    func testVaultSearchMatchesNoteBodies() async throws {
         let vault = try tempVaultURL()
         let repo = NoteRepository(vaultURL: vault)
         try await repo.ensureVault()
@@ -64,9 +64,17 @@ final class AppModelSearchTests: XCTestCase {
         try await waitForAsync { model.bodySearchIndex[idA]?.contains("unique-body") ?? false }
 
         model.vaultSearchQuery = "unique-body"
-        XCTAssertTrue(
-            model.filteredNoteSummaries.isEmpty,
-            "Vault search is name/path only and must not match note bodies."
+        XCTAssertEqual(
+            model.filteredNoteSummaries.map(\.relativePath),
+            [baseA],
+            "Vault search matches note bodies via the body search index."
+        )
+        XCTAssertEqual(
+            model.searchMatchKind(
+                try XCTUnwrap(model.noteSummaries.first { $0.relativePath == baseA }),
+                queryLowercased: "unique-body"
+            ),
+            .body
         )
 
         model.vaultSearchQuery = "alpha"
@@ -90,7 +98,7 @@ final class AppModelSearchTests: XCTestCase {
         XCTAssertEqual(model.filteredNoteSummaries.first?.relativePath, baseA)
     }
 
-    func testSearchSnippetIsNilForVaultSearch() async throws {
+    func testSearchSnippetShowsBodyContextForBodyMatches() async throws {
         let vault = try tempVaultURL()
         let repo = NoteRepository(vaultURL: vault)
         try await repo.ensureVault()
@@ -108,7 +116,13 @@ final class AppModelSearchTests: XCTestCase {
 
         await model.refreshNotes()
         let summary = try XCTUnwrap(model.noteSummaries.first { $0.relativePath == baseA })
+        try await waitForAsync { model.bodySearchIndex[summary.noteID]?.contains("find-me-here") ?? false }
 
+        model.vaultSearchQuery = "find-me"
+        let snippet = try XCTUnwrap(model.searchSnippet(for: summary))
+        XCTAssertTrue(snippet.contains("find-me-here"))
+
+        // Title-only queries with no body occurrence have no snippet.
         model.vaultSearchQuery = "snippet"
         XCTAssertNil(model.searchSnippet(for: summary))
     }

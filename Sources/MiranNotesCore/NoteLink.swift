@@ -2,8 +2,8 @@ import Foundation
 
 /// A wiki-style link: parallel metadata for `[[...]]` (or other) text in the note body. Ranges are UTF-16.
 ///
-/// **Persistence / engine:** This type and link adjustment logic stay active regardless of app UI.
-/// The Miran Notes app may hide click-to-follow and link styling while keeping this model on disk (UI deactivation, not deletion).
+/// **Persistence / engine:** This type and link adjustment logic stay active regardless of app UI settings.
+/// The app styles links and routes clicks per `WikiLinkPresentationPolicy`; link data on disk is unaffected by those toggles.
 public struct NoteLink: Codable, Equatable, Sendable {
     public var range: TextRange
     public var targetNoteID: UUID
@@ -14,36 +14,6 @@ public struct NoteLink: Codable, Equatable, Sendable {
         self.range = range
         self.targetNoteID = targetNoteID
         self.label = label
-    }
-}
-
-public enum EmbeddedArtifactKind: String, Codable, Sendable, CaseIterable {
-    case databaseRow
-    case databaseView
-}
-
-/// Reference to auxiliary storage under `vault/_aux/{noteID}/` (paths relative to that directory).
-public struct EmbeddedArtifact: Codable, Equatable, Sendable {
-    public var id: UUID
-    public var kind: EmbeddedArtifactKind
-    public var relativePath: String
-
-    public init(id: UUID, kind: EmbeddedArtifactKind, relativePath: String) {
-        self.id = id
-        self.kind = kind
-        self.relativePath = relativePath
-    }
-}
-
-public struct DatabaseRowReference: Codable, Equatable, Sendable {
-    public var databaseID: UUID
-    public var rowID: UUID
-    public var blockID: String?
-
-    public init(databaseID: UUID, rowID: UUID, blockID: String? = nil) {
-        self.databaseID = databaseID
-        self.rowID = rowID
-        self.blockID = blockID
     }
 }
 

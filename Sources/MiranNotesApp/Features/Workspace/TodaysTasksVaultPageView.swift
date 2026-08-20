@@ -11,6 +11,8 @@ struct TodaysTasksVaultPageView: View {
     @Bindable var model: AppModel
     @Environment(\.scenePhase) private var scenePhase
     @FocusState private var focusedLine: TodaysTaskLineFocus?
+    @State private var isDayPickerPresented = false
+    @State private var dayPickerDate = Date()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -25,9 +27,38 @@ struct TodaysTasksVaultPageView: View {
                 .disabled(!model.canGoToPreviousTodaysTasksDay)
                 .help("Previous day with tasks")
 
-                Text(model.todaysTasksSelectedDayDisplayShort)
-                    .font(.title3.monospacedDigit())
+                Button {
+                    dayPickerDate = model.todaysTasksSelectedDay.startOfDayDate(calendar: AppModel.vaultTasksCalendar()) ?? Date()
+                    isDayPickerPresented = true
+                } label: {
+                    HStack(spacing: 4) {
+                        Text(model.todaysTasksSelectedDayDisplayShort)
+                            .font(.title3.monospacedDigit())
+                        Image(systemName: "calendar")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                     .frame(minWidth: 88)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Jump to any day")
+                .popover(isPresented: $isDayPickerPresented) {
+                    DatePicker(
+                        "Day",
+                        selection: $dayPickerDate,
+                        displayedComponents: .date
+                    )
+                    .datePickerStyle(.graphical)
+                    .labelsHidden()
+                    .padding(12)
+                    .onChange(of: dayPickerDate) { _, newDate in
+                        let calendar = AppModel.vaultTasksCalendar()
+                        let day = VaultTasksCalendarDay.today(calendar: calendar, referenceDate: newDate)
+                        model.goToTodaysTasksDay(day)
+                        isDayPickerPresented = false
+                    }
+                }
 
                 Button {
                     model.goToNextTodaysTasksDay()
@@ -39,7 +70,24 @@ struct TodaysTasksVaultPageView: View {
                 .disabled(!model.canGoToNextTodaysTasksDay)
                 .help("Next day with tasks")
 
+                if !model.todaysTasksSelectedDayIsToday {
+                    Button("Today") {
+                        model.goToTodaysTasksToday()
+                    }
+                    .controlSize(.small)
+                }
+
                 Spacer(minLength: 0)
+
+                if model.todaysTasksRolloverSourceDay != nil {
+                    Button {
+                        model.rollOverIncompleteTasksIntoSelectedDay()
+                    } label: {
+                        Label("Roll Over", systemImage: "arrow.uturn.forward")
+                    }
+                    .controlSize(.small)
+                    .help("Copy unfinished tasks from the last day that has any")
+                }
             }
 
             HStack(alignment: .firstTextBaseline) {
@@ -88,6 +136,11 @@ private struct TodaysTaskRowBlock: View {
     let row: VaultTodaysTaskRow
     var focusedLine: FocusState<TodaysTaskLineFocus?>.Binding
 
+    private var sourceNoteTitle: String {
+        guard let id = row.sourceNoteID else { return "" }
+        return model.noteSummaries.first(where: { $0.noteID == id })?.title ?? "Missing note"
+    }
+
     private func focusBinding(lineIndex: Int) -> Binding<Bool> {
         Binding(
             get: { focusedLine.wrappedValue == .line(taskID: row.id, lineIndex: lineIndex) },
@@ -127,6 +180,41 @@ private struct TodaysTaskRowBlock: View {
                     },
                     onMergeDetailLineUp: {}
                 )
+            }
+
+            if row.sourceNoteID != nil || row.rolledFromDayKey != nil {
+                HStack(spacing: 8) {
+                    Color.clear
+                        .frame(width: todaysTasksCheckboxColumnWidth, height: 1)
+                    if row.sourceNoteID != nil {
+                        Button {
+                            model.openTodaysTaskSource(row)
+                        } label: {
+                            Label(sourceNoteTitle, systemImage: "doc.text")
+                                .font(.caption)
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(Color.accentColor)
+                        .help("Open the note this task came from")
+                        .contextMenu {
+                            Button("Open in Note") {
+                                model.openTodaysTaskSource(row)
+                            }
+                            if !row.isDone, row.sourceBlockID != nil {
+                                Button("Mark Done in Note Too") {
+                                    model.toggleTodaysTaskDone(id: row.id)
+                                    model.markTodaysTaskDoneInSourceNote(row)
+                                }
+                            }
+                        }
+                    }
+                    if let rolledKey = row.rolledFromDayKey {
+                        Label("from \(rolledKey)", systemImage: "arrow.uturn.forward")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    }
+                    Spacer()
+                }
             }
 
             ForEach(Array(row.lineIDs.enumerated().dropFirst()), id: \.1) { lineIndex, _ in

@@ -40,7 +40,7 @@ The [root README](../README.md) summarizes build commands, module layout, and fe
 | [plans/editor-interaction-scenarios.md](plans/editor-interaction-scenarios.md) | Manual QA checklist (typing, blocks, IME, large notes) |
 | [plans/quality-dimensions-roadmap.md](plans/quality-dimensions-roadmap.md) | Six-dimension quality assessment: strengths, prioritized actionable improvements (reliability, architecture, goals, UX, performance, security) |
 | [plans/reliability-expectations.md](plans/reliability-expectations.md) | Recovery scope, link-graph sync SLOs, integrity advisory meaning, watcher debounce |
-| [plans/hybrid-undo-appmodel-wiring.md](plans/hybrid-undo-appmodel-wiring.md) | Hybrid undo implementation (completed) |
+| [archive/hybrid-undo-appmodel-wiring.md](archive/hybrid-undo-appmodel-wiring.md) | Hybrid undo implementation (completed) |
 | **Testing** | |
 | [testing/ui-tests.md](testing/ui-tests.md) | UI test host / XCUITest notes for SPM |
 | [testing/performance-tests.md](testing/performance-tests.md) | Edit-engine statistical (median) performance tests for CI |

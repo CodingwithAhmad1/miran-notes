@@ -29,4 +29,6 @@ struct WorkspacePaneSession {
     var repairAdvisory: RepairAdvisory?
     /// When true, markdown notes show a read-only rendered preview beside the source editor.
     var showMarkdownPreview: Bool = false
+    /// Expanded state of the "Linked mentions" backlinks strip under the editor.
+    var showBacklinksPanel: Bool = false
 }

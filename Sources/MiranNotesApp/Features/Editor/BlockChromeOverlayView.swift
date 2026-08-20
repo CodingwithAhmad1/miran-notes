@@ -1,14 +1,17 @@
 import AppKit
 import MiranNotesCore
 
-/// Non-interactive overlay (pass-through hit testing) that draws a minimal left gutter bar and drag-handle
-/// affordance for the hovered and/or caret block. Geometry follows `NSLayoutManager` line fragments.
+/// Overlay that draws a minimal left gutter bar and drag-handle affordance for the hovered/caret
+/// block, plus a checkbox for every `taskItem` block. Hit testing passes through except over
+/// checkboxes, which toggle via ``onToggleTask``. Geometry follows `NSLayoutManager` line fragments.
 final class BlockChromeOverlayView: NSView {
     weak var textView: NSTextView?
 
     var hoveredBlockID: String?
     var focusedBlockID: String?
     var blocks: [Block] = []
+    /// `(blockID, newIsDone)` when a task checkbox is clicked.
+    var onToggleTask: ((String, Bool) -> Void)?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -22,7 +25,48 @@ final class BlockChromeOverlayView: NSView {
 
     override var isOpaque: Bool { false }
 
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let local = convert(point, from: superview)
+        return taskBlock(atOverlayPoint: local) != nil ? self : nil
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        let local = convert(event.locationInWindow, from: nil)
+        guard let block = taskBlock(atOverlayPoint: local) else {
+            super.mouseDown(with: event)
+            return
+        }
+        onToggleTask?(block.id, !(block.isDone ?? false))
+    }
+
+    private func taskBlock(atOverlayPoint point: NSPoint) -> Block? {
+        for block in blocks where block.type == .taskItem {
+            if let rect = taskCheckboxRect(for: block), rect.insetBy(dx: -3, dy: -3).contains(point) {
+                return block
+            }
+        }
+        return nil
+    }
+
+    /// Checkbox rect in overlay coordinates: first line fragment of the block, left gutter.
+    private func taskCheckboxRect(for block: Block) -> NSRect? {
+        guard let textView, let lm = textView.layoutManager else { return nil }
+        guard lm.numberOfGlyphs > 0 || block.range.start == 0 else { return nil }
+        let inset = textView.textContainerInset
+        let charIndex = min(block.range.start, max(0, (textView.string as NSString).length - 1))
+        let glyphIndex = lm.glyphIndexForCharacter(at: charIndex)
+        var lineRect = lm.numberOfGlyphs > 0
+            ? lm.lineFragmentRect(forGlyphAt: min(glyphIndex, lm.numberOfGlyphs - 1), effectiveRange: nil)
+            : NSRect(x: 0, y: 0, width: 0, height: 18)
+        lineRect.origin.y += inset.height
+        let side: CGFloat = 14
+        return NSRect(
+            x: inset.width - side - 10,
+            y: lineRect.midY - side / 2,
+            width: side,
+            height: side
+        )
+    }
 
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
@@ -32,6 +76,8 @@ final class BlockChromeOverlayView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
         guard let textView, let lm = textView.layoutManager, let tc = textView.textContainer else { return }
+
+        drawTaskCheckboxes()
 
         let inset = textView.textContainerInset
         let accent = NSColor.controlAccentColor.withAlphaComponent(0.55)
@@ -82,6 +128,31 @@ final class BlockChromeOverlayView: NSView {
                 height: textSize.height
             )
             handleText.draw(in: textRect, withAttributes: attrs)
+        }
+    }
+
+    private func drawTaskCheckboxes() {
+        for block in blocks where block.type == .taskItem {
+            guard let rect = taskCheckboxRect(for: block) else { continue }
+            let done = block.isDone == true
+            let path = NSBezierPath(roundedRect: rect, xRadius: 3.5, yRadius: 3.5)
+            path.lineWidth = 1.2
+            if done {
+                NSColor.controlAccentColor.setFill()
+                path.fill()
+                let check = NSBezierPath()
+                check.lineWidth = 1.6
+                check.lineCapStyle = .round
+                check.lineJoinStyle = .round
+                check.move(to: NSPoint(x: rect.minX + rect.width * 0.26, y: rect.minY + rect.height * 0.52))
+                check.line(to: NSPoint(x: rect.minX + rect.width * 0.44, y: rect.minY + rect.height * 0.72))
+                check.line(to: NSPoint(x: rect.minX + rect.width * 0.76, y: rect.minY + rect.height * 0.30))
+                NSColor.white.setStroke()
+                check.stroke()
+            } else {
+                NSColor.tertiaryLabelColor.setStroke()
+                path.stroke()
+            }
         }
     }
 

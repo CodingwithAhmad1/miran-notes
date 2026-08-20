@@ -2,16 +2,6 @@ import XCTest
 
 @testable import MiranNotesCore
 
-private struct NoopProducer: CommandProducerExtension {
-    let descriptor: ExtensionDescriptor
-
-    func makeCommands(document: NoteDocument, context: CommandContext) -> [EditCommand] {
-        _ = document
-        _ = context
-        return []
-    }
-}
-
 private struct NoopInterceptor: CommandInterceptorExtension {
     let descriptor: ExtensionDescriptor
 
@@ -37,13 +27,6 @@ private struct PrefixInterceptor: CommandInterceptorExtension {
 final class ExtensionRegistryTests: XCTestCase {
     func testRegistryTracksDescriptors() {
         let registry = ExtensionRegistry()
-        let producer = NoopProducer(
-            descriptor: ExtensionDescriptor(
-                id: "builtin.slash",
-                version: 1,
-                capabilities: [.commandProduction]
-            )
-        )
         let interceptor = NoopInterceptor(
             descriptor: ExtensionDescriptor(
                 id: "builtin.guardrail",
@@ -52,12 +35,9 @@ final class ExtensionRegistryTests: XCTestCase {
             )
         )
 
-        registry.registerProducer(producer)
         registry.registerInterceptor(interceptor)
 
-        let producers = registry.producerList()
         let interceptors = registry.interceptorList()
-        XCTAssertEqual(producers.map(\.id), ["builtin.slash"])
         XCTAssertEqual(interceptors.map(\.id), ["builtin.guardrail"])
     }
 

@@ -2,9 +2,21 @@ import Foundation
 
 /// Controls whether wiki-style note links (`NoteLink` / `[[...]]`) are **surfaced in the macOS UI**.
 ///
-/// **Not deleted:** `NoteLink`, `EditCommand.insertWikiLink`, the link graph, and on-disk metadata remain fully
-/// implemented so vaults keep working and the feature can be re-enabled later.
-/// When this is `false`, the editor does not highlight link spans or handle click-to-navigate; existing link data is unchanged.
+/// Backed by the same UserDefaults keys as ``AppSettings`` so the Settings toggles apply everywhere,
+/// including nonisolated styling paths (`EditorVisualStyle`). Link data on disk is unaffected either way.
 enum WikiLinkPresentationPolicy {
-    static let isFrontendEnabled = false
+    /// Style link ranges and route clicks to navigation.
+    static var isFrontendEnabled: Bool {
+        boolPreference(AppSettingsKey.wikiLinkNavigationEnabled, defaultValue: true)
+    }
+
+    /// Show the `[[` note-autocomplete popover while typing.
+    static var isAutocompleteEnabled: Bool {
+        boolPreference(AppSettingsKey.wikiLinkAutocompleteEnabled, defaultValue: true)
+    }
+
+    private static func boolPreference(_ key: String, defaultValue: Bool) -> Bool {
+        let defaults = UserDefaults.standard
+        return defaults.object(forKey: key) == nil ? defaultValue : defaults.bool(forKey: key)
+    }
 }

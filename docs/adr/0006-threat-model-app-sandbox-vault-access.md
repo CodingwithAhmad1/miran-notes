@@ -4,6 +4,8 @@
 
 Accepted (implementation in progress; OS entitlements optional until notarized sandboxed builds ship).
 
+**Amended 2026-08-20:** Decision 2 reversed — production now **persists and restores** the vault-root security-scoped bookmark. See the amendment note under Decision 2.
+
 ## Context
 
 Miran Notes is a **local-first** macOS editor. The primary asset is the user’s **vault directory** (notes, `.miran/` indexes). The app is distributed today as a **SwiftPM executable** without App Sandbox enforcement at the package level.
@@ -25,7 +27,7 @@ Long-term distribution may require **notarized, sandboxed** builds. That implies
 
 1. **Single vault-root capability:** Introduce `VaultWorkspaceAccess` as the type that owns **resolved vault root URL** and **security-scoped access** lifecycle (`startAccessingSecurityScopedResource` / `stopAccessingSecurityScopedResource`). App shell constructs `NoteRepository(vaultURL:)` only from this capability’s URL (or immediately after entering a scoped block—same effective contract).
 
-2. **Persistence (vault root):** Production **does not** persist or restore a vault-root bookmark; each cold start shows the vault welcome / folder picker unless **`MIRAN_USE_DEFAULT_VAULT=1`** (local dev bootstrap to `~/MiranNotesVault`). Any legacy `vault-root.bookmark` under Application Support is removed on launch. `VaultRootBookmarkStore` remains for **unit tests** (redirected bookmark file path). **Open Workspace…** switches folders during a session. Security-scoped access still starts when the user picks a folder; there is no silent reopen of an arbitrary path without user interaction.
+2. **Persistence (vault root) — amended 2026-08-20:** Production **persists** a vault-root bookmark on adoption (`VaultWorkspaceAccess.adoptUserSelectedVaultRoot`) and **restores** it at launch when the "Reopen last vault at launch" preference is on (the default; `AppSettings`). Rationale: Miran Notes is a personal tool and the per-launch picker was the dominant daily-use friction; the restored path still passes the `WorkspaceCompatibilityScanner` gate before any vault I/O, and a stale/missing/incompatible bookmark falls back to the picker. **Switch Vault…** (File menu / Settings) changes folders during a session. `MIRAN_USE_DEFAULT_VAULT=1` remains the dev bootstrap. *(Superseded original decision: production cleared the bookmark on every launch and always showed the picker.)*
 
 3. **Two bookmark domains:** Do not conflate vault-root bookmarks with **`ExternalBookmarkStore`** (wiki / external file targets under `.miran/`). They remain separate products of user consent.
 

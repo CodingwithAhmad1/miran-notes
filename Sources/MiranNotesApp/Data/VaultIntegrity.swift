@@ -52,11 +52,7 @@ enum VaultIntegrityChecker {
                 if !noteIDs.contains(id) {
                     issues.append("Relationship index references unknown target note \(id.uuidString).")
                 }
-            case .artifact(let nid, _, _):
-                if !noteIDs.contains(nid) {
-                    issues.append("Relationship index references unknown note for artifact \(nid.uuidString).")
-                }
-            case .folder, .externalFile, .externalFolder, .database, .databaseRow:
+            case .folder, .externalFile, .externalFolder:
                 break
             }
         }

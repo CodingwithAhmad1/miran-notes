@@ -25,6 +25,20 @@ struct WorkspaceFolderSidebarView: View {
                 // a relayout. Pinning `masksToBounds` on the enclosing scroll view keeps the table from
                 // overlapping the footer below this list.
                 List(selection: folderSelection) {
+                    if case .folderSubtree(let rootID) = model.workspaceScope {
+                        Button {
+                            onClearToolbarSearchFocus()
+                            model.activatePane(index: paneIndex)
+                            model.workspaceScope = .fullVault
+                        } label: {
+                            Label(
+                                "Exit focus: \(model.folderCatalog.folder(id: rootID)?.name ?? "Folder")",
+                                systemImage: "arrow.uturn.backward"
+                            )
+                            .foregroundStyle(Color.accentColor)
+                        }
+                        .buttonStyle(.plain)
+                    }
                     if model.showsVaultTrayAsButton {
                         Button {
                             onClearToolbarSearchFocus()
@@ -39,19 +53,14 @@ struct WorkspaceFolderSidebarView: View {
                         Label(model.sidebarNotesTrayTitle, systemImage: "tray.full")
                             .tag(Optional(model.sidebarNotesTrayFolderID))
                     }
-                    ForEach(model.visibleTopLevelFolderEntries, id: \.id) { folder in
-                        Text(folder.name)
-                            .tag(Optional(folder.id))
-                            .contextMenu {
-                                Button("Rename…") {
-                                    renamingFolder = folder
-                                    renameFieldText = folder.name
-                                }
-                                Button("Delete Folder", role: .destructive) {
-                                    model.deleteFolder(id: folder.id)
-                                }
-                            }
-                    }
+                    SidebarFolderTreeRows(
+                        model: model,
+                        folders: model.visibleTopLevelFolderEntries,
+                        onRename: { folder in
+                            renamingFolder = folder
+                            renameFieldText = folder.name
+                        }
+                    )
                 }
                 .frame(width: geometry.size.width, height: heights.list, alignment: .top)
                 .clipped()
@@ -175,6 +184,15 @@ struct WorkspaceFolderSidebarView: View {
                     ? "New Note"
                     : "Select a folder (not Vault) to create a note"
             )
+
+            Button {
+                onClearToolbarSearchFocus()
+                model.isTrashPresented = true
+            } label: {
+                Image(systemName: "trash")
+            }
+            .buttonStyle(.plain)
+            .help("Trash")
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 10)
@@ -190,7 +208,7 @@ struct WorkspaceFolderSidebarView: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .help(path)
-            Text("Open Workspace… — Shift-Command-O")
+            Text("Switch Vault… — ⇧⌘O")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
         }
@@ -248,6 +266,68 @@ struct WorkspaceFolderSidebarView: View {
         }
         let footer = min(footerMin, totalHeight)
         return (max(0, totalHeight - footer), footer)
+    }
+}
+
+// MARK: - Folder tree rows
+
+/// Recursive sidebar rows: dashboard folders expand to their children, repositories are leaves
+/// (their notes live on the folder page). Folder rows accept note drops (move-into-folder).
+private struct SidebarFolderTreeRows: View {
+    @Bindable var model: AppModel
+    let folders: [FolderEntry]
+    let onRename: (FolderEntry) -> Void
+
+    var body: some View {
+        ForEach(folders, id: \.id) { folder in
+            if model.folderRole(for: folder.id) == .dashboard {
+                DisclosureGroup {
+                    SidebarFolderTreeRows(
+                        model: model,
+                        folders: children(of: folder),
+                        onRename: onRename
+                    )
+                } label: {
+                    folderRowLabel(folder)
+                }
+            } else {
+                folderRowLabel(folder)
+            }
+        }
+    }
+
+    private func children(of folder: FolderEntry) -> [FolderEntry] {
+        model.folderCatalog.childFolders(of: folder.id).sorted {
+            $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+        }
+    }
+
+    @ViewBuilder
+    private func folderRowLabel(_ folder: FolderEntry) -> some View {
+        let isDashboard = model.folderRole(for: folder.id) == .dashboard
+        Label(folder.name, systemImage: isDashboard ? "square.grid.2x2" : "folder")
+            .tag(Optional(folder.id))
+            .dropDestination(for: NoteTransfer.self) { transfers, _ in
+                guard !isDashboard else { return false }
+                for transfer in transfers {
+                    model.moveNote(noteID: transfer.noteID, toFolderID: folder.id)
+                }
+                return true
+            }
+            .contextMenu {
+                Button("Rename…") {
+                    onRename(folder)
+                }
+                if isDashboard {
+                    Button("Focus on This Subtree") {
+                        model.workspaceScope = .folderSubtree(rootFolderID: folder.id)
+                        model.selectFolderForPage(nil)
+                    }
+                }
+                Button("Delete Folder", role: .destructive) {
+                    model.deleteFolder(id: folder.id)
+                }
+            }
     }
 }
 

@@ -89,13 +89,6 @@ struct FolderManagementDashboardView: View {
                     }
                 }
 
-                WorkspaceKeyboardShortcutsSettingsSections(
-                    sectionHeader: Text(
-                        "Keyboard shortcuts",
-                        comment: "Folder management: section below folders for New Folder / New Note shortcuts"
-                    ),
-                    onWorkspaceShortcutsChanged: onWorkspaceShortcutsChanged
-                )
             }
             .scrollContentBackground(.hidden)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
